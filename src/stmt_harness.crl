@@ -10,6 +10,8 @@ mod tok = import("token");
 mod stmt = import("stmt_parser");
 mod ast = import("ast/ast.crl");
 
+const u32 TRACE_IDX = 38;
+
 str.strView PROGS[] = {
     "void main() { return 0; }",
     "u32 add(u32 a, u32 b) { u32 c = a + b; return c; }",
@@ -116,6 +118,31 @@ void num(u8* buf, u32* bl, u32 v)
     while (p < 12) buf[(*bl)++] = (u8)tmp[p++];
 }
 
+void dumpRow(stmt.StmtParser p, u32 s)
+{
+    u8 b[64];
+    u32 bl = 0;
+    put((u8*)"row st=", 7);
+    num(b, &bl, s);
+    put(b, bl);
+    for (u32 tc = 0; tc < p.t.nterms; tc++)
+    {
+        lalr.Entry* a = &p.t.act[s * p.t.nterms + tc];
+        if (a->kind == lalr.ACT_ERROR) continue;
+        put((u8*)" ", 1);
+        str.strView tt = termText(tc);
+        put((const u8*)tt.ptr, tt.len);
+        put((u8*)"=", 1);
+        if (a->kind == lalr.ACT_SHIFT) put((u8*)"s", 1);
+        else if (a->kind == lalr.ACT_REDUCE) put((u8*)"r", 1);
+        else if (a->kind == lalr.ACT_ACCEPT) put((u8*)"a", 1);
+        bl = 0;
+        num(b, &bl, a->a);
+        put(b, bl);
+    }
+    nl();
+}
+
 i32 main(i32 argc, char** argv)
 {
     u32 fails = 0;
@@ -167,6 +194,80 @@ i32 main(i32 argc, char** argv)
         num(b, &bl, p.t.nnonterms);
         put(b, bl);
         nl();
+        u8* nbl = mman.alloc<u8>(p.g.nnonterms);
+        for (u32 i = 0; i < p.g.nnonterms; i++) nbl[i] = 0;
+        u32 nw = (p.g.nterms + p.g.nnonterms + 1) * 8;
+        u64* fr = mman.alloc<u64>(nw);
+        for (u32 i = 0; i < nw; i++) fr[i] = 0;
+        for (u32 t = 0; t < p.g.nterms; t++) fr[t * 8 + (t >> 6)] |= 1ull << (t & 63);
+        bool ch = true;
+        while (ch)
+        {
+            ch = false;
+            for (u32 pp = 0; pp < p.g.nprods; pp++)
+            {
+                lalr.Prod* pr = &p.g.prods[pp];
+                u64* a = fr + (pr->head - lalr.NT_BASE + p.g.nterms) * 8;
+                bool all = true;
+                for (u32 i = 0; i < pr->nrhs; i++)
+                {
+                    u32 s = pr->rhs[i];
+                    bool isnt = s >= lalr.NT_BASE;
+                    bool ntr = isnt && nbl[s - lalr.NT_BASE];
+                    if (!isnt)
+                    {
+                        a[s >> 6] |= 1ull << (s & 63);
+                        all = false;
+                        break;
+                    }
+                    u64* f = fr + (s - lalr.NT_BASE + p.g.nterms) * 8;
+                    for (u32 w = 0; w < 8; w++)
+                    {
+                        if ((a[w] | f[w]) != a[w]) ch = true;
+                        a[w] |= f[w];
+                    }
+                    if (!ntr) { all = false; break; }
+                }
+                if ((pr->nrhs == 0 || all) && !nbl[pr->head - lalr.NT_BASE])
+                {
+                    nbl[pr->head - lalr.NT_BASE] = 1;
+                    ch = true;
+                }
+            }
+        }
+        put((u8*)"FIRST(DECL):", 12);
+        for (u32 t = 0; t < p.g.nterms; t++)
+        {
+            if ((fr[(2 + p.g.nterms) * 8 + (t >> 6)] >> (t & 63)) & 1ull)
+            {
+                put((u8*)" ", 1);
+                str.strView tt = termText(t);
+                libc.write(1, (const u8*)tt.ptr, (u32)tt.len);
+            }
+        }
+        nl();
+        put((u8*)"FIRST(FUNC):", 12);
+        for (u32 t = 0; t < p.g.nterms; t++)
+        {
+            if ((fr[(3 + p.g.nterms) * 8 + (t >> 6)] >> (t & 63)) & 1ull)
+            {
+                put((u8*)" ", 1);
+                str.strView tt = termText(t);
+                libc.write(1, (const u8*)tt.ptr, (u32)tt.len);
+            }
+        }
+        nl();
+        put((u8*)"FIRST(TYPE):", 12);
+        for (u32 t = 0; t < p.g.nterms; t++)
+        {
+            if ((fr[(5 + p.g.nterms) * 8 + (t >> 6)] >> (t & 63)) & 1ull)
+            {
+                put((u8*)" ", 1);
+                str.strView tt = termText(t);
+                libc.write(1, (const u8*)tt.ptr, (u32)tt.len);
+            }
+        }
+        nl();
         put((u8*)"row0 non-errors:", 17);
         nl();
         for (u32 tt = 0; tt < p.t.nterms; tt++)
@@ -188,6 +289,24 @@ i32 main(i32 argc, char** argv)
                 nl();
             }
         }
+        if (lalr.NO_STATE != 0) dumpRow(p, 2);
+        if (p.t.nstates > 100) dumpRow(p, 100);
+        if (p.t.nstates > 133) dumpRow(p, 133);
+        if (p.t.nstates > 23) dumpRow(p, 23);
+        if (p.t.nstates > 155) dumpRow(p, 155);
+        if (p.t.nstates > 169) dumpRow(p, 169);
+        if (p.t.nstates > 181) dumpRow(p, 181);
+        if (p.t.nstates > 191) dumpRow(p, 191);
+        if (p.t.nstates > 201) dumpRow(p, 201);
+        put((u8*)"nullable DECLS:", 15);
+        bl = 0;
+        num(b, &bl, (u32)nbl[1]);
+        put(b, bl);
+        put((u8*)" PREF:", 6);
+        bl = 0;
+        num(b, &bl, (u32)nbl[4]);
+        put(b, bl);
+        nl();
     }
 
     for (u32 i = 0; i < 39; i++)
@@ -196,7 +315,7 @@ i32 main(i32 argc, char** argv)
         lex.Lexer l = lex.Lexer::new((const u8*)src.ptr, (u32)src.len);
         lex.LexResult r = l.lex();
         ast.Program* pr = null;
-        if (i == 0) p.trace = true;
+        if (i == TRACE_IDX) p.trace = true;
         if (r.nerrs == 0) pr = p.parseProgram((u8*)src.ptr, r.toks, r.n);
         p.trace = false;
         bool ok = pr != null;
@@ -211,7 +330,32 @@ i32 main(i32 argc, char** argv)
         }
         if (r.toks) mman.dealloc<tok.LexTok>(r.toks);
         if (r.errs) mman.dealloc<tok.LexErr>(r.errs);
-        if (pr) ast.freeProgram(pr);
+        if (pr)
+        {
+            for (u32 di = 0; di < pr->ndecls; di++)
+            {
+                ast.Decl* d = pr->decls[di];
+                u8 b[96];
+                u32 bl = 0;
+                put((u8*)"  d", 3);
+                num(b, &bl, di);
+                put(b, bl);
+                put((u8*)" kind=", 6);
+                bl = 0;
+                num(b, &bl, d->kind);
+                put(b, bl);
+                put((u8*)" name=", 6);
+                bl = 0;
+                num(b, &bl, (u32)d->name.len);
+                put(b, bl);
+                put((u8*)" ty=", 4);
+                bl = 0;
+                num(b, &bl, (u32)(u64)d->type);
+                put(b, bl);
+                nl();
+            }
+            ast.freeProgram(pr);
+        }
     }
 
     for (u32 i = 0; i < 11; i++)

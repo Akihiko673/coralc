@@ -70,6 +70,7 @@ const u32 AC_EXTERN_V = 45;
 const u32 AC_BREAK = 46;
 const u32 AC_CONT = 47;
 const u32 AC_FORINIT = 48;      // FORINIT -> ES_SEMI (wraps expr in ST_EXPR)
+const u32 AC_LDECLS = 49;       // DECLS -> e (EMPTY K_DECL list, no slot read)
 const u32 AC_ES_SEMI = 50;      // stops { ';' }
 const u32 AC_ES_RPAR = 51;      // stops { ')' }
 const u32 AC_ES_RBKT = 52;      // stops { ']' }
@@ -84,6 +85,12 @@ const u32 AC_FUNC0 = 65;        // FUNC0 -> TYPE IDENT ( PARAMS ) BLOCK
 const u32 AC_FUNCP0 = 66;       // FUNC0 -> TYPE IDENT ( PARAMS ) ;
 const u32 AC_CONST0 = 67;       // CONST0 -> const IDENT = ES ;
 const u32 AC_EXTERN_V0 = 68;    // EXT0 -> extern TYPE IDENT ;
+const u32 AC_LSTMT = 55;        // STMTS -> e (EMPTY K_STMT list)
+const u32 AC_LSW = 56;          // SWBODY -> e (EMPTY K_STMT list)
+const u32 AC_LFLAG = 57;        // FLAGBODY -> e (EMPTY K_DECL list)
+const u32 AC_LIDENT = 58;       // IDENTS -> e (EMPTY K_VIEW list)
+const u32 AC_RAPP = 59;         // STMTS/SWBODY/FLAGBODY -> item list (right-rec)
+const u32 AC_LPARAMS = 69;      // PARAMS -> e (EMPTY PList)
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -133,7 +140,8 @@ const u32 N_ES_BOTH = 43;
 const u32 N_TYPEKW = 44;
 const u32 N_FUNC0 = 45;
 const u32 N_CONST0 = 46;
-const u32 N_COUNT = 47;
+const u32 N_AUG = 47;
+const u32 N_COUNT = 48;
 
 // precedence levels (higher wins)
 const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
@@ -307,8 +315,7 @@ lalr.Grammar stmtGrammar()
     lalr.Grammar g;
     g.nterms = tok.TOK_ANON_FIRST + tok.NUM_ANON;
     g.nnonterms = N_COUNT;
-    g.nprods = 118;
-    g.prods = mman.alloc<lalr.Prod>(g.nprods);
+    g.prods = mman.alloc<lalr.Prod>(128);
     g.start = lalr.NT_BASE + N_PROG;
     g.termPrec = mman.alloc<u32>(g.nterms);
     for (u32 i = 0; i < g.nterms; i++) g.termPrec[i] = 0;
@@ -318,6 +325,7 @@ lalr.Grammar stmtGrammar()
     g.termPrec[tok.TOK_IDENT] = PREC_IDENT;
     g.termPrec[termId((u8*)"default")] = PREC_DEFAULT;
     g.termPrec[termId((u8*)";")] = PREC_SEMI;
+    g.termPrec[termId((u8*)"const")] = PREC_PREF;
 
     u32 i = 0;
     u32 r1[1];
@@ -331,9 +339,11 @@ lalr.Grammar stmtGrammar()
     u32 r9[9];
     u32 r11[11];
 
+    r1[0] = lalr.NT_BASE + N_PROG;
+    addProd(&g, i++, lalr.NT_BASE + N_AUG, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_DECLS;
     addProd(&g, i++, lalr.NT_BASE + N_PROG, 1, r1, 0, 0, AC_PROG);
-    addProd(&g, i++, lalr.NT_BASE + N_DECLS, 0, null, PREC_DECLS, 0, AC_L1);
+    addProd(&g, i++, lalr.NT_BASE + N_DECLS, 0, null, PREC_DECLS, 0, AC_LDECLS);
     r2[0] = lalr.NT_BASE + N_DECLS; r2[1] = lalr.NT_BASE + N_DECL;
     addProd(&g, i++, lalr.NT_BASE + N_DECLS, 2, r2, 0, 0, AC_APP);
     r1[0] = lalr.NT_BASE + N_FUNC;
@@ -418,7 +428,7 @@ lalr.Grammar stmtGrammar()
     r3[2] = lalr.NT_BASE + N_TYPE;
     addProd(&g, i++, lalr.NT_BASE + N_TYPES, 3, r3, 0, 0, AC_APP);
 
-    addProd(&g, i++, lalr.NT_BASE + N_PARAMS, 0, null, 0, 0, AC_NONE);
+    addProd(&g, i++, lalr.NT_BASE + N_PARAMS, 0, null, 0, 0, AC_LPARAMS);
     r2[0] = lalr.NT_BASE + N_PARAM;
     r2[1] = lalr.NT_BASE + N_REST;
     addProd(&g, i++, lalr.NT_BASE + N_PARAMS, 2, r2, 0, 0, AC_PARAMS1);
@@ -429,7 +439,7 @@ lalr.Grammar stmtGrammar()
     r2[0] = lalr.NT_BASE + N_PREF;
     r2[1] = lalr.NT_BASE + N_TYPE;
     addProd(&g, i++, lalr.NT_BASE + N_PARAM, 2, r2, 0, 0, AC_PARAM);
-    addProd(&g, i++, lalr.NT_BASE + N_REST, 0, null, 0, 0, AC_NONE);
+    addProd(&g, i++, lalr.NT_BASE + N_REST, 0, null, 0, 0, AC_LPARAMS);
     r3[0] = termId((u8*)",");
     r3[1] = lalr.NT_BASE + N_PARAM;
     r3[2] = lalr.NT_BASE + N_REST;
@@ -442,10 +452,10 @@ lalr.Grammar stmtGrammar()
     r3[1] = lalr.NT_BASE + N_STMTS;
     r3[2] = termId((u8*)"}");
     addProd(&g, i++, lalr.NT_BASE + N_BLOCK, 3, r3, 0, 0, AC_BLOCK);
-    addProd(&g, i++, lalr.NT_BASE + N_STMTS, 0, null, 0, 0, AC_L1);
+    addProd(&g, i++, lalr.NT_BASE + N_STMTS, 0, null, 0, 0, AC_LSTMT);
     r2[0] = lalr.NT_BASE + N_STMT;
     r2[1] = lalr.NT_BASE + N_STMTS;
-    addProd(&g, i++, lalr.NT_BASE + N_STMTS, 2, r2, 0, 0, AC_APP);
+    addProd(&g, i++, lalr.NT_BASE + N_STMTS, 2, r2, 0, 0, AC_RAPP);
     r1[0] = lalr.NT_BASE + N_BLOCK;
     addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_EXPR;
@@ -470,15 +480,10 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_FLAGSTMT;
     addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
-    r1[0] = termId((u8*)";");
-    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_NONE);
 
     r2[0] = lalr.NT_BASE + N_ES_SEMI;
     r2[1] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_EXPR, 2, r2, 0, 0, AC_EXPR);
-    r2[0] = termId((u8*)"return");
-    r2[1] = termId((u8*)";");
-    addProd(&g, i++, lalr.NT_BASE + N_RETURN, 2, r2, 0, 0, AC_RETURN0);
     r3[0] = termId((u8*)"return");
     r3[1] = lalr.NT_BASE + N_ES_SEMI;
     r3[2] = termId((u8*)";");
@@ -536,10 +541,10 @@ lalr.Grammar stmtGrammar()
     r7[5] = lalr.NT_BASE + N_SWBODY;
     r7[6] = termId((u8*)"}");
     addProd(&g, i++, lalr.NT_BASE + N_SWITCH, 7, r7, 0, 0, AC_SWITCH);
-    addProd(&g, i++, lalr.NT_BASE + N_SWBODY, 0, null, 0, 0, AC_L1);
+    addProd(&g, i++, lalr.NT_BASE + N_SWBODY, 0, null, 0, 0, AC_LSW);
     r2[0] = lalr.NT_BASE + N_SWSECTION;
     r2[1] = lalr.NT_BASE + N_SWBODY;
-    addProd(&g, i++, lalr.NT_BASE + N_SWBODY, 2, r2, 0, 0, AC_APP);
+    addProd(&g, i++, lalr.NT_BASE + N_SWBODY, 2, r2, 0, 0, AC_RAPP);
     r1[0] = lalr.NT_BASE + N_CASEV;
     addProd(&g, i++, lalr.NT_BASE + N_SWSECTION, 1, r1, 0, 0, AC_PASS);
     r3[0] = termId((u8*)"default");
@@ -561,10 +566,10 @@ lalr.Grammar stmtGrammar()
     r7[6] = termId((u8*)"}");
     addProd(&g, i++, lalr.NT_BASE + N_FLAGSTMT, 7, r7, 0, 0, AC_FLAGSTMT);
     addProd(&g, i++, lalr.NT_BASE + N_FLAGDECL, 7, r7, 0, 0, AC_FLAGDECL);
-    addProd(&g, i++, lalr.NT_BASE + N_FLAGBODY, 0, null, 0, 0, AC_L1);
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGBODY, 0, null, 0, 0, AC_LFLAG);
     r2[0] = lalr.NT_BASE + N_FLAGSECTION;
     r2[1] = lalr.NT_BASE + N_FLAGBODY;
-    addProd(&g, i++, lalr.NT_BASE + N_FLAGBODY, 2, r2, 0, 0, AC_APP);
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGBODY, 2, r2, 0, 0, AC_RAPP);
     r1[0] = lalr.NT_BASE + N_FCASE;
     addProd(&g, i++, lalr.NT_BASE + N_FLAGSECTION, 1, r1, 0, 0, AC_PASS);
     r3[0] = termId((u8*)"default");
@@ -677,6 +682,7 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_ES_COLON, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_COLON);
     addProd(&g, i++, lalr.NT_BASE + N_ES_BOTH, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_BOTH);
 
+    g.nprods = i;
     return g;
 }
 
@@ -1005,6 +1011,31 @@ pub struct StmtParser
             self.push((u64)l, K_LIST);
             return;
         }
+        case AC_RAPP:
+        {
+            SList* l = (SList*)(u64)self.sem[base + 1];
+            listAppend(l, self.sem[base]);
+            self.push((u64)l, K_LIST);
+            return;
+        }
+        case AC_LDECLS:
+            self.push((u64)listNew(K_DECL), K_LIST);
+            return;
+        case AC_LSTMT:
+            self.push((u64)listNew(K_STMT), K_LIST);
+            return;
+        case AC_LSW:
+            self.push((u64)listNew(K_STMT), K_LIST);
+            return;
+        case AC_LFLAG:
+            self.push((u64)listNew(K_DECL), K_LIST);
+            return;
+        case AC_LIDENT:
+            self.push((u64)listNew(K_VIEW), K_LIST);
+            return;
+        case AC_LPARAMS:
+            self.push((u64)plistNew(), K_PLIST);
+            return;
         case AC_PREF0:
             self.push(0, K_INT);
             return;

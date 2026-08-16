@@ -8,6 +8,7 @@
 // reduce, and earlier-declared productions win reduce/reduce ties.
 // Unresolved conflicts are recorded in the table for the driver to report.
 //
+
 // Symbols: terminals are raw token ids (0 <= t < nterms); nonterminals are
 // NT_BASE + index. Terminal 0 is reserved for EOF ($). Epsilon productions
 // have nrhs == 0. The caller's grammar must include the augmented start
@@ -99,7 +100,7 @@ pub struct Generator
 {
     Grammar g;
     u32 augHead;
-    u64* first;     // [nterms + nnonterms + 1] x LAWORDS
+    u32* first;     // [nterms + nnonterms + 1] x LAWORDS
     u8* nullable;   // per nonterminal incl. aug
     State* states;
     u32 nstates;
@@ -185,13 +186,13 @@ pub struct Generator
     void computeFirst()
     {
         u32 total = (self.g.nterms + self.g.nnonterms + 1) * LAWORDS;
-        self.first = mman.alloc<u64>(total);
+        self.first = mman.alloc<u32>(total);
         for (u32 i = 0; i < total; i++) self.first[i] = 0;
         self.nullable = mman.alloc<u8>(self.g.nnonterms + 1);
         for (u32 i = 0; i <= self.g.nnonterms; i++) self.nullable[i] = 0;
 
         for (u32 t = 0; t < self.g.nterms; t++)
-            self.first[t * LAWORDS + (t >> 6)] |= 1ull << (t & 63);
+            self.first[t * LAWORDS + (t >> 5)] |= 1u << (t & 31);
 
         bool changed = true;
         while (changed)
@@ -209,8 +210,8 @@ pub struct Generator
                     u32 s = pr->rhs[i];
                     bool nullSym = self.isNonterm(s) && self.nullable[s - NT_BASE];
                     if (!nullSym) allNull = false;
-                    u64* a = self.first + self.symIdx(pr->head) * LAWORDS;
-                    u64* b = self.first + self.symIdx(s) * LAWORDS;
+                    u32* a = self.first + self.symIdx(pr->head) * LAWORDS;
+                    u32* b = self.first + self.symIdx(s) * LAWORDS;
                     for (u32 w = 0; w < LAWORDS; w++) a[w] |= b[w];
                     if (!nullSym) break;
                 }
@@ -234,8 +235,8 @@ pub struct Generator
             u32 s = pr->rhs[d];
             if (self.isNonterm(s))
             {
-                u64* f = self.first + self.symIdx(s) * LAWORDS;
-                for (u32 w = 0; w < LAWORDS; w++) out[w] |= (u32)f[w];
+                u32* f = self.first + self.symIdx(s) * LAWORDS;
+                for (u32 w = 0; w < LAWORDS; w++) out[w] |= f[w];
                 if (!self.nullable[s - NT_BASE]) return;
             }
             else
@@ -702,7 +703,7 @@ pub struct Generator
         if (self.chain) mman.dealloc<u32>(self.chain);
         if (self.buckets) mman.dealloc<u32>(self.buckets);
         if (self.kernel) mman.dealloc<Item>(self.kernel);
-        if (self.first) mman.dealloc<u64>(self.first);
+        if (self.first) mman.dealloc<u32>(self.first);
         if (self.nullable) mman.dealloc<u8>(self.nullable);
         if (self.rep) mman.dealloc<u32>(self.rep);
         if (self.conflicts && self.ownsConflicts) mman.dealloc<Conflict>(self.conflicts);
