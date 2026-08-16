@@ -1,5 +1,7 @@
 .opencode/
 TODOs.md
 reason.txt
+py/
 *.py
+**/__pycache__/
 **/__pycache__/
