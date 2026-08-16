@@ -1,0 +1,102 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+
+pub struct priorityqueue<T>
+{
+    T* data;
+    u64 len;
+    u64 cap;
+    bool(T, T) less;
+
+    static priorityqueue<T> new(bool(T, T) cmp)
+    {
+        priorityqueue<T> pq;
+        pq.data = mman.alloc<T>(16);
+        pq.len = 0;
+        pq.cap = 16;
+        pq.less = cmp;
+        return pq;
+    }
+
+    void dispose()
+    {
+        if (self.data != null) { mman.dealloc<T>(self.data); self.data = null; }
+        self.len = 0;
+        self.cap = 0;
+    }
+
+    u64 count() { return self.len; }
+    bool isEmpty() { return self.len == 0; }
+
+    void _grow()
+    {
+        u64 newCap = self.cap * 2;
+        T* newData = mman.alloc<T>(newCap);
+        for (u64 i = 0; i < self.len; i++) newData[i] = self.data[i];
+        mman.dealloc<T>(self.data);
+        self.data = newData;
+        self.cap = newCap;
+    }
+
+    void _siftUp(u64 idx)
+    {
+        while (idx > 0)
+        {
+            u64 parent = (idx - 1) / 2;
+            if (!self.less(self.data[idx], self.data[parent])) break;
+            T tmp = self.data[idx];
+            self.data[idx] = self.data[parent];
+            self.data[parent] = tmp;
+            idx = parent;
+        }
+    }
+
+    void _siftDown(u64 idx)
+    {
+        for (;;)
+        {
+            u64 smallest = idx;
+            u64 left = 2 * idx + 1;
+            u64 right = 2 * idx + 2;
+            if (left < self.len && self.less(self.data[left], self.data[smallest])) smallest = left;
+            if (right < self.len && self.less(self.data[right], self.data[smallest])) smallest = right;
+            if (smallest == idx) break;
+            T tmp = self.data[idx];
+            self.data[idx] = self.data[smallest];
+            self.data[smallest] = tmp;
+            idx = smallest;
+        }
+    }
+
+    void push(T val)
+    {
+        if (self.len >= self.cap) self._grow();
+        self.data[self.len] = val;
+        self._siftUp(self.len);
+        self.len++;
+    }
+
+    T pop()
+    {
+        assert(self.len > 0);
+        T val = self.data[0];
+        self.len--;
+        if (self.len > 0)
+        {
+            self.data[0] = self.data[self.len];
+            self._siftDown(0);
+        }
+        return val;
+    }
+
+    T peek()
+    {
+        assert(self.len > 0);
+        return self.data[0];
+    }
+
+    void clear()
+    {
+        self.len = 0;
+    }
+}

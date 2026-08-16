@@ -1,0 +1,95 @@
+mod libc = import("std/platform/libc.crl");
+mod string = import("std/text/string.crl");
+
+const string.strView CSI = string.strView::fromCstr("\x1B[");
+
+bool _isTty()
+{
+    return libc.isatty(1) != 0;
+}
+
+void _writeCSI(string.strView code)
+{
+    libc.write(1, CSI.ptr, CSI.len);
+    libc.write(1, code.ptr, code.len);
+}
+
+void _writeStr(string.strView s)
+{
+    libc.write(1, s.ptr, s.len);
+}
+
+pub void reset()
+{
+    _writeCSI("0m");
+}
+
+pub void bold() { _writeCSI("1m"); }
+pub void dim() { _writeCSI("2m"); }
+pub void italic() { _writeCSI("3m"); }
+pub void underline() { _writeCSI("4m"); }
+pub void blink() { _writeCSI("5m"); }
+pub void reverse() { _writeCSI("7m"); }
+pub void hidden() { _writeCSI("8m"); }
+pub void strikethrough() { _writeCSI("9m"); }
+
+pub void black() { _writeCSI("30m"); }
+pub void red() { _writeCSI("31m"); }
+pub void green() { _writeCSI("32m"); }
+pub void yellow() { _writeCSI("33m"); }
+pub void blue() { _writeCSI("34m"); }
+pub void magenta() { _writeCSI("35m"); }
+pub void cyan() { _writeCSI("36m"); }
+pub void white() { _writeCSI("37m"); }
+
+pub void bgBlack() { _writeCSI("40m"); }
+pub void bgRed() { _writeCSI("41m"); }
+pub void bgGreen() { _writeCSI("42m"); }
+pub void bgYellow() { _writeCSI("43m"); }
+pub void bgBlue() { _writeCSI("44m"); }
+pub void bgMagenta() { _writeCSI("45m"); }
+pub void bgCyan() { _writeCSI("46m"); }
+pub void bgWhite() { _writeCSI("47m"); }
+
+pub void brightBlack() { _writeCSI("90m"); }
+pub void brightRed() { _writeCSI("91m"); }
+pub void brightGreen() { _writeCSI("92m"); }
+pub void brightYellow() { _writeCSI("93m"); }
+pub void brightBlue() { _writeCSI("94m"); }
+pub void brightMagenta() { _writeCSI("95m"); }
+pub void brightCyan() { _writeCSI("96m"); }
+pub void brightWhite() { _writeCSI("97m"); }
+
+u64 _clampN(u64 n)
+{
+    if (n > 99999999999999u) return 99999999999999u;
+    return n;
+}
+
+pub void cursorUp(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluA", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
+pub void cursorDown(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluB", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
+pub void cursorRight(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluC", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
+pub void cursorLeft(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluD", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
+
+pub void cursorPos(u64 row, u64 col)
+{
+    char buf[40];
+    row = _clampN(row);
+    col = _clampN(col);
+    i32 l = libc.snprintf(buf, 40u, "%llu;%lluH", row, col);
+    if (l > 0)
+    {
+        libc.write(1, CSI.ptr, CSI.len);
+        libc.write(1, buf, (u64)l);
+    }
+}
+
+pub void clearScreen() { _writeCSI("2J"); }
+pub void clearLine() { _writeCSI("2K"); }
+pub void clearToEnd() { _writeCSI("0J"); }
+pub void clearLineEnd() { _writeCSI("0K"); }
+
+pub void saveCursor() { _writeCSI("s"); }
+pub void restoreCursor() { _writeCSI("u"); }
+pub void hideCursor() { _writeCSI("?25l"); }
+pub void showCursor() { _writeCSI("?25h"); }

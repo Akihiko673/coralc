@@ -1,0 +1,99 @@
+
+mod random = import("std/math/random.crl");
+mod string = import("std/text/string.crl");
+mod hex = import("std/crypto/hex.crl");
+
+pub struct Uuid
+{
+    u8 bytes[16];
+
+    static Uuid zero()
+    {
+        Uuid u;
+        for (u64 i = 0; i < 16; i++) u.bytes[i] = 0;
+        return u;
+    }
+
+    static Uuid v4()
+    {
+        Uuid u;
+        for (u64 i = 0; i < 16; i++)
+            u.bytes[i] = (u8)(random.nextU64() & 0xFF);
+
+        u.bytes[6] = (u.bytes[6] & 0x0F) | 0x40;
+        u.bytes[8] = (u.bytes[8] & 0x3F) | 0x80;
+        return u;
+    }
+
+    String toString()
+    {
+        String s = String::new();
+        for (u64 i = 0; i < 16; i++)
+        {
+            if (i == 4 || i == 6 || i == 8 || i == 10) s.pushChar('-');
+            u8 hi = self.bytes[i] >> 4;
+            u8 lo = self.bytes[i] & 0x0F;
+            s.pushChar(hi < 10 ? (char)('0' + hi) : (char)('a' + hi - 10));
+            s.pushChar(lo < 10 ? (char)('0' + lo) : (char)('a' + lo - 10));
+        }
+        return s;
+    }
+
+    String toHex()
+    {
+        String s = String::new();
+        for (u64 i = 0; i < 16; i++)
+        {
+            u8 hi = self.bytes[i] >> 4;
+            u8 lo = self.bytes[i] & 0x0F;
+            s.pushChar(hi < 10 ? (char)('0' + hi) : (char)('a' + hi - 10));
+            s.pushChar(lo < 10 ? (char)('0' + lo) : (char)('a' + lo - 10));
+        }
+        return s;
+    }
+
+    static Uuid fromString(strView s)
+    {
+        Uuid u = Uuid::zero();
+        u64 byteIdx = 0;
+        for (u64 i = 0; i < s.len && byteIdx < 16; i++)
+        {
+            u8 c = s.ptr[i];
+            if (c == '-') continue;
+            u8 val;
+            if (c >= '0' && c <= '9') val = c - '0';
+            else if (c >= 'a' && c <= 'f') val = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') val = c - 'A' + 10;
+            else continue;
+            if (byteIdx % 2 == 0) u.bytes[byteIdx / 2] = val << 4;
+            else u.bytes[byteIdx / 2] |= val;
+            byteIdx++;
+        }
+        return u;
+    }
+
+    bool eq(Uuid other)
+    {
+        for (u64 i = 0; i < 16; i++)
+            if (self.bytes[i] != other.bytes[i]) return false;
+        return true;
+    }
+
+    bool isNil()
+    {
+        for (u64 i = 0; i < 16; i++)
+            if (self.bytes[i] != 0) return false;
+        return true;
+    }
+}
+
+pub String uuidV4()
+{
+    Uuid u = Uuid::v4();
+    return u.toString();
+}
+
+pub Uuid parseUuid(strView s)
+{
+    return Uuid::fromString(s);
+}

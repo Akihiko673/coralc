@@ -1,0 +1,118 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod domtree = import("wallvm/domtree.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct IrLoop
+{
+    ir_types.IrBlock* header;
+    ir_types.IrBlock** blocks;
+    u32 nblocks;
+    ir_types.IrBlock* preheader;
+    ir_types.IrBlock* latch;
+}
+
+pub IrLoop** irDetectLoops(ir_types.IrFunc* func, domtree.IrDomTree* dt)
+{
+    bool ownDt = false;
+    if (!dt)
+    {
+        dt = domtree.irDomtreeNew(func);
+        ownDt = true;
+    }
+    if (!dt) return null;
+
+    u32 n = func.nblocks;
+    IrLoop** loops = mman.alloc<IrLoop*>(n + 1);
+    u32 nloops = 0;
+
+    for (u32 ai = 1; ai < n; ai++)
+    {
+        ir_types.IrBlock* latch = func.blocks[ai];
+        for (u32 sj = 0; sj < latch.nsuccs; sj++)
+        {
+            ir_types.IrBlock* header = latch.succs[sj];
+            if (header == latch) continue;
+            if (!domtree.irDomtreeDominates(dt, header, latch)) continue;
+
+            bool dup = false;
+            for (u32 li = 0; li < nloops; li++)
+            {
+                if (loops[li]->header == header && loops[li]->latch == latch)
+                { dup = true; break; }
+            }
+            if (dup) continue;
+
+            u32 headerIdx = n;
+            u32 latchIdx = n;
+            for (u32 i = 0; i < n; i++)
+            {
+                if (func.blocks[i] == header) headerIdx = i;
+                if (func.blocks[i] == latch) latchIdx = i;
+            }
+
+            bool* inLoop = mman.alloc<bool>(n);
+            for (u32 i = 0; i < n; i++) inLoop[i] = false;
+            inLoop[headerIdx] = true;
+            u32 count = 1;
+
+            u32* stack = mman.alloc<u32>(n);
+            u32 sp = 0;
+            if (latchIdx != headerIdx)
+            {
+                stack[sp++] = latchIdx;
+                inLoop[latchIdx] = true;
+                count++;
+            }
+
+            while (sp > 0)
+            {
+                u32 curIdx = stack[--sp];
+                ir_types.IrBlock* curBlock = func.blocks[curIdx];
+                for (u32 pj = 0; pj < curBlock.npreds; pj++)
+                {
+                    ir_types.IrBlock* pred = curBlock.preds[pj];
+                    u32 predIdx = n;
+                    for (u32 i = 0; i < n; i++)
+                        if (func.blocks[i] == pred) { predIdx = i; break; }
+                    if (predIdx >= n || predIdx == headerIdx || inLoop[predIdx])
+                        continue;
+                    inLoop[predIdx] = true;
+                    count++;
+                    stack[sp++] = predIdx;
+                }
+            }
+
+            ir_types.IrBlock** blocks = mman.alloc<ir_types.IrBlock*>(count);
+            u32 bi = 0;
+            for (u32 i = 0; i < n; i++)
+                if (inLoop[i])
+                    blocks[bi++] = func.blocks[i];
+
+            IrLoop* lp = mman.alloc<IrLoop>(1);
+            lp->header = header;
+            lp->blocks = blocks;
+            lp->nblocks = count;
+            lp->preheader = null;
+            lp->latch = latch;
+            loops[nloops++] = lp;
+
+            mman.dealloc<bool>(inLoop);
+            mman.dealloc<u32>(stack);
+        }
+    }
+
+    loops[nloops] = null;
+
+    if (ownDt) irDomtreeFree(dt);
+    return loops;
+}
+
+pub IrLoop** irLoopDetectNatural(ir_types.IrFunc* func)
+{
+    domtree.IrDomTree* dt = domtree.irDomtreeNew(func);
+    IrLoop** loops = irDetectLoops(func, dt);
+    domtree.irDomtreeFree(dt);
+    return loops;
+}

@@ -1,0 +1,14 @@
+// manglemod, module imported by t10_mangling.crl under the alias 'mm'.
+// Non-extern decls are mangled to mm_*; externs must keep raw C names.
+pub u64 calc(u64 x)
+{
+    return x * 2;
+}
+
+pub struct boxed
+{
+    u64 val;
+}
+
+pub extern u64 strlen(const u8* s);
+pub extern u8** environ;

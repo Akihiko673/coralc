@@ -1,0 +1,280 @@
+mod vector = import("std/math/vector.crl");
+
+pub struct Mat2
+{
+    f64 m[4];
+
+    static Mat2 identity()
+    {
+        Mat2 r;
+        for (u64 i = 0; i < 4; i++) r.m[i] = 0.0;
+        r.m[0] = 1.0; r.m[3] = 1.0;
+        return r;
+    }
+
+    static Mat2 fromRows(vector.Vec2 r0, vector.Vec2 r1)
+    {
+        Mat2 r;
+        r.m[0] = r0.x; r.m[1] = r0.y;
+        r.m[2] = r1.x; r.m[3] = r1.y;
+        return r;
+    }
+
+    f64 at(u64 row, u64 col)
+    {
+        return self.m[row * 2 + col];
+    }
+
+    void set(u64 row, u64 col, f64 val)
+    {
+        self.m[row * 2 + col] = val;
+    }
+
+    Mat2 mul(Mat2 other)
+    {
+        Mat2 r;
+        for (u64 i = 0; i < 4; i++) r.m[i] = 0.0;
+        for (u64 i = 0; i < 2; i++)
+            for (u64 j = 0; j < 2; j++)
+                for (u64 k = 0; k < 2; k++)
+                    r.m[i * 2 + j] += self.m[i * 2 + k] * other.m[k * 2 + j];
+        return r;
+    }
+
+    vector.Vec2 mulVec(vector.Vec2 v)
+    {
+        vector.Vec2 r;
+        r.x = self.m[0] * v.x + self.m[1] * v.y;
+        r.y = self.m[2] * v.x + self.m[3] * v.y;
+        return r;
+    }
+
+    Mat2 transpose()
+    {
+        Mat2 r;
+        r.m[0] = self.m[0]; r.m[1] = self.m[2];
+        r.m[2] = self.m[1]; r.m[3] = self.m[3];
+        return r;
+    }
+
+    f64 det()
+    {
+        return self.m[0] * self.m[3] - self.m[1] * self.m[2];
+    }
+
+    Mat2 inverse()
+    {
+        f64 d = self.det();
+        if (d < 1e-15 && d > -1e-15) return self;
+        f64 invDet = 1.0 / d;
+        Mat2 r;
+        r.m[0] = self.m[3] * invDet;
+        r.m[1] = -self.m[1] * invDet;
+        r.m[2] = -self.m[2] * invDet;
+        r.m[3] = self.m[0] * invDet;
+        return r;
+    }
+}
+
+pub struct Mat3
+{
+    f64 m[9];
+
+    static Mat3 identity()
+    {
+        Mat3 r;
+        for (u64 i = 0; i < 9; i++) r.m[i] = 0.0;
+        r.m[0] = 1.0; r.m[4] = 1.0; r.m[8] = 1.0;
+        return r;
+    }
+
+    static Mat3 fromRows(vector.Vec3 r0, vector.Vec3 r1, vector.Vec3 r2)
+    {
+        Mat3 r;
+        r.m[0] = r0.x; r.m[1] = r0.y; r.m[2] = r0.z;
+        r.m[3] = r1.x; r.m[4] = r1.y; r.m[5] = r1.z;
+        r.m[6] = r2.x; r.m[7] = r2.y; r.m[8] = r2.z;
+        return r;
+    }
+
+    f64 at(u64 row, u64 col)
+    {
+        return self.m[row * 3 + col];
+    }
+
+    void set(u64 row, u64 col, f64 val)
+    {
+        self.m[row * 3 + col] = val;
+    }
+
+    Mat3 mul(Mat3 other)
+    {
+        Mat3 r;
+        for (u64 i = 0; i < 9; i++) r.m[i] = 0.0;
+        for (u64 i = 0; i < 3; i++)
+            for (u64 j = 0; j < 3; j++)
+                for (u64 k = 0; k < 3; k++)
+                    r.m[i * 3 + j] += self.m[i * 3 + k] * other.m[k * 3 + j];
+        return r;
+    }
+
+    vector.Vec3 mulVec(vector.Vec3 v)
+    {
+        vector.Vec3 r;
+        r.x = self.m[0] * v.x + self.m[1] * v.y + self.m[2] * v.z;
+        r.y = self.m[3] * v.x + self.m[4] * v.y + self.m[5] * v.z;
+        r.z = self.m[6] * v.x + self.m[7] * v.y + self.m[8] * v.z;
+        return r;
+    }
+
+    Mat3 transpose()
+    {
+        Mat3 r;
+        for (u64 i = 0; i < 3; i++)
+            for (u64 j = 0; j < 3; j++)
+                r.m[i * 3 + j] = self.m[j * 3 + i];
+        return r;
+    }
+
+    f64 det()
+    {
+        f64 a = self.m[0] * (self.m[4] * self.m[8] - self.m[5] * self.m[7]);
+        f64 b = self.m[1] * (self.m[3] * self.m[8] - self.m[5] * self.m[6]);
+        f64 c = self.m[2] * (self.m[3] * self.m[7] - self.m[4] * self.m[6]);
+        return a - b + c;
+    }
+}
+
+pub struct Mat4
+{
+    f64 m[16];
+
+    static Mat4 identity()
+    {
+        Mat4 r;
+        for (u64 i = 0; i < 16; i++) r.m[i] = 0.0;
+        r.m[0] = 1.0; r.m[5] = 1.0; r.m[10] = 1.0; r.m[15] = 1.0;
+        return r;
+    }
+
+    static Mat4 fromRows(vector.Vec4 r0, vector.Vec4 r1, vector.Vec4 r2, vector.Vec4 r3)
+    {
+        Mat4 r;
+        r.m[0] = r0.x; r.m[1] = r0.y; r.m[2] = r0.z; r.m[3] = r0.w;
+        r.m[4] = r1.x; r.m[5] = r1.y; r.m[6] = r1.z; r.m[7] = r1.w;
+        r.m[8] = r2.x; r.m[9] = r2.y; r.m[10] = r2.z; r.m[11] = r2.w;
+        r.m[12] = r3.x; r.m[13] = r3.y; r.m[14] = r3.z; r.m[15] = r3.w;
+        return r;
+    }
+
+    f64 at(u64 row, u64 col)
+    {
+        return self.m[row * 4 + col];
+    }
+
+    void set(u64 row, u64 col, f64 val)
+    {
+        self.m[row * 4 + col] = val;
+    }
+
+    Mat4 mul(Mat4 other)
+    {
+        Mat4 r;
+        for (u64 i = 0; i < 16; i++) r.m[i] = 0.0;
+        for (u64 i = 0; i < 4; i++)
+            for (u64 j = 0; j < 4; j++)
+                for (u64 k = 0; k < 4; k++)
+                    r.m[i * 4 + j] += self.m[i * 4 + k] * other.m[k * 4 + j];
+        return r;
+    }
+
+    vector.Vec4 mulVec(vector.Vec4 v)
+    {
+        vector.Vec4 r;
+        r.x = self.m[0] * v.x + self.m[1] * v.y + self.m[2] * v.z + self.m[3] * v.w;
+        r.y = self.m[4] * v.x + self.m[5] * v.y + self.m[6] * v.z + self.m[7] * v.w;
+        r.z = self.m[8] * v.x + self.m[9] * v.y + self.m[10] * v.z + self.m[11] * v.w;
+        r.w = self.m[12] * v.x + self.m[13] * v.y + self.m[14] * v.z + self.m[15] * v.w;
+        return r;
+    }
+
+    Mat4 transpose()
+    {
+        Mat4 r;
+        for (u64 i = 0; i < 4; i++)
+            for (u64 j = 0; j < 4; j++)
+                r.m[i * 4 + j] = self.m[j * 4 + i];
+        return r;
+    }
+
+    static Mat4 translation(f64 tx, f64 ty, f64 tz)
+    {
+        Mat4 r = Mat4::identity();
+        r.m[3] = tx; r.m[7] = ty; r.m[11] = tz;
+        return r;
+    }
+
+    static Mat4 rotationX(f64 angle)
+    {
+        f64 c = cos(angle); f64 s = sin(angle);
+        Mat4 r = Mat4::identity();
+        r.m[5] = c; r.m[6] = -s;
+        r.m[9] = s; r.m[10] = c;
+        return r;
+    }
+
+    static Mat4 rotationY(f64 angle)
+    {
+        f64 c = cos(angle); f64 s = sin(angle);
+        Mat4 r = Mat4::identity();
+        r.m[0] = c; r.m[2] = s;
+        r.m[8] = -s; r.m[10] = c;
+        return r;
+    }
+
+    static Mat4 rotationZ(f64 angle)
+    {
+        f64 c = cos(angle); f64 s = sin(angle);
+        Mat4 r = Mat4::identity();
+        r.m[0] = c; r.m[1] = -s;
+        r.m[4] = s; r.m[5] = c;
+        return r;
+    }
+
+    static Mat4 scale(f64 sx, f64 sy, f64 sz)
+    {
+        Mat4 r;
+        for (u64 i = 0; i < 16; i++) r.m[i] = 0.0;
+        r.m[0] = sx; r.m[5] = sy; r.m[10] = sz; r.m[15] = 1.0;
+        return r;
+    }
+
+    static Mat4 perspective(f64 fov, f64 aspect, f64 near, f64 far)
+    {
+        f64 f = 1.0 / tan(fov / 2.0);
+        f64 rangeInv = 1.0 / (near - far);
+        Mat4 r;
+        for (u64 i = 0; i < 16; i++) r.m[i] = 0.0;
+        r.m[0] = f / aspect;
+        r.m[5] = f;
+        r.m[10] = (near + far) * rangeInv;
+        r.m[11] = 2.0 * near * far * rangeInv;
+        r.m[14] = -1.0;
+        return r;
+    }
+
+    static Mat4 lookAt(vector.Vec3 eye, vector.Vec3 center, vector.Vec3 up)
+    {
+        vector.Vec3 f = center.sub(eye).normalize();
+        vector.Vec3 s = f.cross(up).normalize();
+        vector.Vec3 u = s.cross(f);
+        Mat4 r;
+        for (u64 i = 0; i < 16; i++) r.m[i] = 0.0;
+        r.m[0] = s.x; r.m[1] = s.y; r.m[2] = s.z;
+        r.m[4] = u.x; r.m[5] = u.y; r.m[6] = u.z;
+        r.m[8] = -f.x; r.m[9] = -f.y; r.m[10] = -f.z;
+        r.m[15] = 1.0;
+        Mat4 t = Mat4::translation(-eye.x, -eye.y, -eye.z);
+        return r.mul(t);
+    }
+}

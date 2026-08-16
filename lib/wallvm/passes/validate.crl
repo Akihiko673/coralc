@@ -1,0 +1,289 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+
+static bool blockListContains(ir_types.IrBlock** blocks, u32 nblocks, ir_types.IrBlock* target)
+{
+    for (u32 i = 0; i < nblocks; i++)
+        if (blocks[i] == target) return true;
+    return false;
+}
+
+pub struct IrValidator
+{
+    ir_types.IrContext* ctx;
+    u32 nerrors;
+    const char* lastError;
+
+    IrValidator new(ir_types.IrContext* ctx)
+    {
+        IrValidator v;
+        v.ctx = ctx;
+        v.nerrors = 0;
+        v.lastError = null;
+        return v;
+    }
+
+    void error(const char* msg)
+    {
+        self.nerrors++;
+        self.lastError = msg;
+    }
+
+    bool validateFunc(ir_types.IrFunc* func)
+    {
+        if (!func)
+        {
+            self.error("null function");
+            return false;
+        }
+        if (func->nblocks == 0 && !func->isExtern)
+        {
+            self.error("function with no blocks");
+            return false;
+        }
+
+        // Validate each block
+        for (u32 bi = 0; bi < func->nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func->blocks[bi];
+            if (!bb)
+            {
+                self.error("null block in function");
+                return false;
+            }
+
+            if (bb->parent != func)
+            {
+                self.error("block parent mismatch");
+                return false;
+            }
+
+            if (bb->ninsts == 0)
+            {
+                self.error("empty block");
+                return false;
+            }
+
+            bool seenNonPhi = false;
+            u32 termCount = 0;
+            ir_types.IrInst* term = null;
+
+            for (u32 ii = 0; ii < bb->ninsts; ii++)
+            {
+                ir_types.IrInst* inst = bb->insts[ii];
+                if (!inst)
+                {
+                    self.error("null instruction in block");
+                    return false;
+                }
+
+                if (inst.parent != bb)
+                {
+                    self.error("instruction parent mismatch");
+                    return false;
+                }
+
+                if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                {
+                    if (seenNonPhi)
+                    {
+                        self.error("phi must appear before non-phi instructions");
+                        return false;
+                    }
+                    if ((inst->nops % 2) != 0)
+                    {
+                        self.error("phi must have value/block operand pairs");
+                        return false;
+                    }
+                    if ((inst->nops / 2) != bb->npreds)
+                    {
+                        self.error("phi incoming count must match block predecessor count");
+                        return false;
+                    }
+                    for (u32 oi = 0; oi < inst->nops; oi += 2)
+                    {
+                        ir_types.IrValue* predVal = inst->ops[oi + 1];
+                        if (!predVal)
+                        {
+                            self.error("phi has null predecessor operand");
+                            return false;
+                        }
+                        ir_types.IrBlock* pred = (ir_types.IrBlock*)predVal;
+                        if (!blockListContains(bb->preds, bb->npreds, pred))
+                        {
+                            self.error("phi predecessor is not a CFG predecessor");
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    seenNonPhi = true;
+                }
+
+                for (u32 oi = 0; oi < inst->nops; oi++)
+                {
+                    ir_types.IrValue* op = inst->ops[oi];
+                    if (!op) continue;
+
+                    bool found = false;
+                    for (u32 ui = 0; ui < op->nusers; ui++)
+                    {
+                        if (op->users[ui] == inst)
+                        {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        self.error("use-def inconsistency: operand does not list this inst as user");
+                        return false;
+                    }
+                }
+
+                if (ir_opcodes.irOpcodeIsTerminator(inst.opcode))
+                {
+                    termCount++;
+                    term = inst;
+                    if (ii != bb->ninsts - 1)
+                    {
+                        self.error("terminator must be the last instruction in a block");
+                        return false;
+                    }
+                }
+            }
+
+            if (termCount == 0)
+            {
+                self.error("block is missing a terminator");
+                return false;
+            }
+            if (termCount > 1)
+            {
+                self.error("block has multiple terminators");
+                return false;
+            }
+
+            switch (term->opcode)
+            {
+            case ir_opcodes.IrOpcode::Br:
+                if (term->nops != 1 || bb->nsuccs != 1)
+                {
+                    self.error("br must have one target and one successor");
+                    return false;
+                }
+                if ((ir_types.IrBlock*)term->ops[0] != bb->succs[0])
+                {
+                    self.error("br target does not match CFG successor");
+                    return false;
+                }
+                break;
+            case ir_opcodes.IrOpcode::CondBr:
+                if (term->nops != 3 || bb->nsuccs != 2)
+                {
+                    self.error("cond_br must have condition, two targets, and two successors");
+                    return false;
+                }
+                if ((ir_types.IrBlock*)term->ops[1] != bb->succs[0] || (ir_types.IrBlock*)term->ops[2] != bb->succs[1])
+                {
+                    self.error("cond_br targets do not match CFG successors");
+                    return false;
+                }
+                break;
+            case ir_opcodes.IrOpcode::Ret:
+            case ir_opcodes.IrOpcode::Unreachable:
+            case ir_opcodes.IrOpcode::Noret:
+                if (bb->nsuccs != 0)
+                {
+                    self.error("terminator must not have CFG successors");
+                    return false;
+                }
+                break;
+            default:
+                self.error("unknown terminator kind");
+                return false;
+            }
+        }
+
+        // Validate successor/predecessor consistency
+        for (u32 bi = 0; bi < func->nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func->blocks[bi];
+            for (u32 si = 0; si < bb->nsuccs; si++)
+            {
+                ir_types.IrBlock* succ = bb->succs[si];
+                if (!succ)
+                {
+                    self.error("null successor");
+                    return false;
+                }
+                if (!blockListContains(succ->preds, succ->npreds, bb))
+                {
+                    self.error("successor/predecessor inconsistency");
+                    return false;
+                }
+            }
+            for (u32 pi = 0; pi < bb->npreds; pi++)
+            {
+                ir_types.IrBlock* pred = bb->preds[pi];
+                if (!pred)
+                {
+                    self.error("null predecessor");
+                    return false;
+                }
+                if (!blockListContains(pred->succs, pred->nsuccs, bb))
+                {
+                    self.error("predecessor/successor inconsistency");
+                    return false;
+                }
+            }
+        }
+
+        return self.nerrors == 0;
+    }
+
+    bool validateModule(ir_types.IrModule* modd)
+    {
+        if (!modd)
+        {
+            self.error("null module");
+            return false;
+        }
+
+        // Validate all functions
+        for (u32 i = 0; i < modd->nfuncs; i++)
+        {
+            if (!self.validateFunc(modd->funcs[i]))
+                return false;
+        }
+
+        // Validate globals
+        for (u32 i = 0; i < modd->nglobals; i++)
+        {
+            ir_types.IrGlobal* g = modd->globals[i];
+            if (!g)
+            {
+                self.error("null global");
+                return false;
+            }
+            if (!g->base.type)
+            {
+                self.error("global with null type");
+                return false;
+            }
+        }
+
+        return self.nerrors == 0;
+    }
+}
+
+pub bool irPassValidate(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    IrValidator v = IrValidator::new(ctx);
+    return v.validateFunc(func);
+}

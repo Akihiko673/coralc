@@ -1,0 +1,254 @@
+@[no_warn_unsafe]
+
+mod vec = import("std/collections/vec.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub void sortI32(vec.vec<i32>* v)
+{
+    sortI32Range(v, 0, v->count());
+}
+
+void sortI32Range(vec.vec<i32>* v, u64 lo, u64 hi)
+{
+    if (hi - lo <= 1) return;
+    u64 pi = partitionI32(v, lo, hi);
+    if (pi > lo) sortI32Range(v, lo, pi);
+    if (pi + 1 < hi) sortI32Range(v, pi + 1, hi);
+}
+
+u64 partitionI32(vec.vec<i32>* v, u64 lo, u64 hi)
+{
+    u64 mid = lo + (hi - 1 - lo) / 2;
+    u64 pIdx = hi - 1;
+    i32 a = v->at(lo);
+    i32 b = v->at(mid);
+    i32 c = v->at(hi - 1);
+    if ((a < b) != (a < c)) pIdx = lo;
+    else if ((b < a) != (b < c)) pIdx = mid;
+    i32 pivot = v->at(pIdx);
+    u64 i = lo;
+    for (u64 j = lo; j < hi - 1; j++)
+    {
+        if (v->at(j) < pivot)
+        {
+            i32 tmp = v->at(i);
+            v->set(i, v->at(j));
+            v->set(j, tmp);
+            i++;
+        }
+    }
+    i32 tmp = v->at(i);
+    v->set(i, v->at(pIdx));
+    v->set(pIdx, tmp);
+    return i;
+}
+
+pub void sortU64(vec.vec<u64>* v)
+{
+    sortU64Range(v, 0, v->count());
+}
+
+void sortU64Range(vec.vec<u64>* v, u64 lo, u64 hi)
+{
+    if (hi - lo <= 1) return;
+    u64 pi = partitionU64(v, lo, hi);
+    if (pi > lo) sortU64Range(v, lo, pi);
+    if (pi + 1 < hi) sortU64Range(v, pi + 1, hi);
+}
+
+u64 partitionU64(vec.vec<u64>* v, u64 lo, u64 hi)
+{
+    u64 mid = lo + (hi - 1 - lo) / 2;
+    u64 pIdx = hi - 1;
+    u64 a = v->at(lo);
+    u64 b = v->at(mid);
+    u64 c = v->at(hi - 1);
+    if ((a < b) != (a < c)) pIdx = lo;
+    else if ((b < a) != (b < c)) pIdx = mid;
+    u64 pivot = v->at(pIdx);
+    u64 i = lo;
+    for (u64 j = lo; j < hi - 1; j++)
+    {
+        if (v->at(j) < pivot)
+        {
+            u64 tmp = v->at(i);
+            v->set(i, v->at(j));
+            v->set(j, tmp);
+            i++;
+        }
+    }
+    u64 tmp = v->at(i);
+    v->set(i, v->at(pIdx));
+    v->set(pIdx, tmp);
+    return i;
+}
+
+pub void sortF64(vec.vec<f64>* v)
+{
+    sortF64Range(v, 0, v->count());
+}
+
+void sortF64Range(vec.vec<f64>* v, u64 lo, u64 hi)
+{
+    if (hi - lo <= 1) return;
+    u64 pi = partitionF64(v, lo, hi);
+    if (pi > lo) sortF64Range(v, lo, pi);
+    if (pi + 1 < hi) sortF64Range(v, pi + 1, hi);
+}
+
+u64 partitionF64(vec.vec<f64>* v, u64 lo, u64 hi)
+{
+    u64 mid = lo + (hi - 1 - lo) / 2;
+    u64 pIdx = hi - 1;
+    f64 a = v->at(lo);
+    f64 b = v->at(mid);
+    f64 c = v->at(hi - 1);
+    if ((a < b) != (a < c)) pIdx = lo;
+    else if ((b < a) != (b < c)) pIdx = mid;
+    f64 pivot = v->at(pIdx);
+    u64 i = lo;
+    for (u64 j = lo; j < hi - 1; j++)
+    {
+        if (v->at(j) < pivot)
+        {
+            f64 tmp = v->at(i);
+            v->set(i, v->at(j));
+            v->set(j, tmp);
+            i++;
+        }
+    }
+    f64 tmp = v->at(i);
+    v->set(i, v->at(pIdx));
+    v->set(pIdx, tmp);
+    return i;
+}
+
+pub void sortBy<T>(vec.vec<T>* v, bool(T, T) less)
+{
+    sortByRange<T>(v, 0, v->count(), less);
+}
+
+void sortByRange<T>(vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
+{
+    if (hi - lo <= 1) return;
+    u64 pi = partitionBy<T>(v, lo, hi, less);
+    if (pi > lo) sortByRange<T>(v, lo, pi, less);
+    if (pi + 1 < hi) sortByRange<T>(v, pi + 1, hi, less);
+}
+
+u64 partitionBy<T>(vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
+{
+    u64 mid = lo + (hi - 1 - lo) / 2;
+    u64 pIdx;
+    T la = v->at(lo);
+    T mb = v->at(mid);
+    T hc = v->at(hi - 1);
+    if (less(la, mb) && less(la, hc))
+    {
+        if (less(mb, hc)) pIdx = mid;
+        else pIdx = hi - 1;
+    }
+    else if (less(mb, la) && less(mb, hc))
+    {
+        if (less(la, hc)) pIdx = lo;
+        else pIdx = hi - 1;
+    }
+    else
+    {
+        if (less(la, mb)) pIdx = lo;
+        else pIdx = mid;
+    }
+    T pivot = v->at(pIdx);
+    u64 i = lo;
+    for (u64 j = lo; j < hi - 1; j++)
+    {
+        if (less(v->at(j), pivot))
+        {
+            T tmp = v->at(i);
+            v->set(i, v->at(j));
+            v->set(j, tmp);
+            i++;
+        }
+    }
+    T tmp = v->at(i);
+    v->set(i, v->at(pIdx));
+    v->set(pIdx, tmp);
+    return i;
+}
+
+pub bool isSortedI32(const vec.vec<i32>* v)
+{
+    for (u64 i = 1; i < v->count(); i++)
+        if (v->at(i - 1) > v->at(i)) return false;
+    return true;
+}
+
+pub bool isSortedU64(const vec.vec<u64>* v)
+{
+    for (u64 i = 1; i < v->count(); i++)
+        if (v->at(i - 1) > v->at(i)) return false;
+    return true;
+}
+
+pub bool isSortedBy<T>(const vec.vec<T>* v, bool(T, T) less)
+{
+    for (u64 i = 1; i < v->count(); i++)
+        if (less(v->at(i), v->at(i - 1))) return false;
+    return true;
+}
+
+pub i64 binarySearchI32(const vec.vec<i32>* v, i32 key)
+{
+    i64 lo = 0;
+    i64 hi = (i64)v->count() - 1;
+    while (lo <= hi)
+    {
+        i64 mid = lo + (hi - lo) / 2;
+        i32 val = v->at((u64)mid);
+        if (val == key) return mid;
+        if (val < key) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
+}
+
+pub i64 binarySearchU64(const vec.vec<u64>* v, u64 key)
+{
+    i64 lo = 0;
+    i64 hi = (i64)v->count() - 1;
+    while (lo <= hi)
+    {
+        i64 mid = lo + (hi - lo) / 2;
+        u64 val = v->at((u64)mid);
+        if (val == key) return mid;
+        if (val < key) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
+}
+
+pub i64 binarySearchBy<T>(const vec.vec<T>* v, T key, i32(T, T) cmp)
+{
+    i64 lo = 0;
+    i64 hi = (i64)v->count() - 1;
+    while (lo <= hi)
+    {
+        i64 mid = lo + (hi - lo) / 2;
+        i32 c = cmp(key, v->at((u64)mid));
+        if (c == 0) return mid;
+        if (c > 0) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return -1;
+}
+
+pub void reverse<T>(vec.vec<T>* v)
+{
+    u64 n = v->count();
+    for (u64 i = 0; i < n / 2; i++)
+    {
+        T tmp = v->at(i);
+        v->set(i, v->at(n - 1 - i));
+        v->set(n - 1 - i, tmp);
+    }
+}

@@ -1,0 +1,596 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+
+const u32 MAX_LEAVES = 16;
+
+// A single-variable integer range constraint derived from ICmp instructions.
+// A value used by other code may appear in multiple intervals; the ICmp
+// instructions themselves are always reused, never duplicated.
+struct Interval
+{
+    ir_types.IrInst* loIcmp; // ICmp providing the lower bound (null if unbounded below)
+    ir_types.IrInst* hiIcmp; // ICmp providing the upper bound (null if unbounded above)
+    u64 loC;
+    u64 hiC;
+    bool loIncl;
+    bool hiIncl;
+    bool hasLo;
+    bool hasHi;
+    bool empty; // no integer satisfies the range
+    bool sign; // signedness of the ordering comparisons
+    bool isEq; // came from an Eq comparison (a sign-agnostic point)
+}
+
+// Effective lower value of a bound (first integer satisfying it).
+// *inf is set when the bound is beyond every representable value.
+static u64 effLoVal(u64 c, bool incl, bool sign, bool* inf)
+{
+    if (!incl)
+    {
+        if (sign)
+        {
+            if (c == 0x7FFFFFFFFFFFFFFF) { *inf = true; return 0; }
+        }
+        else
+        {
+            if (c == 0xFFFFFFFFFFFFFFFF) { *inf = true; return 0; }
+        }
+        *inf = false;
+        return c + 1;
+    }
+    *inf = false;
+    return c;
+}
+
+// Effective upper value of a bound (last integer satisfying it).
+// *inf is set when the bound is below every representable value.
+static u64 effHiVal(u64 c, bool incl, bool sign, bool* inf)
+{
+    if (!incl)
+    {
+        if (sign)
+        {
+            if (c == 0x8000000000000000) { *inf = true; return 0; }
+        }
+        else
+        {
+            if (c == 0) { *inf = true; return 0; }
+        }
+        *inf = false;
+        return c - 1;
+    }
+    *inf = false;
+    return c;
+}
+
+// Compare two effective bound values. Returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal.
+// +inf sorts above every finite value.
+static i32 cmpEff(u64 v1, bool inf1, u64 v2, bool inf2, bool sign)
+{
+    if (inf1 && inf2) return 0;
+    if (inf1) return 1;
+    if (inf2) return -1;
+    if (sign)
+    {
+        u64 bias = 0x8000000000000000;
+        if ((v1 ^ bias) > (v2 ^ bias)) return 1;
+        if ((v1 ^ bias) < (v2 ^ bias)) return -1;
+        return 0;
+    }
+    if (v1 > v2) return 1;
+    if (v1 < v2) return -1;
+    return 0;
+}
+
+// Convert an ICmp leaf into an interval on its (already verified) shared variable.
+// Returns false for comparisons that cannot be merged (Ne, non-constant bound).
+static bool leafToInterval(ir_types.IrInst* icmp, Interval* out)
+{
+    if (icmp.opcode != ir_opcodes.IrOpcode::ICmp) return false;
+    if (icmp.nops != 2) return false;
+    ir_types.IrValue* a = icmp.ops[0];
+    ir_types.IrValue* b = icmp.ops[1];
+    if (!a || !b) return false;
+    ir_types.IrValue* cval = null;
+    if (a.kind == ir_types.IrValueKind::ConstInt && b.kind == ir_types.IrValueKind::Inst) cval = a;
+    else if (b.kind == ir_types.IrValueKind::ConstInt && a.kind == ir_types.IrValueKind::Inst) cval = b;
+    else return false;
+
+    out.loIcmp = icmp;
+    out.hiIcmp = icmp;
+    out.hasLo = false;
+    out.hasHi = false;
+    out.empty = false;
+    out.isEq = false;
+    out.sign = false;
+
+    switch (icmp.icmpPred)
+    {
+    case ir_opcodes.IrICmpPred::Sge: out.hasLo = true; out.loC = cval.valData; out.loIncl = true; out.sign = true; break;
+    case ir_opcodes.IrICmpPred::Sgt: out.hasLo = true; out.loC = cval.valData; out.loIncl = false; out.sign = true; break;
+    case ir_opcodes.IrICmpPred::Sle: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = true; out.sign = true; break;
+    case ir_opcodes.IrICmpPred::Slt: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = false; out.sign = true; break;
+    case ir_opcodes.IrICmpPred::Uge: out.hasLo = true; out.loC = cval.valData; out.loIncl = true; break;
+    case ir_opcodes.IrICmpPred::Ugt: out.hasLo = true; out.loC = cval.valData; out.loIncl = false; break;
+    case ir_opcodes.IrICmpPred::Ule: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = true; break;
+    case ir_opcodes.IrICmpPred::Ult: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = false; break;
+    case ir_opcodes.IrICmpPred::Eq: out.hasLo = true; out.hasHi = true; out.loC = cval.valData; out.hiC = cval.valData; out.loIncl = true; out.hiIncl = true; out.isEq = true; break;
+    default: return false; // Ne
+    }
+    return true;
+}
+
+// Verify an ICmp constrains a single shared variable (const vs variable).
+static bool icmpOnVar(ir_types.IrInst* icmp, ir_types.IrValue** varr)
+{
+    if (icmp.nops != 2) return false;
+    ir_types.IrValue* a = icmp.ops[0];
+    ir_types.IrValue* b = icmp.ops[1];
+    if (!a || !b) return false;
+    ir_types.IrValue* cand = null;
+    if (a.kind == ir_types.IrValueKind::Inst && b.kind == ir_types.IrValueKind::ConstInt) cand = a;
+    else if (b.kind == ir_types.IrValueKind::Inst && a.kind == ir_types.IrValueKind::ConstInt) cand = b;
+    else return false;
+    if (!(*varr)) *varr = cand;
+    else if (*varr != cand) return false;
+    return true;
+}
+
+// Flatten an And-tree into ICmp leaves. Returns false if any node is not an
+// And or ICmp, or if leaves constrain different variables.
+static bool collectAndLeaves(ir_types.IrValue* v, ir_types.IrValue** varr, ir_types.IrInst** leaves, u32* n, u32* instCount)
+{
+    if (v.kind != ir_types.IrValueKind::Inst) return false;
+    ir_types.IrInst* inst = (ir_types.IrInst*)v;
+    if (inst.opcode == ir_opcodes.IrOpcode::And)
+    {
+        if (inst.nops != 2) return false;
+        (*instCount)++;
+        if (!collectAndLeaves(inst.ops[0], varr, leaves, n, instCount)) return false;
+        return collectAndLeaves(inst.ops[1], varr, leaves, n, instCount);
+    }
+    if (inst.opcode != ir_opcodes.IrOpcode::ICmp) return false;
+    if (!icmpOnVar(inst, varr)) return false;
+    if (*n >= MAX_LEAVES) return false;
+    leaves[(*n)++] = inst;
+    return true;
+}
+
+// Collect the clauses of an Or-chain. Each clause is either a single ICmp or
+// an And-tree of ICmps (no nested Or). Clauses are stored contiguously in
+// leafStorage, delimited by offsets.
+static bool collectOrClauses(ir_types.IrValue* v, ir_types.IrValue** varr, ir_types.IrInst** leafStorage, u32* offsets, u32* nClauses, u32* used, u32* instCount)
+{
+    if (v.kind != ir_types.IrValueKind::Inst) return false;
+    ir_types.IrInst* inst = (ir_types.IrInst*)v;
+    if (inst.opcode == ir_opcodes.IrOpcode::Or)
+    {
+        if (inst.nops != 2) return false;
+        (*instCount)++;
+        if (!collectOrClauses(inst.ops[0], varr, leafStorage, offsets, nClauses, used, instCount)) return false;
+        return collectOrClauses(inst.ops[1], varr, leafStorage, offsets, nClauses, used, instCount);
+    }
+    offsets[*nClauses] = *used;
+    if (!collectAndLeaves(v, varr, leafStorage, used, instCount)) return false;
+    offsets[*nClauses + 1] = *used;
+    (*nClauses)++;
+    return true;
+}
+
+// Merge two single-variable intervals. isAnd, true = intersection, false = union.
+// Returns 0 on incompatible signedness, 1 on merged, 2 when a union has a gap
+// (cannot be represented exactly as one interval).
+static i32 mergeIntervals(Interval* a, Interval* b, bool isAnd, Interval* out)
+{
+    if (isAnd)
+    {
+        if (a.empty || b.empty) { out->empty = true; out->hasLo = false; out->hasHi = false; return 1; }
+    }
+    else
+    {
+        if (a.empty) { *out = *b; return 1; }
+        if (b.empty) { *out = *a; return 1; }
+    }
+
+    bool sign;
+    if (a.isEq && b.isEq) sign = false;
+    else if (a.isEq) sign = b.sign;
+    else sign = a.sign;
+    if (!a.isEq && !b.isEq && a.sign != b.sign) return 0;
+
+    Interval r;
+    r.loIcmp = null;
+    r.hiIcmp = null;
+    r.empty = false;
+    r.sign = sign;
+    r.isEq = false;
+    r.hasLo = false;
+    r.hasHi = false;
+
+    if (isAnd)
+    {
+        if (a.hasLo || b.hasLo)
+        {
+            r.hasLo = true;
+            if (!a.hasLo) { r.loIcmp = b.loIcmp; r.loC = b.loC; r.loIncl = b.loIncl; }
+            else if (!b.hasLo) { r.loIcmp = a.loIcmp; r.loC = a.loC; r.loIncl = a.loIncl; }
+            else
+            {
+                u64 ea; u64 eb; bool ia; bool ib;
+                ea = effLoVal(a.loC, a.loIncl, sign, &ia);
+                eb = effLoVal(b.loC, b.loIncl, sign, &ib);
+                if (cmpEff(ea, ia, eb, ib, sign) >= 0) { r.loIcmp = a.loIcmp; r.loC = a.loC; r.loIncl = a.loIncl; }
+                else { r.loIcmp = b.loIcmp; r.loC = b.loC; r.loIncl = b.loIncl; }
+            }
+        }
+        if (a.hasHi || b.hasHi)
+        {
+            r.hasHi = true;
+            if (!a.hasHi) { r.hiIcmp = b.hiIcmp; r.hiC = b.hiC; r.hiIncl = b.hiIncl; }
+            else if (!b.hasHi) { r.hiIcmp = a.hiIcmp; r.hiC = a.hiC; r.hiIncl = a.hiIncl; }
+            else
+            {
+                u64 ea; u64 eb; bool ia; bool ib;
+                ea = effHiVal(a.hiC, a.hiIncl, sign, &ia);
+                eb = effHiVal(b.hiC, b.hiIncl, sign, &ib);
+                if (cmpEff(ea, ia, eb, ib, sign) <= 0) { r.hiIcmp = a.hiIcmp; r.hiC = a.hiC; r.hiIncl = a.hiIncl; }
+                else { r.hiIcmp = b.hiIcmp; r.hiC = b.hiC; r.hiIncl = b.hiIncl; }
+            }
+        }
+        if (r.hasLo)
+        {
+            u64 eLo;
+            bool hasInf;
+            eLo = effLoVal(r.loC, r.loIncl, sign, &hasInf);
+            if (hasInf) { r.empty = true; *out = r; return 1; }
+        }
+        if (r.hasHi)
+        {
+            u64 eHi;
+            bool hasInf;
+
+            eHi = effHiVal(r.hiC, r.hiIncl, sign, &hasInf);
+            if (hasInf) { r.empty = true; *out = r; return 1; }
+        }
+        if (r.hasLo && r.hasHi)
+        {
+            u64 el; u64 eh; bool il; bool ih;
+            el = effLoVal(r.loC, r.loIncl, sign, &il);
+            eh = effHiVal(r.hiC, r.hiIncl, sign, &ih);
+            if (cmpEff(el, il, eh, ih, sign) > 0) { r.empty = true; *out = r; return 1; }
+        }
+        *out = r;
+        return 1;
+    }
+
+    if (a.hasLo && b.hasLo)
+    {
+        u64 ea; u64 eb; bool ia; bool ib;
+        ea = effLoVal(a.loC, a.loIncl, sign, &ia);
+        eb = effLoVal(b.loC, b.loIncl, sign, &ib);
+        if (cmpEff(ea, ia, eb, ib, sign) <= 0) { r.hasLo = true; r.loIcmp = a.loIcmp; r.loC = a.loC; r.loIncl = a.loIncl; }
+        else { r.hasLo = true; r.loIcmp = b.loIcmp; r.loC = b.loC; r.loIncl = b.loIncl; }
+    }
+    else
+    {
+        r.hasLo = false;
+    }
+    if (a.hasHi && b.hasHi)
+    {
+        u64 ea; u64 eb; bool ia; bool ib;
+        ea = effHiVal(a.hiC, a.hiIncl, sign, &ia);
+        eb = effHiVal(b.hiC, b.hiIncl, sign, &ib);
+        if (cmpEff(ea, ia, eb, ib, sign) >= 0) { r.hasHi = true; r.hiIcmp = a.hiIcmp; r.hiC = a.hiC; r.hiIncl = a.hiIncl; }
+        else { r.hasHi = true; r.hiIcmp = b.hiIcmp; r.hiC = b.hiC; r.hiIncl = b.hiIncl; }
+    }
+    else
+    {
+        r.hasHi = false;
+    }
+
+    if (a.hasLo)
+    {
+        u64 e;
+        bool inf;
+
+        e = effHiVal(b.hiC, b.hiIncl, sign, &inf);
+        if (inf) { *out = *a; return 1; }
+    }
+    if (a.hasHi)
+    {
+        u64 e;
+        bool inf;
+        e = effHiVal(a.hiC, a.hiIncl, sign, &inf);
+        if (inf) { *out = *b; return 1; }
+    }
+    if (b.hasLo)
+    {
+        u64 e;
+        bool inf;
+        e = effLoVal(b.loC, b.loIncl, sign, &inf);
+        if (inf) { *out = *a; return 1; }
+    }
+    if (b.hasHi)
+    {
+        u64 e;
+        bool inf;
+        e = effHiVal(b.hiC, b.hiIncl, sign, &inf);
+        if (inf) { *out = *a; return 1; }
+    }
+
+    // Gap check, a union is exactly representable as one interval only when
+    // the intervals overlap or are adjacent (no hole of unreached integers).
+    // maxLo = larger effective lower bound (an unbounded side counts as -inf),
+    // minHi = smaller effective upper bound (unbounded counts as +inf). A hole
+    // exists only when both are finite and maxLo - minHi >= 2.
+    bool maxLoInf = !a.hasLo || !b.hasLo;
+    bool minHiInf = !a.hasHi || !b.hasHi;
+    u64 maxLo = 0;
+    u64 minHi = 0;
+    if (!maxLoInf)
+    {
+        u64 ea; u64 eb; bool ia; bool ib;
+        ea = effLoVal(a.loC, a.loIncl, sign, &ia);
+        eb = effLoVal(b.loC, b.loIncl, sign, &ib);
+        maxLo = cmpEff(ea, ia, eb, ib, sign) >= 0 ? ea : eb;
+    }
+    if (!minHiInf)
+    {
+        u64 ea; u64 eb; bool ia; bool ib;
+        ea = effHiVal(a.hiC, a.hiIncl, sign, &ia);
+        eb = effHiVal(b.hiC, b.hiIncl, sign, &ib);
+        minHi = cmpEff(ea, ia, eb, ib, sign) <= 0 ? ea : eb;
+    }
+    if (!maxLoInf && !minHiInf && maxLo - minHi >= 2) return 2;
+
+    *out = r;
+    return 1;
+}
+
+// Intersect a list of intervals (And semantics). Returns false on incompatible
+// signedness.
+static bool intersectAll(Interval* ivs, u32 n, Interval* out)
+{
+    Interval r = ivs[0];
+    for (u32 i = 1; i < n; i++)
+    {
+        Interval m;
+        int rc = mergeIntervals(&r, &ivs[i], true, &m);
+        if (rc != 1) return false;
+        r = m;
+    }
+    *out = r;
+    return true;
+}
+
+// True if interval a's lower bound sorts before interval b's (stable for ties).
+static bool loBefore(Interval* a, Interval* b)
+{
+    bool sign = !a.isEq ? a.sign : (!b.isEq ? b.sign : false);
+    if (!a.hasLo && !b.hasLo) return false;
+    if (!a.hasLo) return true;
+    if (!b.hasLo) return false;
+    u64 ea; u64 eb; bool ia; bool ib;
+    ea = effLoVal(a.loC, a.loIncl, sign, &ia);
+    eb = effLoVal(b.loC, b.loIncl, sign, &ib);
+    return cmpEff(ea, ia, eb, ib, sign) < 0;
+}
+
+// Merge intervals of an Or into the fewest exact groups. Returns false on
+// incompatible signedness.
+static bool unionMergeAll(Interval* ivs, u32 n, Interval* groups, u32* k)
+{
+    u32 m = 0;
+    Interval buf[16];
+    for (u32 i = 0; i < n; i++)
+        if (!ivs[i].empty) buf[m++] = ivs[i];
+    if (m == 0) { *k = 0; return true; }
+
+    for (u32 i = 1; i < m; i++)
+    {
+        Interval key = buf[i];
+        u32 j = i;
+        while (j > 0 && loBefore(&key, &buf[j - 1]))
+        {
+            buf[j] = buf[j - 1];
+            j--;
+        }
+        buf[j] = key;
+    }
+
+    u32 g = 0;
+    groups[g] = buf[0];
+    for (u32 i = 1; i < m; i++)
+    {
+        Interval merged;
+        int rc = mergeIntervals(&groups[g], &buf[i], false, &merged);
+        if (rc == 2)
+        {
+            g++;
+            groups[g] = buf[i];
+        }
+        else if (rc == 1)
+        {
+            groups[g] = merged;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    *k = g + 1;
+    return true;
+}
+
+pub struct RangeMergePass
+{
+    ir_types.IrContext* ctx;
+    u64 merges;
+
+    RangeMergePass new(ir_types.IrContext* ctx)
+    {
+        RangeMergePass p;
+        p.ctx = ctx;
+        p.merges = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.merges = 0;
+        bool changed = false;
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (self.simplify(inst))
+                {
+                    self.merges++;
+                    changed = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+        return changed;
+    }
+
+    // Build the IR value for a merged interval, reusing the merged ICmp leaves
+    // as-is and counting newly created instructions in *newInsts.
+    ir_types.IrValue* buildIntervalValue(Interval* r, ir_types.IrInst* anchor, u32* newInsts)
+    {
+        if (r.empty)
+        {
+            (*newInsts) = 0;
+            return self.ctx.constInt(anchor.base.type, 0);
+        }
+        if (!r.hasLo && !r.hasHi)
+        {
+            (*newInsts) = 0;
+            return self.ctx.constInt(anchor.base.type, 1);
+        }
+        ir_types.IrValue* loV = r.hasLo ? &r.loIcmp.base : null;
+        ir_types.IrValue* hiV = r.hasHi ? &r.hiIcmp.base : null;
+        if (loV && hiV && loV != hiV)
+        {
+            ir_types.IrValue* ops[2] = { loV, hiV };
+            ir_types.IrInst* andInst = self.ctx.createInst(ir_opcodes.IrOpcode::And, anchor.base.type, ops, 2, 0, 0);
+            ops[0].addUser(andInst);
+            ops[1].addUser(andInst);
+            anchor.parent.insertBefore(andInst, anchor);
+            (*newInsts)++;
+            return &andInst.base;
+        }
+        if (loV) return loV;
+        return hiV;
+    }
+
+    // Simplify one And/Or node whose leaves are all ICmps on a single shared
+    // variable; rebuilds only when strictly smaller.
+    bool simplify(ir_types.IrInst* inst)
+    {
+        if (inst.nops != 2) return false;
+        if (inst.opcode != ir_opcodes.IrOpcode::And && inst.opcode != ir_opcodes.IrOpcode::Or) return false;
+        if (!inst.ops[0] || !inst.ops[1]) return false;
+
+        ir_types.IrValue* varr = null;
+        u32 instCount = 0;
+
+        if (inst.opcode == ir_opcodes.IrOpcode::And)
+        {
+            ir_types.IrInst* leaves[16];
+            u32 nLeaves = 0;
+            if (!collectAndLeaves(inst.ops[0], &varr, leaves, &nLeaves, &instCount)) return false;
+            if (!collectAndLeaves(inst.ops[1], &varr, leaves, &nLeaves, &instCount)) return false;
+            if (nLeaves < 2) return false;
+
+            Interval ivs[16];
+            for (u32 i = 0; i < nLeaves; i++)
+                if (!leafToInterval(leaves[i], &ivs[i])) return false;
+
+            Interval r;
+            if (!intersectAll(ivs, nLeaves, &r)) return false;
+
+            u32 newInsts = 0;
+            ir_types.IrValue* val = self.buildIntervalValue(&r, inst, &newInsts);
+            if (newInsts >= instCount) return false;
+
+            inst.base.replaceAllUses(val);
+            inst.erase();
+            return true;
+        }
+
+        ir_types.IrInst* leafStorage[16];
+        u32 offsets[17];
+        u32 nClauses = 0;
+        u32 used = 0;
+        if (!collectOrClauses(inst.ops[0], &varr, leafStorage, offsets, &nClauses, &used, &instCount)) return false;
+        if (!collectOrClauses(inst.ops[1], &varr, leafStorage, offsets, &nClauses, &used, &instCount)) return false;
+        if (nClauses < 2) return false;
+
+        Interval clauseIv[16];
+        for (u32 c = 0; c < nClauses; c++)
+        {
+            u32 nl = offsets[c + 1] - offsets[c];
+            if (nl == 1)
+            {
+                if (!leafToInterval(leafStorage[offsets[c]], &clauseIv[c])) return false;
+            }
+            else
+            {
+                Interval tmp[16];
+                if (nl > 16) return false;
+                for (u32 k = 0; k < nl; k++)
+                    if (!leafToInterval(leafStorage[offsets[c] + k], &tmp[k])) return false;
+                if (!intersectAll(tmp, nl, &clauseIv[c])) return false;
+            }
+        }
+
+        Interval groups[16];
+        u32 k = 0;
+        if (!unionMergeAll(clauseIv, nClauses, groups, &k)) return false;
+
+        u32 newInsts = 0;
+        ir_types.IrValue* val = null;
+        for (u32 g = 0; g < k; g++)
+        {
+            ir_types.IrValue* gv = self.buildIntervalValue(&groups[g], inst, &newInsts);
+            if (!val)
+            {
+                val = gv;
+            }
+            else
+            {
+                ir_types.IrValue* ops[2] = { val, gv };
+                ir_types.IrInst* orInst = self.ctx.createInst(ir_opcodes.IrOpcode::Or, inst.base.type, ops, 2, 0, 0);
+                ops[0].addUser(orInst);
+                ops[1].addUser(orInst);
+                inst.parent.insertBefore(orInst, inst);
+                newInsts++;
+                val = &orInst.base;
+            }
+        }
+        if (!val) val = self.ctx.constInt(inst.base.type, 0);
+        if (newInsts >= instCount) return false;
+
+        inst.base.replaceAllUses(val);
+        inst.erase();
+        return true;
+    }
+}
+
+pub bool irPassRange(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    RangeMergePass pass = RangeMergePass::new(ctx);
+    return pass.run(func);
+}

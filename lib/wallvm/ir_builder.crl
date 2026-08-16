@@ -1,0 +1,562 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct IrBuilder
+{
+    ir_types.IrContext* ctx;
+    ir_types.IrBlock* block;
+    ir_types.IrInst* insertBefore;
+
+    IrBuilder new(ir_types.IrContext* ctx)
+    {
+        IrBuilder b;
+        b.ctx = ctx;
+        b.block = null;
+        b.insertBefore = null;
+        return b;
+    }
+
+    // Set insertion position
+    void pos(ir_types.IrBlock* block, ir_types.IrInst* before)
+    {
+        self.block = block;
+        self.insertBefore = before;
+    }
+
+    ir_types.IrInst* retVoid()
+    {
+        return self.createInst(ir_opcodes.IrOpcode::Ret, self.ctx.tyVoid(), null, 0, 0, 0);
+    }
+
+    ir_types.IrInst* ret(ir_types.IrValue* val)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = val;
+        return self.createInst(ir_opcodes.IrOpcode::Ret, val.type, ops, 1, 0, 0);
+    }
+
+    ir_types.IrInst* br(ir_types.IrBlock* dest)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = &dest.base;
+        ir_types.IrInst* inst = self.createInst(ir_opcodes.IrOpcode::Br, self.ctx.tyVoid(), ops, 1, 0, 0);
+        // sdd successor edge
+        if (self.block) self.block.addSucc(dest);
+        return inst;
+    }
+
+    ir_types.IrInst* condBr(ir_types.IrValue* cond, ir_types.IrBlock* thenBb, ir_types.IrBlock* elseBb)
+    {
+        ir_types.IrValue** ops = self.allocOps(3);
+        ops[0] = cond;
+        ops[1] = &thenBb.base;
+        ops[2] = &elseBb.base;
+        ir_types.IrInst* inst = self.createInst(ir_opcodes.IrOpcode::CondBr, self.ctx.tyVoid(), ops, 3, 0, 0);
+        if (self.block)
+        {
+            self.block.addSucc(thenBb);
+            self.block.addSucc(elseBb);
+        }
+        return inst;
+    }
+
+    ir_types.IrInst* unreachable()
+    {
+        return self.createInst(ir_opcodes.IrOpcode::Unreachable, self.ctx.tyVoid(), null, 0, 0, 0);
+    }
+
+    ir_types.IrInst* noret()
+    {
+        return self.createInst(ir_opcodes.IrOpcode::Noret, self.ctx.tyVoid(), null, 0, 0, 0);
+    }
+
+    ir_types.IrInst* add(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Add, l, r);
+    }
+
+    ir_types.IrInst* sub(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Sub, l, r);
+    }
+
+    ir_types.IrInst* mul(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Mul, l, r);
+    }
+
+    ir_types.IrInst* sdiv(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::SDiv, l, r);
+    }
+
+    ir_types.IrInst* udiv(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::UDiv, l, r);
+    }
+
+    ir_types.IrInst* srem(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::SRem, l, r);
+    }
+
+    ir_types.IrInst* fadd(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::FAdd, l, r);
+    }
+
+    ir_types.IrInst* fsub(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::FSub, l, r);
+    }
+
+    ir_types.IrInst* fmul(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::FMul, l, r);
+    }
+
+    ir_types.IrInst* fdiv(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::FDiv, l, r);
+    }
+
+    ir_types.IrInst* urem(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::URem, l, r);
+    }
+
+    ir_types.IrInst* andOp(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::And, l, r);
+    }
+
+    ir_types.IrInst* orOp(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Or, l, r);
+    }
+
+    ir_types.IrInst* xorOp(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Xor, l, r);
+    }
+
+    ir_types.IrInst* shl(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Shl, l, r);
+    }
+
+    ir_types.IrInst* ashr(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Ashr, l, r);
+    }
+
+    ir_types.IrInst* lshr(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Lshr, l, r);
+    }
+
+    ir_types.IrInst* neg(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Neg, v);
+    }
+
+    ir_types.IrInst* notOp(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Not, v);
+    }
+
+    //   Memory
+    ir_types.IrInst* alloca(ir_types.IrType* ty)
+    {
+        ir_types.IrType* ptrTy = self.ctx.tyPtr(ty);
+        return self.createInst(ir_opcodes.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
+    }
+
+    ir_types.IrInst* load(ir_types.IrType* ty, ir_types.IrValue* ptr)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = ptr;
+        return self.createInst(ir_opcodes.IrOpcode::Load, ty, ops, 1, 0, 0);
+    }
+
+    ir_types.IrInst* store(ir_types.IrValue* val, ir_types.IrValue* ptr)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = val;
+        ops[1] = ptr;
+        return self.createInst(ir_opcodes.IrOpcode::Store, self.ctx.tyVoid(), ops, 2, 0, 0);
+    }
+
+    ir_types.IrInst* gep(ir_types.IrValue* ptr, ir_types.IrValue** idxs, u32 nidxs)
+    {
+        ir_types.IrValue** ops = self.allocOps(nidxs + 1);
+        ops[0] = ptr;
+        for (u32 i = 0; i < nidxs; i++)
+            ops[i + 1] = idxs[i];
+        ir_types.IrType* elemTy = ptr.type;
+        if (elemTy && elemTy.kind == ir_types.IrTypeKind::Ptr && elemTy.elem)
+            elemTy = elemTy.elem;
+        return self.createInst(ir_opcodes.IrOpcode::Gep, self.ctx.tyPtr(elemTy), ops, nidxs + 1, 0, 0);
+    }
+
+    //   Cast
+    ir_types.IrInst* trunc(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Trunc, v, dt);
+    }
+
+    ir_types.IrInst* zext(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Zext, v, dt);
+    }
+
+    ir_types.IrInst* sext(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Sext, v, dt);
+    }
+
+    ir_types.IrInst* fpTrunc(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::FpTrunc, v, dt);
+    }
+
+    ir_types.IrInst* fpExt(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::FpExt, v, dt);
+    }
+
+    ir_types.IrInst* fpToSi(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::FpToSi, v, dt);
+    }
+
+    ir_types.IrInst* fpToUi(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::FpToUi, v, dt);
+    }
+
+    ir_types.IrInst* siToFp(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::SiToFp, v, dt);
+    }
+
+    ir_types.IrInst* uiToFp(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::UiToFp, v, dt);
+    }
+
+    ir_types.IrInst* bitcast(ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Bitcast, v, dt);
+    }
+
+    //   Compare
+    ir_types.IrInst* icmp(ir_opcodes.IrICmpPred p, ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = l;
+        ops[1] = r;
+        ir_types.IrType* i1Ty = self.ctx.tyInt(1);
+        return self.createInst(ir_opcodes.IrOpcode::ICmp, i1Ty, ops, 2, (u64)p, 0);
+    }
+
+    ir_types.IrInst* fcmp(ir_opcodes.IrFCmpPred p, ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = l;
+        ops[1] = r;
+        ir_types.IrType* i1Ty = self.ctx.tyInt(1);
+        return self.createInst(ir_opcodes.IrOpcode::FCmp, i1Ty, ops, 2, 0, (u64)p);
+    }
+
+    //   bit man
+    ir_types.IrInst* ctPop(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::CtPop, v);
+    }
+
+    ir_types.IrInst* ctLz(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::CtLz, v);
+    }
+
+    ir_types.IrInst* ctTz(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::CtTz, v);
+    }
+
+    ir_types.IrInst* rotl(ir_types.IrValue* x, ir_types.IrValue* y)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Rotl, x, y);
+    }
+
+    ir_types.IrInst* rotr(ir_types.IrValue* x, ir_types.IrValue* y)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::Rotr, x, y);
+    }
+
+    ir_types.IrInst* bswap(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Bswap, v);
+    }
+
+    // maths shit
+    ir_types.IrInst* smin(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::SMin, l, r);
+    }
+
+    ir_types.IrInst* smax(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::SMax, l, r);
+    }
+
+    ir_types.IrInst* umin(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::UMin, l, r);
+    }
+
+    ir_types.IrInst* umax(ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        return self.createBinary(ir_opcodes.IrOpcode::UMax, l, r);
+    }
+
+    ir_types.IrInst* abs(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::Abs, v);
+    }
+
+    //   Floating-point
+
+    ir_types.IrInst* fma(ir_types.IrValue* a, ir_types.IrValue* b, ir_types.IrValue* c)
+    {
+        ir_types.IrValue** ops = self.allocOps(3);
+        ops[0] = a;
+        ops[1] = b;
+        ops[2] = c;
+        return self.createInst(ir_opcodes.IrOpcode::Fma, a.type, ops, 3, 0, 0);
+    }
+
+    ir_types.IrInst* fabs(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::FAbs, v);
+    }
+
+    ir_types.IrInst* fsqrt(ir_types.IrValue* v)
+    {
+        return self.createUnary(ir_opcodes.IrOpcode::FSqrt, v);
+    }
+
+    ir_types.IrInst* shuffleVector(ir_types.IrValue* v1, ir_types.IrValue* v2, ir_types.IrValue** mask, u32 nmask)
+    {
+        ir_types.IrValue** ops = self.allocOps(nmask + 2);
+        ops[0] = v1;
+        ops[1] = v2;
+        for (u32 i = 0; i < nmask; i++) ops[i + 2] = mask[i];
+        return self.createInst(ir_opcodes.IrOpcode::ShuffleVector, v1.type, ops, nmask + 2, 0, 0);
+    }
+
+    ir_types.IrInst* extractElement(ir_types.IrValue* v, ir_types.IrValue* idx)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = v;
+        ops[1] = idx;
+        ir_types.IrType* elemTy = v.type && v.type.kind == ir_types.IrTypeKind::Vector ? v.type.elem : v.type;
+        return self.createInst(ir_opcodes.IrOpcode::ExtractElement, elemTy, ops, 2, 0, 0);
+    }
+
+    ir_types.IrInst* insertElement(ir_types.IrValue* v, ir_types.IrValue* val, ir_types.IrValue* idx)
+    {
+        ir_types.IrValue** ops = self.allocOps(3);
+        ops[0] = v;
+        ops[1] = val;
+        ops[2] = idx;
+        return self.createInst(ir_opcodes.IrOpcode::InsertElement, v.type, ops, 3, 0, 0);
+    }
+
+    ir_types.IrInst* inlineAsm(const char* asmStr, ir_types.IrValue** args, u32 nargs, ir_types.IrType* retTy)
+    {
+        ir_types.IrValue** ops = self.allocOps(nargs + 1);
+        ir_types.IrType* asmType = self.ctx.tyPtr(self.ctx.tyInt(8));
+        ir_types.IrValue* asmStrVal = self.ctx.constInt(asmType, (u64)asmStr);
+        ops[0] = asmStrVal;
+        for (u32 i = 0; i < nargs; i++)
+            ops[i + 1] = args[i];
+        return self.createInst(ir_opcodes.IrOpcode::InlineAsm, retTy ? retTy : self.ctx.tyVoid(), ops, nargs + 1, 0, 0);
+    }
+
+    //   atomics
+    ir_types.IrInst* atomicLoad(ir_types.IrType* ty, ir_types.IrValue* ptr, ir_opcodes.IrAtomicOrdering order)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = ptr;
+        return self.createInst(ir_opcodes.IrOpcode::AtomicLoad, ty, ops, 1, (u64)order, 0);
+    }
+
+    ir_types.IrInst* atomicStore(ir_types.IrValue* val, ir_types.IrValue* ptr, ir_opcodes.IrAtomicOrdering order)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = val;
+        ops[1] = ptr;
+        return self.createInst(ir_opcodes.IrOpcode::AtomicStore, self.ctx.tyVoid(), ops, 2, (u64)order, 0);
+    }
+
+    ir_types.IrInst* atomicRmw(ir_types.IrType* ty,
+                               ir_opcodes.IrAtomicRmwOp op,
+                               ir_types.IrValue* ptr,
+                               ir_types.IrValue* val,
+                               ir_opcodes.IrAtomicOrdering order)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = ptr;
+        ops[1] = val;
+        return self.createInst(ir_opcodes.IrOpcode::AtomicRmw, ty, ops, 2, (u64)op, (u64)order);
+    }
+
+    ir_types.IrInst* atomicCmpXchg(ir_types.IrType* ty,
+                                  ir_types.IrValue* ptr,
+                                  ir_types.IrValue* cmp,
+                                  ir_types.IrValue* val,
+                                  ir_opcodes.IrAtomicOrdering succ,
+                                  ir_opcodes.IrAtomicOrdering fail)
+    {
+        ir_types.IrValue** ops = self.allocOps(3);
+        ops[0] = ptr;
+        ops[1] = cmp;
+        ops[2] = val;
+        return self.createInst(ir_opcodes.IrOpcode::AtomicCmpXchg, ty, ops, 3, (u64)succ, (u64)fail);
+    }
+
+    ir_types.IrInst* fence(ir_opcodes.IrAtomicOrdering order)
+    {
+        return self.createInst(ir_opcodes.IrOpcode::Fence, self.ctx.tyVoid(), null, 0, (u64)order, 0);
+    }
+
+    //   exception handling
+    ir_types.IrInst* landingPad(ir_types.IrType* ty, ir_types.IrValue* personalityFn, u32 numClauses)
+    {
+        ir_types.IrValue** ops = self.allocOps(numClauses + 1);
+        ops[0] = personalityFn;
+        for (u32 i = 0; i < numClauses; i++)
+            ops[i + 1] = null; // placeholder for filter/catch clauses
+        return self.createInst(ir_opcodes.IrOpcode::LandingPad, ty, ops, numClauses + 1, 0, 0);
+    }
+
+    ir_types.IrInst* extractValue(ir_types.IrValue* agg, u32 idx)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = agg;
+        ir_types.IrType* i32Ty = self.ctx.tyInt(32);
+        ops[1] = self.ctx.constInt(i32Ty, (u64)idx);
+        ir_types.IrType* elemTy = agg.type;
+        if (elemTy && elemTy.kind == ir_types.IrTypeKind::Array && elemTy.elem)
+            elemTy = elemTy.elem;
+        return self.createInst(ir_opcodes.IrOpcode::ExtractValue, elemTy, ops, 2, 0, 0);
+    }
+
+    //   gc support
+    ir_types.IrInst* gcRoot(ir_types.IrValue* ptr)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = ptr;
+        return self.createInst(ir_opcodes.IrOpcode::GcRoot, ptr.type, ops, 1, 0, 0);
+    }
+
+    ir_types.IrInst* gcWriteBarrier(ir_types.IrValue* ptr, ir_types.IrValue* val)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = ptr;
+        ops[1] = val;
+        return self.createInst(ir_opcodes.IrOpcode::GcWriteBarrier, self.ctx.tyVoid(), ops, 2, 0, 0);
+    }
+
+    ir_types.IrInst* gcSafepoint()
+    {
+        return self.createInst(ir_opcodes.IrOpcode::GcSafepoint, self.ctx.tyVoid(), null, 0, 0, 0);
+    }
+
+    ir_types.IrInst* call(ir_types.IrValue* callee, ir_types.IrValue** args, u32 nargs)
+    {
+        ir_types.IrType* retTy = callee.type;
+        if (retTy && retTy.kind == ir_types.IrTypeKind::Func && retTy.ret)
+            retTy = retTy.ret;
+        else
+            retTy = self.ctx.tyVoid();
+        ir_types.IrValue** ops = self.allocOps(nargs + 1);
+        ops[0] = callee;
+        for (u32 i = 0; i < nargs; i++)
+            ops[i + 1] = args[i];
+        return self.createInst(ir_opcodes.IrOpcode::Call, retTy, ops, nargs + 1, 0, 0);
+    }
+
+    ir_types.IrInst* phi(ir_types.IrType* ty, ir_types.IrValue** vals, ir_types.IrBlock** blocks, u32 nincoming)
+    {
+        // interleave, val, block, val, block, ...
+        u32 nops = nincoming * 2;
+        ir_types.IrValue** ops = self.allocOps(nops);
+        for (u32 i = 0; i < nincoming; i++)
+        {
+            ops[i * 2] = vals[i];
+            ops[i * 2 + 1] = &blocks[i].base;
+        }
+        return self.createInst(ir_opcodes.IrOpcode::Phi, ty, ops, nops, 0, 0);
+    }
+
+    ir_types.IrInst* select(ir_types.IrValue* cond, ir_types.IrValue* t, ir_types.IrValue* f)
+    {
+        ir_types.IrValue** ops = self.allocOps(3);
+        ops[0] = cond;
+        ops[1] = t;
+        ops[2] = f;
+        return self.createInst(ir_opcodes.IrOpcode::Select, t.type, ops, 3, 0, 0);
+    }
+
+    ir_types.IrValue** allocOps(u32 count)
+    {
+        return (ir_types.IrValue**)mman.alloc<ir_types.IrValue*>(count);
+    }
+
+    ir_types.IrInst* createBinary(ir_opcodes.IrOpcode op, ir_types.IrValue* l, ir_types.IrValue* r)
+    {
+        ir_types.IrValue** ops = self.allocOps(2);
+        ops[0] = l;
+        ops[1] = r;
+        return self.createInst(op, l.type, ops, 2, 0, 0);
+    }
+
+    ir_types.IrInst* createUnary(ir_opcodes.IrOpcode op, ir_types.IrValue* v)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = v;
+        return self.createInst(op, v.type, ops, 1, 0, 0);
+    }
+
+    ir_types.IrInst* createUnary(ir_opcodes.IrOpcode op, ir_types.IrValue* v, ir_types.IrType* dt)
+    {
+        ir_types.IrValue** ops = self.allocOps(1);
+        ops[0] = v;
+        return self.createInst(op, dt, ops, 1, 0, 0);
+    }
+
+    ir_types.IrInst* createInst(ir_opcodes.IrOpcode op, ir_types.IrType* ty, ir_types.IrValue** ops, u32 nops, u64 icmpP, u64 fcmpP)
+    {
+        ir_types.IrInst* inst = self.ctx.createInst(op, ty, ops, nops, icmpP, fcmpP);
+        if (inst != null)
+        {
+            // Insert into current block
+            if (self.block)
+                self.block.addInst(inst);
+
+            // Track users for each operand (before freeing ops)
+            for (u32 i = 0; i < nops; i++)
+                if (ops[i] != null)
+                    ops[i].addUser(inst);
+        }
+        // Free the temp ops array now that createInst copied it
+        if (ops) mman.dealloc<ir_types.IrValue*>(ops);
+        return inst;
+    }
+}

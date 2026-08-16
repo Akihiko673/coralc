@@ -1,0 +1,15 @@
+i32 main()
+{
+    i32 a = 2 + 3 * 4;
+    u64 b = 7 % 3;
+    f64 c = 1.5 + 2.5;
+    if (a != 14) return 1;
+    if (b != 1) return 2;
+    if (c != 4.0) return 3;
+    u64 n = 0;
+    while (n < 5) n = n + 1;
+    if (n != 5) return 4;
+    bool flag_ok = true;
+    if (!flag_ok) return 5;
+    return 0;
+}

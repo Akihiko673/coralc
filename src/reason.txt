@@ -1,0 +1,38 @@
+// another thing, in the compiler, there should either be something that looks for funtion with 1-1 bodies,
+// operating on exactly the same types, and fuse them, and call the fused name.
+// it should work aacross modules. an example, say, in one file, print is imported and std.print, but in another one, it is ios.print,
+//  and one is importing the other, or they are used in the same codebase
+// so the compiler should fuse them into a single print function, and call it with the appropriate arguments.
+// rather than having multiple declaration of exactly the same funtions.
+//
+// similarly with struct, say String can be imported as std.String, but also as str.String or string.string,
+// so the compiler should fuse them into a single String struct, and use it with the appropriate arguments.
+
+// then full analysis, tyoechecking, semantic, static if possible, and variable stacking for defer.
+// andn other types of types checks.
+//
+// full error report, not just "expected this, got that" there is an error.crl file written in the dir
+// full monomorphization, so tht ios can be used.
+// then another thing, char should be u8 by default, but can be overridden. add an any typpe that is actually a void* tyoe under the hood
+//
+// all attributes must be implemented, used. addition of constexpr or final, for compile time constants.
+
+// Should we add destructors to run when a variable leaves, ot should we do the time the type it i sued on goes out of scope, it is trait drop {}, where structs can use
+// function declarations for each std or lib type, then the compiler will auto inject on default mode, unless turned on via @[explicit_destructor]?
+
+// then, the implecit self, but for const pointers, it'll be something like. rather than passin const self* as argi
+// struct vec {
+//     blaaa;
+//     vec destroy() const* {
+//     // shit
+//         self.blaa;
+//     }
+//     or
+//     const vec* destroy() {
+//     }
+//
+//     vec destroy()* {
+//     // shit
+//         self.blaa;
+//     }
+// }

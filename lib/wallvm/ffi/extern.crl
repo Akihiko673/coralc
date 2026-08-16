@@ -1,0 +1,176 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct ExternLib
+{
+    char* libName; // "c", "kernel32", "m", "pthread", et cetera.
+    char* symbol;
+    asm_rules.CallingConvention cc;
+    bool isNoret;
+}
+
+pub struct FfiCtx
+{
+    ExternLib** libs;
+    u32 nlibs;
+    u32 capLibs;
+    const char** linkerFlags;
+    u32 nflags;
+    u32 capFlags;
+
+    FfiCtx new()
+    {
+        FfiCtx f;
+        f.libs = null;
+        f.nlibs = 0;
+        f.capLibs = 0;
+        f.linkerFlags = null;
+        f.nflags = 0;
+        f.capFlags = 0;
+        return f;
+    }
+
+    void addExtern(const char* lib, const char* sym, asm_rules.CallingConvention cc, bool noret)
+    {
+        if (self.nlibs >= self.capLibs)
+        {
+            u32 nc = self.capLibs ? self.capLibs * 2 : 8;
+            ExternLib** nl = mman.alloc<ExternLib*>(nc);
+            if (self.libs)
+            {
+                for (u32 i = 0; i < self.nlibs; i++) nl[i] = self.libs[i];
+                mman.dealloc<ExternLib*>(self.libs);
+            }
+            self.libs = nl;
+            self.capLibs = nc;
+        }
+        ExternLib* el = mman.alloc<ExternLib>(1);
+        u32 ll = 0;
+        while (lib[ll]) ll++;
+        char* lc = mman.alloc<char>(ll + 1);
+        for (u32 i = 0; i < ll; i++) lc[i] = lib[i]; lc[ll] = 0;
+        u32 sl = 0;
+        while (sym[sl]) sl++;
+        char* sc = mman.alloc<char>(sl + 1);
+        for (u32 i = 0; i < sl; i++) sc[i] = sym[i]; sc[sl] = 0;
+        *el = (ExternLib){ lc, sc, cc, noret };
+        self.libs[self.nlibs++] = el;
+    }
+
+    void addLinkerFlag(const char* flag_)
+    {
+        if (self.nflags >= self.capFlags)
+        {
+            u32 nc = self.capFlags ? self.capFlags * 2 : 8;
+            const char** nf = mman.alloc<const char*>(nc);
+            if (self.linkerFlags)
+            {
+                for (u32 i = 0; i < self.nflags; i++) nf[i] = self.linkerFlags[i];
+                mman.dealloc<const char*>(self.linkerFlags);
+            }
+            self.linkerFlags = nf;
+            self.capFlags = nc;
+        }
+        u32 fl = 0;
+        while (flag_[fl]) fl++;
+        char* fc = mman.alloc<char>(fl + 1);
+        for (u32 i = 0; i < fl; i++) fc[i] = flag_[i]; fc[fl] = 0;
+        self.linkerFlags[self.nflags++] = fc;
+    }
+
+    void resolveLinkerFlags()
+    {
+        for (u32 i = 0; i < self.nlibs; i++)
+        {
+            ExternLib* el = self.libs[i];
+            if (el->libName[0] == 'c' && el->libName[1] == 0)
+                self.addLinkerFlag("-lc");
+            else if (el->libName[0] == 'm' && el->libName[1] == 0)
+                self.addLinkerFlag("-lm");
+            else if (el->libName[0] == 'p' && el->libName[1] == 't' && el->libName[2] == 'h' && el->libName[3] == 'r' && el->libName[4] == 'e' && el->libName[5] == 'a' && el->libName[6] == 'd' && el->libName[7] == 0)
+                self.addLinkerFlag("-lpthread");
+            else if (el->libName[0] == 'd' && el->libName[1] == 'l' && el->libName[2] == 0)
+                self.addLinkerFlag("-ldl");
+            else if (el->libName[0] == 'k' && el->libName[1] == 'e' && el->libName[2] == 'r' && el->libName[3] == 'n' && el->libName[4] == 'e' && el->libName[5] == 'l' && (el->libName[6] == '3' || el->libName[6] == '2') && el->libName[7] == 0)
+            {
+                // yeah, windows links against kernel32.lib, so it's gonna handled by the linker automatically
+            }
+        }
+    }
+
+    void clear() // clear. no explanation needed
+    {
+        if (self.libs) mman.dealloc<ExternLib*>(self.libs);
+        if (self.linkerFlags) mman.dealloc<const char*>(self.linkerFlags);
+        self.libs = null;
+        self.nlibs = 0;
+        self.capLibs = 0;
+        self.linkerFlags = null; self.nflags = 0; self.capFlags = 0;
+    }
+}
+
+pub bool irFuncIsExtern(ir_types.IrFunc* f) // to detect if an ir_types.IrFunc is extern.
+{ // why am i even writing commments atp?
+    if (!f) return false;
+    return f->isExtern;
+}
+
+pub asm_rules.CallingConvention externCallingConvention(ir_types.IrFunc* f, asm_rules.CallingConvention hostCc)
+{
+    if (!f || !f->isExtern) return hostCc;
+
+    switch (hostCc)
+    {
+    case asm_rules.CallingConvention::SystemV:
+    case asm_rules.CallingConvention::SyscallX86_64:
+    case asm_rules.CallingConvention::SyscallMacOS:
+        return asm_rules.CallingConvention::SystemV;
+    case asm_rules.CallingConvention::Win64:
+    case asm_rules.CallingConvention::SyscallWin64:
+        return asm_rules.CallingConvention::Win64;
+    case asm_rules.CallingConvention::Cdecl:
+    case asm_rules.CallingConvention::Stdcall:
+    case asm_rules.CallingConvention::Fastcall:
+    case asm_rules.CallingConvention::WinX86_32:
+        return asm_rules.CallingConvention::Cdecl;
+    case asm_rules.CallingConvention::Aapcs64:
+    case asm_rules.CallingConvention::Aapcs64MacOs:
+    case asm_rules.CallingConvention::Aapcs64Ios:
+        return asm_rules.CallingConvention::Aapcs64;
+    case asm_rules.CallingConvention::Aapcs:
+        return asm_rules.CallingConvention::Aapcs;
+    case asm_rules.CallingConvention::Riscv64:
+        return asm_rules.CallingConvention::Riscv64;
+    default:
+        return hostCc;
+    }
+}
+
+pub u32 emitLinkerDirectives(FfiCtx* ffi, char* buf, u32 cap, asm_rules.CallingConvention cc)
+{
+    if (!ffi || !buf) return 0;
+    u32 pos = 0;
+    ffi.resolveLinkerFlags();
+    for (u32 i = 0; i < ffi->nlibs; i++)
+    {
+        const char* sym = ffi->libs[i]->symbol;
+        bool isNoret = ffi->libs[i]->isNoret;
+        // ejaculate .globl directives for extern symbols
+        u32 sl = 0; while (sym[sl]) sl++;
+        if (pos + sl + 20 > cap) break;
+        buf[pos++] = '\t';
+        buf[pos++] = '.';
+        buf[pos++] = 'g';
+        buf[pos++] = 'l';
+        buf[pos++] = 'o';
+        buf[pos++] = 'b';
+        buf[pos++] = 'l';
+        buf[pos++] = ' ';
+        for (u32 j = 0; j < sl; j++) buf[pos++] = sym[j];
+        buf[pos++] = '\n';
+    }
+    return pos;
+}

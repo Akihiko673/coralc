@@ -1,0 +1,325 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod loop_detect = import("wallvm/passes/loop_detect.crl");
+mod mman = import("std/memory/mman.crl");
+
+static bool isInsideLoop(ir_types.IrBlock* bb, loop_detect.IrLoop* lp)
+{
+    for (u32 i = 0; i < lp->nblocks; i++)
+        if (lp->blocks[i] == bb) return true;
+    return false;
+}
+
+// Creates a preheader for the loop (or reuses the existing one) and rewires
+// the external predecessors and header phis accordingly.
+pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoop* lp, ir_types.IrFunc* func)
+{
+    ir_types.IrBlock* header = lp->header;
+    ir_types.IrValue* headerVal = &header.base;
+
+    u32 extCap = header.npreds > 0 ? header.npreds : 4;
+    ir_types.IrBlock** extPreds = mman.alloc<ir_types.IrBlock*>(extCap);
+    u32 nextPreds = 0;
+    for (u32 i = 0; i < header.npreds; i++)
+    {
+        if (!isInsideLoop(header.preds[i], lp))
+        {
+            if (nextPreds >= extCap)
+            {
+                u32 nc = extCap * 2;
+                ir_types.IrBlock** np = mman.alloc<ir_types.IrBlock*>(nc);
+                for (u32 j = 0; j < nextPreds; j++) np[j] = extPreds[j];
+                mman.dealloc<ir_types.IrBlock*>(extPreds);
+                extPreds = np;
+                extCap = nc;
+            }
+            extPreds[nextPreds++] = header.preds[i];
+        }
+    }
+    if (nextPreds == 0)
+    {
+        mman.dealloc<ir_types.IrBlock*>(extPreds);
+        return null;
+    }
+
+    ir_types.IrBlock* preheader = ctx.createBlock("preheader");
+    func.addBlock(preheader);
+    ir_types.IrValue* preVal = &preheader.base;
+
+    u32 i = 0;
+    while (i < header.npreds)
+    {
+        ir_types.IrBlock* pred = header.preds[i];
+        if (!isInsideLoop(pred, lp))
+        {
+            ir_types.IrInst* term = pred.terminator();
+            if (term)
+            {
+                if (term.opcode == ir_opcodes.IrOpcode::Br && term.ops[0] == headerVal)
+                {
+                    headerVal.removeUser(term);
+                    term.ops[0] = preVal;
+                    preVal.addUser(term);
+                }
+                else if (term.opcode == ir_opcodes.IrOpcode::CondBr)
+                {
+                    for (u32 j = 1; j <= 2; j++)
+                    {
+                        if (term.ops[j] == headerVal)
+                        {
+                            headerVal.removeUser(term);
+                            term.ops[j] = preVal;
+                            preVal.addUser(term);
+                        }
+                    }
+                }
+            }
+
+            pred.removeSucc(header);
+            header.removePred(pred);
+            pred.addSucc(preheader);
+        }
+        else
+        {
+            i++;
+        }
+    }
+
+    preheader.addSucc(header);
+
+    ir_types.IrValue** ops = mman.alloc<ir_types.IrValue*>(1);
+    ops[0] = headerVal;
+    ir_types.IrInst* brInst = ctx.createInst(ir_opcodes.IrOpcode::Br, ctx.tyVoid(), ops, 1, 0, 0);
+    mman.dealloc<ir_types.IrValue*>(ops);
+    brInst.parent = preheader;
+    preheader.addInst(brInst);
+    headerVal.addUser(brInst);
+
+    // The external predecessors no longer branch to the header directly, so
+    // the header's phis must be rewired to take their values via the preheader.
+    for (u32 ii = 0; ii < header.ninsts; ii++)
+    {
+        ir_types.IrInst* phi = header.insts[ii];
+        if (phi.opcode != ir_opcodes.IrOpcode::Phi) break;
+
+        if (nextPreds == 1)
+        {
+            for (u32 oi = 1; oi < phi.nops; oi += 2)
+            {
+                if (phi.ops[oi] == &extPreds[0].base)
+                {
+                    extPreds[0].base.removeUser(phi);
+                    phi.ops[oi] = preVal;
+                    preVal.addUser(phi);
+                    break;
+                }
+            }
+        }
+        else
+        {
+            // Merge the external incoming values in a phi inside the preheader
+            u32 nExt = nextPreds;
+            ir_types.IrValue** phOps = mman.alloc<ir_types.IrValue*>(nExt * 2);
+            for (u32 pi = 0; pi < nExt; pi++)
+            {
+                ir_types.IrValue* v = phi.nops > 0 ? phi.ops[0] : null;
+                for (u32 oi = 1; oi < phi.nops; oi += 2)
+                {
+                    if (phi.ops[oi] == &extPreds[pi].base)
+                    {
+                        v = phi.ops[oi - 1];
+                        break;
+                    }
+                }
+                phOps[pi * 2] = v;
+                phOps[pi * 2 + 1] = &extPreds[pi].base;
+            }
+            ir_types.IrInst* ph = ctx.createInst(ir_opcodes.IrOpcode::Phi, phi.base.type, phOps, nExt * 2, 0, 0);
+            for (u32 oi = 0; oi < nExt * 2; oi++)
+                if (phOps[oi])
+                    phOps[oi].addUser(ph);
+            mman.dealloc<ir_types.IrValue*>(phOps);
+
+            // Insert the phi at the front of the preheader (before its br)
+            for (u32 j = preheader.ninsts; j > 0; j--)
+                preheader.insts[j] = preheader.insts[j - 1];
+            preheader.insts[0] = ph;
+            ph.parent = preheader;
+            preheader.ninsts++;
+
+            // Rebuild the header phi with internal pairs + (preheader phi, preheader)
+            u32 ninternal = 0;
+            for (u32 oi = 1; oi < phi.nops; oi += 2)
+                if (isInsideLoop((ir_types.IrBlock*)phi.ops[oi], lp)) ninternal++;
+            u32 newOpsCount = ninternal * 2 + 2;
+            ir_types.IrValue** newOps = mman.alloc<ir_types.IrValue*>(newOpsCount);
+            u32 k = 0;
+            for (u32 oi = 0; oi < phi.nops; oi += 2)
+            {
+                ir_types.IrBlock* pb = (ir_types.IrBlock*)phi.ops[oi + 1];
+                if (isInsideLoop(pb, lp))
+                {
+                    newOps[k++] = phi.ops[oi];
+                    newOps[k++] = phi.ops[oi + 1];
+                }
+                else
+                {
+                    if (phi.ops[oi]) phi.ops[oi].removeUser(phi);
+                    pb.base.removeUser(phi);
+                }
+            }
+            newOps[k++] = &ph.base;
+            newOps[k++] = preVal;
+            ph.base.addUser(phi);
+            preVal.addUser(phi);
+
+            if (phi.capOps > 0) mman.dealloc<ir_types.IrValue*>(phi.ops);
+            phi.ops = newOps;
+            phi.nops = newOpsCount;
+            phi.capOps = newOpsCount;
+        }
+    }
+
+    mman.dealloc<ir_types.IrBlock*>(extPreds);
+
+    lp->preheader = preheader;
+    return preheader;
+}
+
+pub bool isLoopInvariant(ir_types.IrInst* inst, loop_detect.IrLoop* lp)
+{
+    if (ir_opcodes.irOpcodeIsTerminator(inst.opcode)) return false;
+    if (inst.opcode == ir_opcodes.IrOpcode::Phi) return false;
+    if (ir_opcodes.irOpcodeIsMemory(inst.opcode)) return false;
+    if (inst.opcode == ir_opcodes.IrOpcode::Call) return false;
+
+    for (u32 i = 0; i < inst.nops; i++)
+    {
+        ir_types.IrValue* op = inst.ops[i];
+        if (!op) continue;
+        if (op.kind == ir_types.IrValueKind::ConstInt) continue;
+        if (op.kind == ir_types.IrValueKind::ConstFloat) continue;
+        if (op.kind == ir_types.IrValueKind::Block) continue;
+        if (op.kind == ir_types.IrValueKind::Func) continue;
+
+        if (op.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* opInst = (ir_types.IrInst*)op;
+            if (isInsideLoop(opInst.parent, lp))
+                return false;
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+static bool loopHasInvariantInst(loop_detect.IrLoop* lp)
+{
+    for (u32 bi = 0; bi < lp->nblocks; bi++)
+    {
+        ir_types.IrBlock* bb = lp->blocks[bi];
+        for (u32 ii = 0; ii < bb.ninsts; ii++)
+            if (isLoopInvariant(bb.insts[ii], lp)) return true;
+    }
+    return false;
+}
+
+pub void hoistToPreheader(ir_types.IrInst* inst, ir_types.IrBlock* preheader)
+{
+    ir_types.IrBlock* oldBlock = inst.parent;
+    if (!oldBlock) return;
+
+    bool found = false;
+    for (u32 i = 0; i < oldBlock.ninsts; i++)
+    {
+        if (oldBlock.insts[i] == inst)
+        {
+            for (u32 j = i; j < oldBlock.ninsts - 1; j++)
+                oldBlock.insts[j] = oldBlock.insts[j + 1];
+            oldBlock.ninsts--;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return;
+
+    ir_types.IrInst* term = preheader.terminator();
+    u32 insertPos = preheader.ninsts;
+    if (term)
+    {
+        for (u32 i = 0; i < preheader.ninsts; i++)
+        {
+            if (preheader.insts[i] == term)
+            { insertPos = i; break; }
+        }
+    }
+
+    if (preheader.ninsts >= preheader.capInsts)
+    {
+        u32 newCap = preheader.capInsts ? preheader.capInsts * 2 : 8;
+        ir_types.IrInst** newInsts = mman.alloc<ir_types.IrInst*>(newCap);
+        for (u32 i = 0; i < preheader.ninsts; i++)
+            newInsts[i] = preheader.insts[i];
+        if (preheader.insts) mman.dealloc<ir_types.IrInst*>(preheader.insts);
+        preheader.insts = newInsts;
+        preheader.capInsts = newCap;
+    }
+
+    for (u32 i = preheader.ninsts; i > insertPos; i--)
+        preheader.insts[i] = preheader.insts[i - 1];
+
+    preheader.insts[insertPos] = inst;
+    inst.parent = preheader;
+    preheader.ninsts++;
+}
+
+pub bool irPassLicm(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+
+    loop_detect.IrLoop** loops = loop_detect.irLoopDetectNatural(func);
+    if (!loops) return false;
+
+    bool changed = false;
+
+    for (u32 li = 0; loops[li]; li++)
+    {
+        loop_detect.IrLoop* lp = loops[li];
+        if (!loopHasInvariantInst(lp)) continue;
+
+        ir_types.IrBlock* preheader = createPreheader(ctx, lp, func);
+        if (!preheader) continue;
+
+        bool loopChanged = false;
+
+        for (u32 bi = 0; bi < lp->nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = lp->blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (isLoopInvariant(inst, lp))
+                {
+                    hoistToPreheader(inst, preheader);
+                    loopChanged = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+
+        if (loopChanged) changed = true;
+    }
+
+    mman.dealloc<loop_detect.IrLoop*>(loops);
+    return changed;
+}

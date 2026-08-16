@@ -1,0 +1,712 @@
+// LALR(1) table generator for the self-host.
+//
+// The parse automaton is built at startup from a Grammar supplied by the
+// caller: canonical LR(1) item sets are constructed, then states with
+// identical item cores are merged (unioning lookaheads) to give LALR(1).
+// Conflicts are resolved by declared production precedence/associativity
+// when the production declares a strength; otherwise shift wins over
+// reduce, and earlier-declared productions win reduce/reduce ties.
+// Unresolved conflicts are recorded in the table for the driver to report.
+//
+// Symbols: terminals are raw token ids (0 <= t < nterms); nonterminals are
+// NT_BASE + index. Terminal 0 is reserved for EOF ($). Epsilon productions
+// have nrhs == 0. The caller's grammar must include the augmented start
+// production as production 0: head = NT_BASE + nnonterms, rhs = [start].
+mod mman = import("std/memory/mman.crl");
+
+pub const u32 NT_BASE = 0x10000;
+pub const u32 NO_STATE = 0xFFFFFFFF;
+pub const u32 ASSOC_LEFT = 0;
+pub const u32 ASSOC_RIGHT = 1;
+pub const u32 ASSOC_NONASSOC = 2;
+const u32 LAWORDS = 8;   // up to 256 terminals
+
+pub struct Prod
+{
+    u32 head;
+    u32* rhs;
+    u32 nrhs;
+    u32 prec;    // conflict strength; 0 = none
+    u32 assoc;
+    u32 action;
+}
+
+pub struct Grammar
+{
+    u32 nterms;
+    u32 nnonterms;
+    u32 nprods;
+    Prod* prods;
+    u32 start;
+    u32* termPrec;   // may be null
+}
+
+pub const u32 ACT_ERROR = 0;
+pub const u32 ACT_SHIFT = 1;
+pub const u32 ACT_REDUCE = 2;
+pub const u32 ACT_ACCEPT = 3;
+
+pub struct Entry
+{
+    u32 kind;
+    u32 a;       // shift: target state; reduce: production index
+}
+
+pub struct Conflict
+{
+    u32 state;
+    u32 sym;
+    u32 kind;    // 0 shift/reduce, 1 reduce/reduce
+    u32 winner;
+    u32 loser;
+}
+
+pub struct Tables
+{
+    u32 nstates;
+    u32 nterms;
+    u32 nnonterms;   // includes AUG
+    Entry* act;      // dense [nstates * nterms]
+    u32* gotos;      // dense [nstates * nnonterms], NO_STATE gaps
+    Conflict* conflicts;
+    u32 nconflicts;
+}
+
+struct Item
+{
+    u32 prod;
+    u32 dot;
+    u32 la[LAWORDS];
+}
+
+struct Edge
+{
+    u32 sym;
+    u32 to;
+}
+
+struct State
+{
+    Item* items;
+    u32 n;
+    u32 cap;
+    Edge* edges;
+    u32 nedges;
+    u32 ecap;
+}
+
+pub struct Generator
+{
+    Grammar g;
+    u32 augHead;
+    u64* first;     // [nterms + nnonterms + 1] x LAWORDS
+    u8* nullable;   // per nonterminal incl. aug
+    State* states;
+    u32 nstates;
+    u32 statesCap;
+    u32* chain;     // hash chains: next state id per state
+    u32* buckets;   // core-hash buckets
+    Item* kernel;   // scratch for goto kernels
+    u32 kernelN;
+    u32 kernelCap;
+    u32* rep;       // merged representative per state
+    Conflict* conflicts;
+    u32 nconflicts;
+    u32 conflictsCap;
+    bool ownsConflicts; // false once build() hands the array to Tables
+
+    static Generator new(Grammar g)
+    {
+        Generator c;
+        c.g = g;
+        c.augHead = NT_BASE + g.nnonterms;
+        c.first = null;
+        c.nullable = null;
+        c.states = null;
+        c.nstates = 0;
+        c.statesCap = 0;
+        c.chain = null;
+        c.buckets = null;
+        c.kernel = null;
+        c.kernelN = 0;
+        c.kernelCap = 0;
+        c.rep = null;
+        c.conflicts = null;
+        c.nconflicts = 0;
+        c.conflictsCap = 0;
+        c.ownsConflicts = true;
+        return c;
+    }
+
+    u32 symIdx(u32 s)
+    {
+        if (s == self.augHead) return self.g.nterms + self.g.nnonterms;
+        if (s >= NT_BASE) return s - NT_BASE + self.g.nterms;
+        return s;
+    }
+
+    bool isNonterm(u32 s) { return s >= NT_BASE; }
+
+    void growStates()
+    {
+        if (self.nstates < self.statesCap) return;
+        u32 nc = self.statesCap ? self.statesCap * 2 : 128;
+        State* ns = mman.alloc<State>(nc);
+        for (u32 i = 0; i < self.nstates; i++) ns[i] = self.states[i];
+        if (self.states) mman.dealloc<State>(self.states);
+        self.states = ns;
+        u32* nch = mman.alloc<u32>(nc);
+        for (u32 i = 0; i < self.nstates; i++) nch[i] = self.chain[i];
+        if (self.chain) mman.dealloc<u32>(self.chain);
+        self.chain = nch;
+        self.statesCap = nc;
+    }
+
+    void addConflict(u32 state, u32 sym, u32 kind, u32 winner, u32 loser)
+    {
+        if (self.nconflicts >= self.conflictsCap)
+        {
+            u32 nc = self.conflictsCap ? self.conflictsCap * 2 : 64;
+            Conflict* nf = mman.alloc<Conflict>(nc);
+            for (u32 i = 0; i < self.nconflicts; i++) nf[i] = self.conflicts[i];
+            if (self.conflicts) mman.dealloc<Conflict>(self.conflicts);
+            self.conflicts = nf;
+            self.conflictsCap = nc;
+        }
+        Conflict* cf = &self.conflicts[self.nconflicts++];
+        cf->state = state;
+        cf->sym = sym;
+        cf->kind = kind;
+        cf->winner = winner;
+        cf->loser = loser;
+    }
+    // FIRST and nullability
+
+    void computeFirst()
+    {
+        u32 total = (self.g.nterms + self.g.nnonterms + 1) * LAWORDS;
+        self.first = mman.alloc<u64>(total);
+        for (u32 i = 0; i < total; i++) self.first[i] = 0;
+        self.nullable = mman.alloc<u8>(self.g.nnonterms + 1);
+        for (u32 i = 0; i <= self.g.nnonterms; i++) self.nullable[i] = 0;
+
+        for (u32 t = 0; t < self.g.nterms; t++)
+            self.first[t * LAWORDS + (t >> 6)] |= 1ull << (t & 63);
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (u32 p = 0; p < self.g.nprods; p++)
+            {
+                Prod* pr = &self.g.prods[p];
+                bool allNull = true;
+                // FIRST(head) gets FIRST(rhs[0..k]) where k is the first
+                // symbol that is not nullable (or the last symbol); nothing
+                // beyond it contributes.
+                for (u32 i = 0; i < pr->nrhs; i++)
+                {
+                    u32 s = pr->rhs[i];
+                    bool nullSym = self.isNonterm(s) && self.nullable[s - NT_BASE];
+                    if (!nullSym) allNull = false;
+                    u64* a = self.first + self.symIdx(pr->head) * LAWORDS;
+                    u64* b = self.first + self.symIdx(s) * LAWORDS;
+                    for (u32 w = 0; w < LAWORDS; w++) a[w] |= b[w];
+                    if (!nullSym) break;
+                }
+                if ((pr->nrhs == 0 || allNull) && !self.nullable[pr->head - NT_BASE])
+                {
+                    self.nullable[pr->head - NT_BASE] = 1;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    // FIRST(rhs[prod][d..]) as a mask; when the tail is fully nullable the
+    // lookahead set L is included. Writes out[LAWORDS].
+    void firstTail(u32 prod, u32 d, u32* L, u32* out)
+    {
+        Prod* pr = &self.g.prods[prod];
+        for (u32 w = 0; w < LAWORDS; w++) out[w] = 0;
+        while (d < pr->nrhs)
+        {
+            u32 s = pr->rhs[d];
+            if (self.isNonterm(s))
+            {
+                u64* f = self.first + self.symIdx(s) * LAWORDS;
+                for (u32 w = 0; w < LAWORDS; w++) out[w] |= (u32)f[w];
+                if (!self.nullable[s - NT_BASE]) return;
+            }
+            else
+            {
+                out[s >> 5] |= 1u << (s & 31);
+                return;
+            }
+            d++;
+        }
+        for (u32 w = 0; w < LAWORDS; w++) out[w] |= L[w];
+    }
+
+    // item sets
+    void growItems(State* st, u32 need)
+    {
+        if (need < st->cap) return;
+        u32 nc = st->cap ? st->cap * 2 : 48;
+        while (nc < need) nc *= 2;
+        Item* ni = mman.alloc<Item>(nc);
+        for (u32 i = 0; i < st->n; i++) ni[i] = st->items[i];
+        if (st->items) mman.dealloc<Item>(st->items);
+        st->items = ni;
+        st->cap = nc;
+    }
+
+    void growEdges(State* st, u32 need)
+    {
+        if (need < st->ecap) return;
+        u32 nc = st->ecap ? st->ecap * 2 : 8;
+        while (nc < need) nc *= 2;
+        Edge* ne = mman.alloc<Edge>(nc);
+        for (u32 i = 0; i < st->nedges; i++) ne[i] = st->edges[i];
+        if (st->edges) mman.dealloc<Edge>(st->edges);
+        st->edges = ne;
+        st->ecap = nc;
+    }
+
+    // Adds [prod, dot] with lookahead la, unioning la on an existing match.
+    // Returns true when the item's lookaheads changed.
+    bool addItem(State* st, u32 prod, u32 dot, u32* la)
+    {
+        for (u32 i = 0; i < st->n; i++)
+        {
+            Item* it = &st->items[i];
+            if (it->prod != prod || it->dot != dot) continue;
+            bool ch = false;
+            for (u32 w = 0; w < LAWORDS; w++)
+            {
+                u32 nu = it->la[w] | la[w];
+                if (nu != it->la[w]) ch = true;
+                it->la[w] = nu;
+            }
+            return ch;
+        }
+        self.growItems(st, st->n + 1);
+        Item* it = &st->items[st->n++];
+        it->prod = prod;
+        it->dot = dot;
+        for (u32 w = 0; w < LAWORDS; w++) it->la[w] = la[w];
+        return false;
+    }
+
+    void closure(State* st)
+    {
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (u32 i = 0; i < st->n; i++)
+            {
+                Item* it = &st->items[i];
+                if (it->dot >= self.g.prods[it->prod].nrhs) continue;
+                u32 sym = self.g.prods[it->prod].rhs[it->dot];
+                if (!self.isNonterm(sym)) continue;
+                u32 la[LAWORDS];
+                self.firstTail(it->prod, it->dot + 1, it->la, la);
+                for (u32 p = 0; p < self.g.nprods; p++)
+                {
+                    if (self.g.prods[p].head != sym) continue;
+                    if (self.addItem(st, p, 0, la)) changed = true;
+                }
+            }
+        }
+    }
+
+    bool itemsFullEq(State* a, State* b)
+    {
+        if (a->n != b->n) return false;
+        for (u32 i = 0; i < a->n; i++)
+        {
+            Item* x = &a->items[i];
+            Item* y = &b->items[i];
+            if (x->prod != y->prod || x->dot != y->dot) return false;
+            for (u32 w = 0; w < LAWORDS; w++)
+                if (x->la[w] != y->la[w]) return false;
+        }
+        return true;
+    }
+
+    bool itemsCoreEq(State* a, State* b)
+    {
+        if (a->n != b->n) return false;
+        for (u32 i = 0; i < a->n; i++)
+        {
+            bool found = false;
+            for (u32 j = 0; j < b->n; j++)
+            {
+                if (a->items[i].prod == b->items[j].prod && a->items[i].dot == b->items[j].dot)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+
+    u32 coreHash(State* st)
+    {
+        u32 h = 2166136261u;
+        for (u32 i = 0; i < st->n; i++)
+        {
+            h ^= st->items[i].prod;
+            h *= 16777619;
+            h ^= st->items[i].dot;
+            h *= 16777619;
+        }
+        return h;
+    }
+
+    // Locates a state with identical (prod,dot,lookahead) items among the
+    // canonical states, or appends a new one. Ownership of *st is only
+    // taken when it becomes a new state.
+    u32 findOrAdd(State* st)
+    {
+        u32 h = self.coreHash(st) & 131071;
+        u32 i = self.buckets[h];
+        while (i != NO_STATE)
+        {
+            if (self.itemsFullEq(&self.states[i], st))
+            {
+                if (st->items) mman.dealloc<Item>(st->items);
+                st->items = null;
+                return i;
+            }
+            i = self.chain[i];
+        }
+        if (self.nstates >= self.statesCap) self.growStates();
+        u32 id = self.nstates++;
+        self.states[id] = *st;
+        self.chain[id] = self.buckets[h];
+        self.buckets[h] = id;
+        return id;
+    }
+
+    // Goto of state src on symbol sym: kernel items advanced one dot,
+    // closed, then canonical-deduped. Records the edge on src.
+    void gotoState(u32 src, u32 sym)
+    {
+        State* s = &self.states[src];
+        self.kernelN = 0;
+        for (u32 i = 0; i < s->n; i++)
+        {
+            Item* it = &s->items[i];
+            if (it->dot >= self.g.prods[it->prod].nrhs) continue;
+            if (self.g.prods[it->prod].rhs[it->dot] != sym) continue;
+            if (self.kernelN >= self.kernelCap)
+            {
+                u32 nc = self.kernelCap ? self.kernelCap * 2 : 48;
+                Item* nk = mman.alloc<Item>(nc);
+                for (u32 j = 0; j < self.kernelN; j++) nk[j] = self.kernel[j];
+                if (self.kernel) mman.dealloc<Item>(self.kernel);
+                self.kernel = nk;
+                self.kernelCap = nc;
+            }
+            Item* k = &self.kernel[self.kernelN++];
+            k->prod = it->prod;
+            k->dot = it->dot + 1;
+            for (u32 w = 0; w < LAWORDS; w++) k->la[w] = it->la[w];
+        }
+        if (self.kernelN == 0) return;
+
+        State t;
+        t.items = null;
+        t.n = 0;
+        t.cap = 0;
+        t.edges = null;
+        t.nedges = 0;
+        t.ecap = 0;
+        for (u32 i = 0; i < self.kernelN; i++) self.addItem(&t, self.kernel[i].prod, self.kernel[i].dot, self.kernel[i].la);
+        self.closure(&t);
+
+        u32 to = self.findOrAdd(&t);
+        // findOrAdd may have reallocated the states array
+        s = &self.states[src];
+        self.growEdges(s, s->nedges + 1);
+        Edge* e = &s->edges[s->nedges++];
+        e->sym = sym;
+        e->to = to;
+    }
+
+    bool build(Tables* out)
+    {
+        self.computeFirst();
+        self.buckets = mman.alloc<u32>(131072);
+        for (u32 i = 0; i < 131072; i++) self.buckets[i] = NO_STATE;
+        // state 0: AUG -> . start, $
+        State s0;
+        s0.items = null;
+        s0.n = 0;
+        s0.cap = 0;
+        s0.edges = null;
+        s0.nedges = 0;
+        s0.ecap = 0;
+        u32 la0[LAWORDS];
+        for (u32 w = 0; w < LAWORDS; w++) la0[w] = 0;
+        la0[0 >> 5] |= 1u << (0 & 31);
+        self.addItem(&s0, 0, 0, la0);
+        self.closure(&s0);
+        self.growStates();
+        self.states[0] = s0;
+        self.chain[0] = NO_STATE;
+        self.nstates = 1;
+        self.buckets[self.coreHash(&s0) & 131071] = 0;
+
+        for (u32 i = 0; i < self.nstates; i++)
+        {
+            State* s = &self.states[i];
+            for (u32 k = 0; k < s->n; k++)
+            {
+                Item* it = &s->items[k];
+                if (it->dot >= self.g.prods[it->prod].nrhs) continue;
+                u32 sym = self.g.prods[it->prod].rhs[it->dot];
+                bool seen = false;
+                for (u32 e = 0; e < s->nedges; e++)
+                    if (s->edges[e].sym == sym) { seen = true; break; }
+                if (!seen) self.gotoState(i, sym);
+                // gotoState may have grown and reallocated the states array
+                s = &self.states[i];
+            }
+        }
+
+        self.mergeCores();
+        self.buildTables(out);
+        return true;
+    }
+
+    // True if merging two same-core canonical states would create a
+    // reduce-reduce conflict: the two states reduce different productions
+    // on some shared lookahead terminal. Such states stay separate.
+    bool mergeConflicts(State* a, State* b)
+    {
+        for (u32 t = 0; t < self.g.nterms; t++)
+        {
+            u32 prods = 0;
+            for (u32 k = 0; k < a->n; k++)
+            {
+                Item* it = &a->items[k];
+                if (it->dot != self.g.prods[it->prod].nrhs) continue;
+                if (!((it->la[t >> 5] >> (t & 31)) & 1u)) continue;
+                prods |= 1u << (it->prod & 31);
+            }
+            for (u32 k = 0; k < b->n; k++)
+            {
+                Item* it = &b->items[k];
+                if (it->dot != self.g.prods[it->prod].nrhs) continue;
+                if (!((it->la[t >> 5] >> (t & 31)) & 1u)) continue;
+                prods |= 1u << (it->prod & 31);
+            }
+            if (prods & (prods - 1)) return true;
+        }
+        return false;
+    }
+
+    // Merges canonical states whose item cores match: lookaheads union
+    // into the lowest-numbered state of each group; others become dead.
+    void mergeCores()
+    {
+        u32 n = self.nstates;
+        self.rep = mman.alloc<u32>(n);
+        for (u32 i = 0; i < n; i++) self.rep[i] = i;
+        for (u32 i = 0; i < n; i++)
+        {
+            if (self.rep[i] != i) continue;
+            for (u32 j = i + 1; j < n; j++)
+            {
+                if (self.rep[j] != j) continue;
+                if (!self.itemsCoreEq(&self.states[i], &self.states[j])) continue;
+                if (self.mergeConflicts(&self.states[i], &self.states[j])) continue;
+                self.rep[j] = i;
+                State* a = &self.states[i];
+                State* b = &self.states[j];
+                for (u32 bi = 0; bi < b->n; bi++)
+                {
+                    Item* x = &b->items[bi];
+                    for (u32 ai = 0; ai < a->n; ai++)
+                    {
+                        Item* y = &a->items[ai];
+                        if (y->prod != x->prod || y->dot != x->dot) continue;
+                        for (u32 w = 0; w < LAWORDS; w++) y->la[w] |= x->la[w];
+                        break;
+                    }
+                }
+                mman.dealloc<Item>(b->items);
+                b->items = null;
+                b->n = 0;
+                b->cap = 0;
+            }
+        }
+    }
+
+    void buildTables(Tables* out)
+    {
+        u32 n = self.nstates;
+        u32 nlive = 0;
+        // rep[i] = representative (old index) of state i, or i itself.
+        // idMap maps a representative's old index to its sequential id.
+        u32* idMap = mman.alloc<u32>(n);
+        for (u32 i = 0; i < n; i++) idMap[i] = NO_STATE;
+        for (u32 i = 0; i < n; i++)
+            if (self.rep[i] == i) idMap[i] = nlive++;
+        // non-live reps now hold sequential ids
+
+        out->nstates = nlive;
+        out->nterms = self.g.nterms;
+        out->nnonterms = self.g.nnonterms + 1;
+        out->act = mman.alloc<Entry>(nlive * self.g.nterms);
+        for (u32 i = 0; i < nlive * self.g.nterms; i++)
+        {
+            out->act[i].kind = ACT_ERROR;
+            out->act[i].a = 0;
+        }
+        out->gotos = mman.alloc<u32>(nlive * (self.g.nnonterms + 1));
+        for (u32 i = 0; i < nlive * (self.g.nnonterms + 1); i++) out->gotos[i] = NO_STATE;
+
+        for (u32 i = 0; i < n; i++)
+        {
+            u32 id = idMap[self.rep[i]];
+            if (id == NO_STATE) continue;
+            State* s = &self.states[i];
+            u32 row = id * self.g.nterms;
+            u32 grow = id * (self.g.nnonterms + 1);
+
+            for (u32 e = 0; e < s->nedges; e++)
+            {
+                Edge* ed = &s->edges[e];
+                u32 target = idMap[self.rep[ed->to]];
+                if (ed->sym < NT_BASE)
+                {
+                    Entry* en = &out->act[row + ed->sym];
+                    if (en->kind == ACT_ERROR)
+                    {
+                        en->kind = ACT_SHIFT;
+                        en->a = target;
+                    }
+                }
+                else if (ed->sym < self.augHead)
+                    out->gotos[grow + (ed->sym - NT_BASE)] = target;
+            }
+
+            for (u32 k = 0; k < s->n; k++)
+            {
+                Item* it = &s->items[k];
+                if (it->dot != self.g.prods[it->prod].nrhs) continue;
+                u32 p = it->prod;
+                for (u32 w = 0; w < LAWORDS; w++)
+                {
+                    if (it->la[w] == 0) continue;
+                    for (u32 t = w * 32; t < w * 32 + 32 && t < self.g.nterms; t++)
+                    {
+                        if ((it->la[w] >> (t & 31)) & 1u)
+                        {
+                            if (p == 0 && t == 0)
+                            {
+                                out->act[row + t].kind = ACT_ACCEPT;
+                                continue;
+                            }
+                            self.setReduce(out, row, t, p);
+                        }
+                    }
+                }
+            }
+        }
+
+        out->conflicts = self.conflicts;
+        out->nconflicts = self.nconflicts;
+        self.ownsConflicts = false; // ownership transferred to out
+        if (idMap) mman.dealloc<u32>(idMap);
+    }
+
+    // Reduces with production p on (state row, terminal t), resolving any
+    // existing action by precedence/associativity, else by index order.
+    void setReduce(Tables* out, u32 row, u32 t, u32 p)
+    {
+        Entry* en = &out->act[row + t];
+        if (en->kind == ACT_REDUCE)
+        {
+            if (p < en->a)
+            {
+                u32 old = en->a;
+                en->a = p;
+                self.addConflict(row / self.g.nterms, t, 1, p, old);
+            }
+            else if (p > en->a)
+                self.addConflict(row / self.g.nterms, t, 1, en->a, p);
+            return;
+        }
+        if (en->kind == ACT_SHIFT)
+        {
+            u32 tp = self.g.termPrec ? self.g.termPrec[t] : 0;
+            Prod* pr = &self.g.prods[p];
+            u32 st = row / self.g.nterms;
+            if (pr->prec == 0 && tp == 0)
+            {
+                self.addConflict(st, t, 0, en->a, p);
+                return;
+            }
+            if (pr->prec > tp)
+            {
+                u32 old = en->a;
+                en->kind = ACT_REDUCE;
+                en->a = p;
+                self.addConflict(st, t, 0, p, old);
+            }
+            else if (pr->prec < tp)
+            {
+                self.addConflict(st, t, 0, en->a, p);
+            }
+            else if (pr->assoc == ASSOC_RIGHT)
+            {
+                self.addConflict(st, t, 0, en->a, p);
+            }
+            else if (pr->assoc == ASSOC_LEFT)
+            {
+                u32 old = en->a;
+                en->kind = ACT_REDUCE;
+                en->a = p;
+                self.addConflict(st, t, 0, p, old);
+            }
+            else
+            {
+                en->kind = ACT_ERROR;
+                en->a = 0;
+                self.addConflict(st, t, 0, 0, p);
+            }
+            return;
+        }
+        if (en->kind == ACT_ERROR || en->kind == ACT_ACCEPT)
+        {
+            en->kind = ACT_REDUCE;
+            en->a = p;
+        }
+    }
+
+    void free()
+    {
+        for (u32 i = 0; i < self.nstates; i++)
+        {
+            if (self.states[i].items) mman.dealloc<Item>(self.states[i].items);
+            if (self.states[i].edges) mman.dealloc<Edge>(self.states[i].edges);
+        }
+        if (self.states) mman.dealloc<State>(self.states);
+        if (self.chain) mman.dealloc<u32>(self.chain);
+        if (self.buckets) mman.dealloc<u32>(self.buckets);
+        if (self.kernel) mman.dealloc<Item>(self.kernel);
+        if (self.first) mman.dealloc<u64>(self.first);
+        if (self.nullable) mman.dealloc<u8>(self.nullable);
+        if (self.rep) mman.dealloc<u32>(self.rep);
+        if (self.conflicts && self.ownsConflicts) mman.dealloc<Conflict>(self.conflicts);
+        self.nstates = 0;
+        self.states = null;
+    }
+}

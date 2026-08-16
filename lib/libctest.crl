@@ -1,0 +1,6 @@
+mod libc = import("std/platform/libc.crl");
+
+i32 test()
+{
+    return libc.putchar(65);
+}

@@ -1,0 +1,217 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod option = import("std/data/option.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct HashMapEntry<K, V>
+{
+    K key;
+    V value;
+    bool occupied;
+}
+
+pub struct hashmap<K, V>
+{
+    HashMapEntry<K, V>* entries;
+    u64 cap;
+    u64 len;
+    u64(K) hashFn;
+    bool(K, K) eqFn;
+
+    static hashmap<K, V> new(u64(K) hf, bool(K, K) ef)
+    {
+        hashmap<K, V> m;
+        m.entries = mman.alloc<HashMapEntry<K, V>>(16);
+        mman.zero<HashMapEntry<K, V>>(m.entries, 16);
+        m.cap = 16;
+        m.len = 0;
+        m.hashFn = hf;
+        m.eqFn = ef;
+        return m;
+    }
+
+    void dispose()
+    {
+        if (self.entries != null)
+        {
+            mman.dealloc<HashMapEntry<K, V>>(self.entries);
+            self.entries = null;
+        }
+        self.cap = 0;
+        self.len = 0;
+    }
+
+    u64 count()
+    {
+        return self.len;
+    }
+
+    void insert(K key, V value)
+    {
+        if (self.len * 2 >= self.cap)
+        {
+            u64 newCap = self.cap * 2;
+            HashMapEntry<K, V>* newEntries = mman.alloc<HashMapEntry<K, V>>(newCap);
+            mman.zero<HashMapEntry<K, V>>(newEntries, newCap);
+            for (u64 i = 0; i < self.cap; i++)
+            {
+                if (self.entries[i].occupied)
+                {
+                    u64 h = self.hashFn(self.entries[i].key) % newCap;
+                    while (newEntries[h].occupied) { h = (h + 1) % newCap; }
+                    newEntries[h] = self.entries[i];
+                }
+            }
+            mman.dealloc<HashMapEntry<K, V>>(self.entries);
+            self.entries = newEntries;
+            self.cap = newCap;
+        }
+        u64 h = self.hashFn(key) % self.cap;
+        while (self.entries[h].occupied)
+        {
+            if (self.eqFn(self.entries[h].key, key))
+            {
+                self.entries[h].value = value;
+                return;
+            }
+            h = (h + 1) % self.cap;
+        }
+        self.entries[h].key = key;
+        self.entries[h].value = value;
+        self.entries[h].occupied = true;
+        self.len++;
+    }
+
+    option<V> get(K key)
+    {
+        u64 h = self.hashFn(key) % self.cap;
+        u64 start = h;
+        while (self.entries[h].occupied)
+        {
+            if (self.eqFn(self.entries[h].key, key))
+                return option<V>::some(self.entries[h].value);
+            h = (h + 1) % self.cap;
+            if (h == start) break;
+        }
+        return option<V>::none();
+    }
+
+    bool contains(K key)
+    {
+        u64 h = self.hashFn(key) % self.cap;
+        u64 start = h;
+        while (self.entries[h].occupied)
+        {
+            if (self.eqFn(self.entries[h].key, key))
+                return true;
+            h = (h + 1) % self.cap;
+            if (h == start) break;
+        }
+        return false;
+    }
+
+    V* getPtr(K key)
+    {
+        u64 h = self.hashFn(key) % self.cap;
+        u64 start = h;
+        while (self.entries[h].occupied)
+        {
+            if (self.eqFn(self.entries[h].key, key))
+                return &self.entries[h].value;
+            h = (h + 1) % self.cap;
+            if (h == start) break;
+        }
+        return null;
+    }
+
+    void remove(K key)
+    {
+        self.removeEntry(key);
+    }
+
+    // Remove an entry and return it (by value) so the caller can dispose of
+    // heap-owned keys/values. Uses backward-shift deletion so open-addressing
+    // probe chains are never broken by a hole.
+    option<HashMapEntry<K, V>> removeEntry(K key)
+    {
+        u64 h = self.hashFn(key) % self.cap;
+        u64 start = h;
+        u64 found = 0;
+        bool hasFound = false;
+        while (self.entries[h].occupied)
+        {
+            if (self.eqFn(self.entries[h].key, key))
+            {
+                found = h;
+                hasFound = true;
+                break;
+            }
+            h = (h + 1) % self.cap;
+            if (h == start) break;
+        }
+        if (!hasFound) return option<HashMapEntry<K, V>>::none();
+
+        HashMapEntry<K, V> result = self.entries[found];
+        u64 i = found;
+        for (;;)
+        {
+            u64 j = (i + 1) % self.cap;
+            while (self.entries[j].occupied)
+            {
+                // entry j can be shifted into the hole at i iff its ideal slot
+                // is NOT in the circular interval (i, j]
+                u64 ideal = self.hashFn(self.entries[j].key) % self.cap;
+                bool inInterval = i < j
+                    ? (ideal > i && ideal <= j)
+                    : (ideal > i || ideal <= j);
+                if (!inInterval) break;
+                j = (j + 1) % self.cap;
+            }
+            if (!self.entries[j].occupied)
+            {
+                self.entries[i].occupied = false;
+                break;
+            }
+            self.entries[i] = self.entries[j];
+            i = j;
+        }
+        self.len--;
+        return option<HashMapEntry<K, V>>::some(result);
+    }
+
+    void clear()
+    {
+        for (u64 i = 0; i < self.cap; i++)
+            self.entries[i].occupied = false;
+        self.len = 0;
+    }
+
+    vec<K> keys()
+    {
+        vec<K> out = vec<K>::new();
+        for (u64 i = 0; i < self.cap; i++)
+            if (self.entries[i].occupied) out.push(self.entries[i].key);
+        return out;
+    }
+
+    vec<V> values()
+    {
+        vec<V> out = vec<V>::new();
+        for (u64 i = 0; i < self.cap; i++)
+            if (self.entries[i].occupied) out.push(self.entries[i].value);
+        return out;
+    }
+
+    void each(void(K, V) fn)
+    {
+        for (u64 i = 0; i < self.cap; i++)
+            if (self.entries[i].occupied) fn(self.entries[i].key, self.entries[i].value);
+    }
+
+    void eachEntry(void(HashMapEntry<K, V>*) fn)
+    {
+        for (u64 i = 0; i < self.cap; i++)
+            if (self.entries[i].occupied) fn(&self.entries[i]);
+    }
+}

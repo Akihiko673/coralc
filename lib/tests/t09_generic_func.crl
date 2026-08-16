@@ -1,0 +1,38 @@
+// t09, generic struct + generic function creation (root file, no imports)
+pub struct point<T>
+{
+    T x;
+    T y;
+
+    T sum(const point<T>* this)
+    {
+        return this->x + this->y;
+    }
+}
+
+T max!<T>(T a, T b)
+{
+    if (a > b) return a;
+    return b;
+}
+
+i32 main()
+{
+    point<u64> p;
+    p.x = 10;
+    p.y = 20;
+    if (p.sum() != 30) return 1;
+
+    point<i32> q;
+    q.x = -3;
+    q.y = 4;
+    if (q.sum() != 1) return 2;
+
+    u64 a = max!<u64>(3, 7);
+    if (a != 7) return 3;
+
+    i32 b = max!<i32>(-5, 2);
+    if (b != 2) return 4;
+
+    return 0;
+}

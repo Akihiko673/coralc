@@ -1,0 +1,136 @@
+mod libc = import("std/platform/libc.crl");
+mod mman = import("std/memory/mman.crl");
+
+const i32 O_RDONLY = 0;
+
+i32 _urandomFd = -1;
+bool _urandomReady = false;
+
+void _ensureUrandom()
+{
+    if (!_urandomReady)
+    {
+        _urandomFd = libc.open("/dev/urandom", O_RDONLY, 0);
+        _urandomReady = true;
+    }
+}
+
+pub u64 nextU64()
+{
+    _ensureUrandom();
+    if (_urandomFd < 0) return 0;
+    u64 val = 0;
+    u64 got = 0;
+    while (got < 8)
+    {
+        i64 n = libc.read(_urandomFd, (u8*)&val + got, 8u - got);
+        if (n <= 0) return 0;
+        got += (u64)n;
+    }
+    return val;
+}
+
+pub u32 nextU32()
+{
+    return (u32)(nextU64() & 0xFFFFFFFFu);
+}
+
+pub u64 nextRange(u64 lo, u64 hi)
+{
+    if (lo >= hi) return lo;
+    u64 range = hi - lo;
+    u64 limit = 0xFFFFFFFFFFFFFFFFu - (0xFFFFFFFFFFFFFFFFu % range);
+    u64 val = nextU64();
+    while (val >= limit) val = nextU64();
+    return lo + val % range;
+}
+
+pub f64 nextF64()
+{
+    u64 bits = (u64)(nextU64() >> 12u) | 0x3FF0000000000000u;
+    f64 result;
+    mman.copy<f64>(&result, &bits, 1u);
+    return result - 1.0;
+}
+
+pub struct XorShift32
+{
+    u32 state;
+
+    XorShift32 seed(u32 s)
+    {
+        XorShift32 rng;
+        rng.state = s ? s : 1u;
+        return rng;
+    }
+
+    u32 next()
+    {
+        u32 x = self.state;
+        x ^= x << 13u;
+        x ^= x >> 17u;
+        x ^= x << 5u;
+        self.state = x;
+        return x;
+    }
+
+    u64 nextU64()
+    {
+        u32 lo = self.next();
+        u32 hi = self.next();
+        return ((u64)hi << 32u) | (u64)lo;
+    }
+
+    u64 nextRange(u64 lo, u64 hi)
+    {
+        if (lo >= hi) return lo;
+        u64 range = hi - lo;
+        u64 limit = 0xFFFFFFFFFFFFFFFFu - (0xFFFFFFFFFFFFFFFFu % range);
+        u64 val = self.nextU64();
+        while (val >= limit) val = self.nextU64();
+        return lo + val % range;
+    }
+}
+
+pub struct Pcg32
+{
+    u64 state;
+    u64 inc;
+
+    Pcg32 seed(u64 initState, u64 initSeq)
+    {
+        Pcg32 rng;
+        rng.state = 0u;
+        rng.inc = (initSeq << 1u) | 1u;
+        rng.next();
+        rng.state += initState;
+        rng.next();
+        return rng;
+    }
+
+    u32 next()
+    {
+        u64 old = self.state;
+        self.state = old * 6364136223846793005u + self.inc;
+        u32 xorshift = (u32)(((old >> 18u) ^ old) >> 27u);
+        u32 rot = (u32)(old >> 59u);
+        return (xorshift >> (u32)rot) | (xorshift << (u32)((-rot) & 31u));
+    }
+
+    u64 nextU64()
+    {
+        u32 lo = self.next();
+        u32 hi = self.next();
+        return ((u64)hi << 32u) | (u64)lo;
+    }
+
+    u64 nextRange(u64 lo, u64 hi)
+    {
+        if (lo >= hi) return lo;
+        u64 range = hi - lo;
+        u64 limit = 0xFFFFFFFFFFFFFFFFu - (0xFFFFFFFFFFFFFFFFu % range);
+        u64 val = self.nextU64();
+        while (val >= limit) val = self.nextU64();
+        return lo + val % range;
+    }
+}

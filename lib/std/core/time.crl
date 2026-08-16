@@ -1,0 +1,85 @@
+mod libc = import("std/platform/libc.crl");
+
+const i32 CLOCK_MONOTONIC = 1;
+
+pub struct Timespec
+{
+    i64 sec;
+    i64 nsec;
+}
+
+pub struct Timeval
+{
+    i64 sec;
+    i64 usec;
+}
+
+pub Timespec nowMonotonic()
+{
+    Timespec ts;
+    libc.clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts;
+}
+
+pub Timespec nowRealtime()
+{
+    Timespec ts;
+    libc.clock_gettime(0, &ts);
+    return ts;
+}
+
+pub Timeval nowTimeval()
+{
+    Timeval tv;
+    libc.gettimeofday(&tv, null);
+    return tv;
+}
+
+pub u64 unixSeconds()
+{
+    return libc.time(null);
+}
+
+pub Timespec addTimespec(Timespec a, Timespec b)
+{
+    Timespec r;
+    r.sec = a.sec + b.sec;
+    r.nsec = a.nsec + b.nsec;
+    if (r.nsec >= 1000000000)
+    {
+        r.nsec -= 1000000000;
+        r.sec += 1;
+    }
+    return r;
+}
+
+pub Timespec subTimespec(Timespec a, Timespec b)
+{
+    Timespec r;
+    r.sec = a.sec - b.sec;
+    r.nsec = a.nsec - b.nsec;
+    if (r.nsec < 0)
+    {
+        r.nsec += 1000000000;
+        r.sec -= 1;
+    }
+    return r;
+}
+
+pub f64 timespecToF64(Timespec ts)
+{
+    return (f64)ts.sec + (f64)ts.nsec * 1e-9;
+}
+
+pub f64 timevalToF64(Timeval tv)
+{
+    return (f64)tv.sec + (f64)tv.usec * 1e-6;
+}
+
+pub void sleepMs(u64 ms)
+{
+    Timespec ts;
+    ts.sec = (i64)(ms / 1000u);
+    ts.nsec = (i64)((ms % 1000u) * 1000000u);
+    libc.nanosleep(&ts, null);
+}

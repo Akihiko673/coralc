@@ -1,0 +1,297 @@
+@[no_warn_unsafe]
+
+mod wallvm = import("wallvm/wallvm.crl");
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod ir_builder = import("wallvm/ir_builder.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod x86_64 = import("wallvm/target/x86_64/x86_64.crl");
+mod ra_arena = import("wallvm/tests/ra_arena.crl");
+mod libc = import("std/platform/libc.crl");
+mod string = import("std/text/string.crl");
+
+const u32 NUM_MODULES = 5;
+const char* MODULE_NAMES[] = { "ra_arith", "ra_spill", "ra_mem", "ra_phi", "ra_float" };
+
+ir_types.IrModule* buildArith(ir_types.IrContext* ctx)
+{
+    // f1: (11 * 3 + 7) * 2 == 80
+    // f2: (1000 + 45) - (99 + 8) == 938
+    ir_types.IrModule* m = ctx.createModule("ra_arith");
+    ir_types.IrType* ty64 = ctx.tyInt(64);
+
+    ir_types.IrFunc* f1 = ctx.createFunc("ra_muladd", (ty64), null, 0);
+    m.addFunc(f1);
+    ir_types.IrBlock* b1 = ctx.createBlock("entry");
+    f1.addBlock(b1);
+    ir_builder.IrBuilder bd = ir_builder.IrBuilder::new(ctx);
+    bd.pos(b1, null);
+    ir_types.IrValue* c11 = ctx.constInt((ty64), 11);
+    ir_types.IrValue* c3 = ctx.constInt((ty64), 3);
+    ir_types.IrValue* c7 = ctx.constInt((ty64), 7);
+    ir_types.IrValue* c2 = ctx.constInt((ty64), 2);
+    ir_types.IrInst* p = bd.mul(c11, c3);
+    ir_types.IrInst* q = bd.add(&p->base, c7);
+    ir_types.IrInst* r = bd.mul(&q->base, c2);
+    bd.ret(&r->base);
+
+    ir_types.IrFunc* f2 = ctx.createFunc("ra_addsub", (ty64), null, 0);
+    m.addFunc(f2);
+    ir_types.IrBlock* b2 = ctx.createBlock("entry");
+    f2.addBlock(b2);
+    bd.pos(b2, null);
+    ir_types.IrValue* c1000 = ctx.constInt((ty64), 1000);
+    ir_types.IrValue* c45 = ctx.constInt((ty64), 45);
+    ir_types.IrValue* c99 = ctx.constInt((ty64), 99);
+    ir_types.IrValue* c8 = ctx.constInt((ty64), 8);
+    ir_types.IrInst* s1 = bd.add(c1000, c45);
+    ir_types.IrInst* s2 = bd.add(c99, c8);
+    ir_types.IrInst* d = bd.sub(&s1->base, &s2->base);
+    bd.ret(&d->base);
+    return m;
+}
+
+ir_types.IrModule* buildSpill(ir_types.IrContext* ctx)
+{
+    // Twelve products, all live until the sum: with ~6 allocatable int
+    // registers the allocator must spill roughly half and reload them.
+    ir_types.IrModule* m = ctx.createModule("ra_spill");
+    ir_types.IrType* ty64 = ctx.tyInt(64);
+    ir_types.IrFunc* f = ctx.createFunc("ra_many", (ty64), null, 0);
+    m.addFunc(f);
+    ir_types.IrBlock* b = ctx.createBlock("entry");
+    f.addBlock(b);
+    ir_builder.IrBuilder bd = ir_builder.IrBuilder::new(ctx);
+    bd.pos(b, null);
+    ir_types.IrInst* prod[12];
+    for (u32 i = 0; i < 12; i++)
+    {
+        u64 a = (u64)(i * 3 + 5);
+        u64 c = (u64)(i * 7 + 2);
+        ir_types.IrValue* ca = ctx.constInt((ty64), a);
+        ir_types.IrValue* cc = ctx.constInt((ty64), c);
+        prod[i] = bd.mul(ca, cc);
+    }
+    ir_types.IrValue* acc = ctx.constInt((ty64), 0);
+    for (u32 i = 0; i < 12; i++)
+    {
+        ir_types.IrInst* ai = bd.add(acc, &prod[i]->base);
+        acc = &ai->base;
+    }
+    bd.ret(acc);
+    return m;
+}
+
+ir_types.IrModule* buildMem(ir_types.IrContext* ctx)
+{
+    // p = alloca i64; store 41; v = load p; return v + 1 == 42
+    ir_types.IrModule* m = ctx.createModule("ra_mem");
+    ir_types.IrType* ty64 = ctx.tyInt(64);
+    ir_types.IrType* pi64 = ctx.tyPtr((ty64));
+    ir_types.IrFunc* f = ctx.createFunc("ra_mem", (ty64), null, 0);
+    m.addFunc(f);
+    ir_types.IrBlock* b = ctx.createBlock("entry");
+    f.addBlock(b);
+    ir_builder.IrBuilder bd = ir_builder.IrBuilder::new(ctx);
+    bd.pos(b, null);
+    ir_types.IrInst* p = bd.alloca((ty64));
+    ir_types.IrValue* c41 = ctx.constInt((ty64), 41);
+    bd.store(c41, &p->base);
+    ir_types.IrInst* v = bd.load((ty64), &p->base);
+    ir_types.IrValue* one = ctx.constInt((ty64), 1);
+    ir_types.IrInst* r = bd.add(&v->base, one);
+    bd.ret(&r->base);
+    return m;
+}
+
+ir_types.IrModule* buildPhi(ir_types.IrContext* ctx)
+{
+    // if (a - b) > 0: x = 10 else x = 20; return x + 2 (32 or 22)
+    // Computed from constants: 5 + 3 = 8, 8 - 4 = 4, 4 > 0 -> true -> 12
+    ir_types.IrModule* m = ctx.createModule("ra_phi");
+    ir_types.IrType* ty64 = ctx.tyInt(64);
+    ir_types.IrType* i1 = ctx.tyInt(1);
+    ir_types.IrFunc* f = ctx.createFunc("ra_phi", (ty64), null, 0);
+    m.addFunc(f);
+    ir_types.IrBlock* entry = ctx.createBlock("entry");
+    ir_types.IrBlock* thenBb = ctx.createBlock("then");
+    ir_types.IrBlock* elseBb = ctx.createBlock("else");
+    ir_types.IrBlock* join = ctx.createBlock("join");
+    f.addBlock(entry);
+    f.addBlock(thenBb);
+    f.addBlock(elseBb);
+    f.addBlock(join);
+    ir_builder.IrBuilder bd = ir_builder.IrBuilder::new(ctx);
+
+    bd.pos(entry, null);
+    ir_types.IrValue* c5 = ctx.constInt((ty64), 5);
+    ir_types.IrValue* c3 = ctx.constInt((ty64), 3);
+    ir_types.IrValue* c4 = ctx.constInt((ty64), 4);
+    ir_types.IrInst* sum = bd.add(c5, c3);
+    ir_types.IrInst* diff = bd.sub(&sum->base, c4);
+    ir_types.IrValue* zero = ctx.constInt((ty64), 0);
+    ir_types.IrInst* cond = bd.icmp(ir_opcodes.IrICmpPred::Sgt, &diff->base, zero);
+    bd.condBr(&cond->base, thenBb, elseBb);
+
+    bd.pos(thenBb, null);
+    ir_types.IrValue* c10 = ctx.constInt((ty64), 10);
+    ir_types.IrValue* c40 = ctx.constInt((ty64), 40);
+    ir_types.IrInst* tv = bd.add(c10, c40);
+    bd.br(join);
+
+    bd.pos(elseBb, null);
+    ir_types.IrValue* c20 = ctx.constInt((ty64), 20);
+    ir_types.IrValue* c5b = ctx.constInt((ty64), 5);
+    ir_types.IrInst* ev = bd.add(c20, c5b);
+    bd.br(join);
+
+    bd.pos(join, null);
+    ir_types.IrValue* phiOps[4];
+    phiOps[0] = &tv->base;
+    phiOps[1] = &thenBb->base;
+    phiOps[2] = &ev->base;
+    phiOps[3] = &elseBb->base;
+    ir_types.IrInst* phi = bd.createInst(ir_opcodes.IrOpcode::Phi, (ty64), phiOps, 4, 0, 0);
+    ir_types.IrValue* c2 = ctx.constInt((ty64), 2);
+    ir_types.IrInst* fin = bd.add(&phi->base, c2);
+    bd.ret(&fin->base);
+    return m;
+}
+
+ir_types.IrModule* buildFloat(ir_types.IrContext* ctx)
+{
+    // Exercises the float register path without binary float ops (the IR
+    // has no FAdd/FMul yet): siToFp, fpToSi, fpToUi, and a float compare.
+    //   c = siToFp(9)   -> 9.0
+    //   d = fpToSi(c)   -> 9
+    //   f = fpToUi(8.5) -> 8
+    //   g = 2.5 < 6.0   -> 1 (bool as int)
+    //   ret = d + f + g == 18
+    ir_types.IrModule* m = ctx.createModule("ra_float");
+    ir_types.IrType* tyF64 = ctx.tyDouble();
+    ir_types.IrType* ty64 = ctx.tyInt(64);
+    ir_types.IrFunc* f = ctx.createFunc("ra_fcast", (ty64), null, 0);
+    m.addFunc(f);
+    ir_types.IrBlock* b = ctx.createBlock("entry");
+    f.addBlock(b);
+    ir_builder.IrBuilder bd = ir_builder.IrBuilder::new(ctx);
+    bd.pos(b, null);
+    ir_types.IrValue* c9 = ctx.constInt((ty64), 9);
+    ir_types.IrInst* c = bd.siToFp(c9, tyF64);
+    ir_types.IrInst* d = bd.fpToSi(&c->base, ty64);
+    ir_types.IrValue* f85 = ctx.constFloat(tyF64, 8.5);
+    ir_types.IrInst* ff = bd.fpToUi(f85, ty64);
+    ir_types.IrValue* f25 = ctx.constFloat(tyF64, 2.5);
+    ir_types.IrValue* f60 = ctx.constFloat(tyF64, 6.0);
+    ir_types.IrInst* g = bd.fcmp(ir_opcodes.IrFCmpPred::Olt, f25, f60);
+    ir_types.IrInst* h = bd.add(&d->base, &ff->base);
+    ir_types.IrInst* r = bd.add(&h->base, &g->base);
+    bd.ret(&r->base);
+    return m;
+}
+
+void runModule(string.strView name, ir_types.IrContext* ctx, u32 cc)
+{
+    ir_types.IrModule* m = null;
+    if (name.equals(string.strView::fromCstr("ra_arith"))) m = buildArith(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_spill"))) m = buildSpill(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_mem"))) m = buildMem(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_phi"))) m = buildPhi(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_float"))) m = buildFloat(ctx);
+    if (m == null) return;
+
+    const char* s = wallvm.irCompileAsm(m, ctx, (asm_rules.CallingConvention)cc, 0);
+    if (s == null)
+    {
+        libc.write(2, "irCompileAsm failed\n", 20);
+        u8 buf[64];
+        for (u32 i = 0; i < m.nfuncs; i++)
+        {
+            ir_types.IrFunc* f = m.funcs[i];
+            libc.snprintf(buf, 64, "  func: %s nblocks=%u\n", f.base.name, f.nblocks);
+            libc.write(2, buf, libc.strlen(buf));
+        }
+        return;
+    }
+    u64 n = 0;
+    while (s[n]) n++;
+    if (n > 0) libc.write(1, s, n);
+}
+
+// Writes one module's asm to <dir>/<name>.s (a separate compilation unit;
+// each module is a fresh codegen pass so its block labels restart).
+// With intel=true the pipeline runs first and the asm is re-emitted in
+// Intel syntax (test support: same allocations, different text).
+void writeModuleAsm(string.strView name, ir_types.IrContext* ctx, u32 cc, const char* outdir, bool intel)
+{
+    ir_types.IrModule* m = null;
+    if (name.equals(string.strView::fromCstr("ra_arith"))) m = buildArith(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_spill"))) m = buildSpill(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_mem"))) m = buildMem(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_phi"))) m = buildPhi(ctx);
+    else if (name.equals(string.strView::fromCstr("ra_float"))) m = buildFloat(ctx);
+    if (m == null) return;
+
+    const char* s = wallvm.irCompileAsm(m, ctx, (asm_rules.CallingConvention)cc, 0);
+    if (s == null)
+    {
+        libc.write(2, "irCompileAsm failed\n", 20);
+        return;
+    }
+    if (intel) s = x86_64.irCodegenX86_64Asm(m, (void*)ctx, false);
+    if (s == null) return;
+    u64 n = 0;
+    while (s[n]) n++;
+    if (n == 0) return;
+
+    u8 path[256];
+    u32 pl = 0;
+    while (outdir[pl]) { path[pl] = (u8)outdir[pl]; pl++; }
+    path[pl++] = '/';
+    for (u32 i = 0; i < name.len; i++) path[pl++] = (u8)name.ptr[i];
+    path[pl++] = '.';
+    path[pl++] = 's';
+    path[pl] = 0;
+
+    i32 fd = libc.open((const char*)path, 0x241, 0x1A4); // O_WRONLY|O_CREAT|O_TRUNC, 0644
+    if (fd < 0)
+    {
+        libc.write(2, "can't open output file\n", 23);
+        return;
+    }
+    u64 off = 0;
+    while (off < n)
+    {
+        i64 w = libc.write(fd, s + off, n - off);
+        if (w <= 0) break;
+        off += (u64)w;
+    }
+    libc.close(fd);
+}
+
+i32 main(i32 argc, char** argv)
+{
+    ra_arena.install();
+    if (argc < 2) return 1;
+    u32 cc = 0;
+    const char* arg = argv[1];
+    if (arg[0] == 's' && arg[1] == 'y' && arg[2] == 's') cc = (u32)asm_rules.CallingConvention::SystemV;
+    else if (arg[0] == 'w' && arg[1] == 'i' && arg[2] == 'n') cc = (u32)asm_rules.CallingConvention::Win64;
+    else if (arg[0] == 'a' && arg[1] == '6' && arg[2] == '4') cc = (u32)asm_rules.CallingConvention::Aapcs64;
+    else if (arg[0] == 'c' && arg[1] == 'd' && arg[2] == 'e') cc = (u32)asm_rules.CallingConvention::Cdecl;
+    const char* outdir = argc > 2 ? argv[2] : null;
+    bool intel = false;
+    if (argc > 3 && argv[3][0] == 'i') intel = true;
+    for (u32 i = 0; i < NUM_MODULES; i++)
+    {
+        string.strView nm = string.strView::fromCstr(MODULE_NAMES[i]);
+        libc.write(2, "==> ", 4);
+        libc.write(2, MODULE_NAMES[i], nm.len);
+        libc.write(2, "\n", 1);
+        ir_types.IrContext* ctx = ir_types.irCtxCreate();
+        if (outdir) writeModuleAsm(nm, ctx, cc, outdir, intel);
+        else runModule(nm, ctx, cc);
+        ir_types.irCtxDestroy(ctx);
+    }
+    return 0;
+}

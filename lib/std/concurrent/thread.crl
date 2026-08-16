@@ -1,0 +1,828 @@
+@[no_warn_unsafe]
+mod libc = import("std/platform/libc.crl");
+
+pub distinct Thread = void*;
+
+pub struct ConditionVar
+{
+    void* impl[6];
+
+    void init()
+    {
+        libc.pthread_cond_init(self.impl, null);
+    }
+
+    void destroy()
+    {
+        libc.pthread_cond_destroy(self.impl);
+    }
+
+    void wait(Mutex* mutex)
+    {
+        libc.pthread_cond_wait(self.impl, mutex->impl);
+    }
+
+    void signal()
+    {
+        libc.pthread_cond_signal(self.impl);
+    }
+
+    void broadcast()
+    {
+        libc.pthread_cond_broadcast(self.impl);
+    }
+}
+
+pub Thread threadCreate(void*(void*) fn, void* arg)
+{
+    void* t;
+    if (libc.pthread_create(&t, null, fn, arg) != 0) return (Thread)0;
+    return (Thread)t;
+}
+
+pub bool threadJoin(Thread t, void** retval)
+{
+    return libc.pthread_join((void*)t, retval) == 0;
+}
+
+pub void threadExit(void* retval)
+{
+    libc.pthread_exit(retval);
+}
+
+pub Thread threadCurrent()
+{
+    return (Thread)libc.pthread_self();
+}
+
+pub struct AtomicU64
+{
+    u64 value;
+
+    u64 load()
+    {
+        flag (ARCH) {
+        x86_64:
+            u64 v;
+            asm volatile { "mfence" }
+            asm volatile { "movq %1, %0" : "=r"(v) : "m"(self.value) }
+            asm volatile { "mfence" }
+            return v;
+        x86:
+            u32 v;
+            asm volatile { "mfence" }
+            asm volatile { "movl %1, %0" : "=r"(v) : "m"(self.value) }
+            asm volatile { "mfence" }
+            return (u64)v;
+        arm64:
+            u64 v;
+            asm volatile { "ldar %0, [%1]" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        arm32:
+            u32 v;
+            asm volatile { "ldr %0, [%1]\n\tdmb ish" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return (u64)v;
+        riscv64:
+            u64 v;
+            asm volatile { "ld %0, 0(%1)\n\tfence rw,rw" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        riscv32:
+            u32 v;
+            asm volatile { "lw %0, 0(%1)\n\tfence rw,rw" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return (u64)v;
+        ppc64:
+            u64 v;
+            asm volatile { "ld %0, 0(%1)\n\tlwsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        ppc:
+            u32 v;
+            asm volatile { "lwz %0, 0(%1)\n\tlwsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return (u64)v;
+        mips64:
+            u64 v;
+            asm volatile { "ld %0, 0(%1)\n\tsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        mips:
+            u32 v;
+            asm volatile { "lw %0, 0(%1)\n\tsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return (u64)v;
+        sparc64:
+            u64 v;
+            asm volatile { "ldx [%1], %0\n\tmembar #LoadLoad" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        default:
+            return self.value;
+        }
+    }
+
+    void store(u64 val)
+    {
+        flag (ARCH) {
+        x86_64:
+            asm volatile { "xchgq %0, %1" : "=m"(self.value) : "r"(val) }
+            asm volatile { "mfence" }
+            return;
+        x86:
+            asm volatile { "xchgl %0, %1" : "=m"(self.value) : "r"(val) }
+            asm volatile { "mfence" }
+            return;
+        arm64:
+            asm volatile { "stlr %0, [%1]" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        arm32:
+            asm volatile { "dmb ish\n\tstr %0, [%1]" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        riscv64:
+            asm volatile { "fence rw,rw\n\tsd %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        riscv32:
+            asm volatile { "fence rw,rw\n\tsw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        ppc64:
+            asm volatile { "lwsync\n\tstd %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        ppc:
+            asm volatile { "lwsync\n\tstw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        mips64:
+            asm volatile { "sync\n\tsd %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        mips:
+            asm volatile { "sync\n\tsw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        sparc64:
+            asm volatile { "membar #StoreStore\n\tstx %0, [%1]" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        default:
+            self.value = val;
+            return;
+        }
+    }
+
+    u64 fetchAdd(u64 delta)
+    {
+        flag (ARCH) {
+        x86_64:
+            u64 result;
+            asm volatile { "lock xaddq %0, %1" : "=r"(result), "=m"(self.value) : "0"(delta), "m"(self.value) }
+            return result;
+        x86:
+            u32 result;
+            asm volatile { "lock xaddl %0, %1" : "=r"(result), "=m"(self.value) : "0"(delta), "m"(self.value) }
+            return (u64)result;
+        arm64:
+            u64 result;
+            u32 st;
+            asm volatile {
+                "1: ldaxr %0, [%2]\n\t"
+                "add %0, %0, %1\n\t"
+                "stlxr %w3, %0, [%2]\n\t"
+                "cbnz %w3, 1b"
+                : "=&r"(result), "=&r"(st)
+                : "r"((u64)&self.value), "r"(delta)
+                : "memory"
+            }
+            return result;
+        arm32:
+            u32 result;
+            u32 st;
+            asm volatile {
+                "dmb ish\n\t"
+                "1: ldrex %0, [%2]\n\t"
+                "add %0, %0, %1\n\t"
+                "strex %3, %0, [%2]\n\t"
+                "cmp %3, #0\n\t"
+                "bne 1b\n\t"
+                "dmb ish"
+                : "=&r"(result), "=&r"(st)
+                : "r"((u64)&self.value), "r"(delta)
+                : "memory"
+            }
+            return (u64)result;
+        riscv64:
+            u64 result;
+            asm volatile { "amoadd.d %0, %1, 0(%2)" : "=&r"(result) : "r"(delta), "r"((u64)&self.value) : "memory" }
+            return result;
+        riscv32:
+            u32 result;
+            asm volatile { "amoadd.w %0, %1, 0(%2)" : "=&r"(result) : "r"(delta), "r"((u64)&self.value) : "memory" }
+            return (u64)result;
+        ppc64:
+            u64 result;
+            asm volatile {
+                "1: ldarx %0, 0, %2\n\t"
+                "add %0, %0, %1\n\t"
+                "stdcx %0, 0, %2\n\t"
+                "bne- 1b"
+                : "=&r"(result)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        ppc:
+            u32 result;
+            asm volatile {
+                "1: lwarx %0, 0, %2\n\t"
+                "add %0, %0, %1\n\t"
+                "stwcx %0, 0, %2\n\t"
+                "bne- 1b"
+                : "=&r"(result)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return (u64)result;
+        mips64:
+            u64 result;
+            u64 tmp;
+            asm volatile {
+                "1: lld %0, 0(%3)\n\t"
+                "daddu %1, %0, %2\n\t"
+                "scd %1, 0(%3)\n\t"
+                "beqz %1, 1b"
+                : "=&r"(result), "=&r"(tmp)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        mips:
+            u32 result;
+            u32 tmp;
+            asm volatile {
+                "1: ll %0, 0(%3)\n\t"
+                "addu %1, %0, %2\n\t"
+                "sc %1, 0(%3)\n\t"
+                "beqz %1, 1b"
+                : "=&r"(result), "=&r"(tmp)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return (u64)result;
+        sparc64:
+            u64 result;
+            u64 tmp;
+            asm volatile {
+                "1: ldx [%3], %0\n\t"
+                "add %0, %1, %2\n\t"
+                "casx [%3], %0, %2\n\t"
+                "cmp %2, %0\n\t"
+                "bne 1b"
+                : "=&r"(result), "=&r"(tmp)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        default:
+            u64 r = self.value;
+            self.value += delta;
+            return r;
+        }
+    }
+
+    u64 fetchSub(u64 delta)
+    {
+        return self.fetchAdd(0u - delta);
+    }
+
+    bool compareExchange(u64 expected, u64 desired)
+    {
+        flag (ARCH) {
+        x86_64:
+            u8 ok;
+            asm volatile { "lock cmpxchgq %3, %1\n\tsete %0" : "=q"(ok), "+m"(self.value), "+a"(expected) : "r"(desired) : "cc", "memory" }
+            return ok != 0;
+        x86:
+            u8 ok;
+            asm volatile { "lock cmpxchgl %3, %1\n\tsete %0" : "=q"(ok), "+m"(self.value), "+a"(expected) : "r"(desired) : "cc", "memory" }
+            return ok != 0;
+        arm64:
+            u64 loaded;
+            u32 st;
+            asm volatile {
+                "1: ldaxr %0, [%3]\n\t"
+                "cmp %0, %1\n\t"
+                "b.ne 2f\n\t"
+                "stlxr %w4, %2, [%3]\n\t"
+                "cbnz %w4, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        arm32:
+            u32 loaded;
+            u32 st;
+            asm volatile {
+                "dmb ish\n\t"
+                "1: ldrex %0, [%3]\n\t"
+                "cmp %0, %1\n\t"
+                "bne 2f\n\t"
+                "strex %4, %2, [%3]\n\t"
+                "cmp %4, #0\n\t"
+                "bne 1b\n\t"
+                "2:\n\t"
+                "dmb ish"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        riscv64:
+            u64 loaded;
+            u64 st;
+            asm volatile {
+                "1: lr.d %0, 0(%3)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "sc.d %4, %2, 0(%3)\n\t"
+                "bnez %4, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        riscv32:
+            u32 loaded;
+            u32 st;
+            asm volatile {
+                "1: lr.w %0, 0(%3)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "sc.w %4, %2, 0(%3)\n\t"
+                "bnez %4, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        ppc64:
+            u64 loaded;
+            asm volatile {
+                "1: ldarx %0, 0, %3\n\t"
+                "cmpd %0, %1\n\t"
+                "bne- 2f\n\t"
+                "stdcx %2, 0, %3\n\t"
+                "bne- 1b\n\t"
+                "2:"
+                : "=&r"(loaded)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        ppc:
+            u32 loaded;
+            asm volatile {
+                "1: lwarx %0, 0, %3\n\t"
+                "cmplw %0, %1\n\t"
+                "bne- 2f\n\t"
+                "stwcx %2, 0, %3\n\t"
+                "bne- 1b\n\t"
+                "2:"
+                : "=&r"(loaded)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        mips64:
+            u64 loaded;
+            u64 tmp;
+            asm volatile {
+                "1: lld %0, 0(%4)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "move %3, %2\n\t"
+                "scd %3, 0(%4)\n\t"
+                "beqz %3, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(tmp)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        mips:
+            u32 loaded;
+            u32 tmp;
+            asm volatile {
+                "1: ll %0, 0(%4)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "move %3, %2\n\t"
+                "sc %3, 0(%4)\n\t"
+                "beqz %3, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(tmp)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        sparc64:
+            u64 loaded;
+            u64 tmp;
+            asm volatile {
+                "1: ldx [%4], %0\n\t"
+                "cmp %0, %1\n\t"
+                "bne 2f\n\t"
+                "mov %2, %3\n\t"
+                "casx [%4], %0, %3\n\t"
+                "cmp %3, %0\n\t"
+                "bne 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(tmp)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        default:
+            if (self.value == expected)
+            {
+                self.value = desired;
+                return true;
+            }
+            return false;
+        }
+    }
+}
+
+pub struct AtomicU32
+{
+    u32 value;
+
+    u32 load()
+    {
+        flag (ARCH) {
+        x86_64:
+            u32 v;
+            asm volatile { "mfence" }
+            asm volatile { "movl %1, %0" : "=r"(v) : "m"(self.value) }
+            asm volatile { "mfence" }
+            return v;
+        x86:
+            u32 v;
+            asm volatile { "mfence" }
+            asm volatile { "movl %1, %0" : "=r"(v) : "m"(self.value) }
+            asm volatile { "mfence" }
+            return v;
+        arm64:
+            u32 v;
+            asm volatile { "ldar %w0, [%1]" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        arm32:
+            u32 v;
+            asm volatile { "ldr %0, [%1]\n\tdmb ish" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        riscv64:
+            u32 v;
+            asm volatile { "lw %0, 0(%1)\n\tfence rw,rw" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        riscv32:
+            u32 v;
+            asm volatile { "lw %0, 0(%1)\n\tfence rw,rw" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        ppc64:
+            u32 v;
+            asm volatile { "lwz %0, 0(%1)\n\tlwsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        ppc:
+            u32 v;
+            asm volatile { "lwz %0, 0(%1)\n\tlwsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        mips64:
+            u32 v;
+            asm volatile { "lw %0, 0(%1)\n\tsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        mips:
+            u32 v;
+            asm volatile { "lw %0, 0(%1)\n\tsync" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        sparc64:
+            u32 v;
+            asm volatile { "lduw [%1], %0\n\tmembar #LoadLoad" : "=r"(v) : "r"((u64)&self.value) : "memory" }
+            return v;
+        default:
+            return self.value;
+        }
+    }
+
+    void store(u32 val)
+    {
+        flag (ARCH) {
+        x86_64:
+            asm volatile { "xchgl %0, %1" : "=m"(self.value) : "r"(val) }
+            asm volatile { "mfence" }
+            return;
+        x86:
+            asm volatile { "xchgl %0, %1" : "=m"(self.value) : "r"(val) }
+            asm volatile { "mfence" }
+            return;
+        arm64:
+            asm volatile { "stlr %w0, [%1]" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        arm32:
+            asm volatile { "dmb ish\n\tstr %0, [%1]" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        riscv64:
+            asm volatile { "fence rw,rw\n\tsw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        riscv32:
+            asm volatile { "fence rw,rw\n\tsw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        ppc64:
+            asm volatile { "lwsync\n\tstw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        ppc:
+            asm volatile { "lwsync\n\tstw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        mips64:
+            asm volatile { "sync\n\tsw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        mips:
+            asm volatile { "sync\n\tsw %0, 0(%1)" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        sparc64:
+            asm volatile { "membar #StoreStore\n\tstw %0, [%1]" : : "r"(val), "r"((u64)&self.value) : "memory" }
+            return;
+        default:
+            self.value = val;
+            return;
+        }
+    }
+
+    u32 fetchAdd(u32 delta)
+    {
+        flag (ARCH) {
+        x86_64:
+            u32 result;
+            asm volatile { "lock xaddl %0, %1" : "=r"(result), "=m"(self.value) : "0"(delta), "m"(self.value) }
+            return result;
+        x86:
+            u32 result;
+            asm volatile { "lock xaddl %0, %1" : "=r"(result), "=m"(self.value) : "0"(delta), "m"(self.value) }
+            return result;
+        arm64:
+            u32 result;
+            u32 st;
+            asm volatile {
+                "1: ldaxr %w0, [%2]\n\t"
+                "add %w0, %w0, %w1\n\t"
+                "stlxr %w3, %w0, [%2]\n\t"
+                "cbnz %w3, 1b"
+                : "=&r"(result), "=&r"(st)
+                : "r"((u64)&self.value), "r"(delta)
+                : "memory"
+            }
+            return result;
+        arm32:
+            u32 result;
+            u32 st;
+            asm volatile {
+                "dmb ish\n\t"
+                "1: ldrex %0, [%2]\n\t"
+                "add %0, %0, %1\n\t"
+                "strex %3, %0, [%2]\n\t"
+                "cmp %3, #0\n\t"
+                "bne 1b\n\t"
+                "dmb ish"
+                : "=&r"(result), "=&r"(st)
+                : "r"((u64)&self.value), "r"(delta)
+                : "memory"
+            }
+            return result;
+        riscv64:
+            u32 result;
+            asm volatile { "amoadd.w %0, %1, 0(%2)" : "=&r"(result) : "r"(delta), "r"((u64)&self.value) : "memory" }
+            return result;
+        riscv32:
+            u32 result;
+            asm volatile { "amoadd.w %0, %1, 0(%2)" : "=&r"(result) : "r"(delta), "r"((u64)&self.value) : "memory" }
+            return result;
+        ppc64:
+            u32 result;
+            asm volatile {
+                "1: lwarx %0, 0, %2\n\t"
+                "add %0, %0, %1\n\t"
+                "stwcx %0, 0, %2\n\t"
+                "bne- 1b"
+                : "=&r"(result)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        ppc:
+            u32 result;
+            asm volatile {
+                "1: lwarx %0, 0, %2\n\t"
+                "add %0, %0, %1\n\t"
+                "stwcx %0, 0, %2\n\t"
+                "bne- 1b"
+                : "=&r"(result)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        mips64:
+            u32 result;
+            u32 tmp;
+            asm volatile {
+                "1: ll %0, 0(%3)\n\t"
+                "addu %1, %0, %2\n\t"
+                "sc %1, 0(%3)\n\t"
+                "beqz %1, 1b"
+                : "=&r"(result), "=&r"(tmp)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        mips:
+            u32 result;
+            u32 tmp;
+            asm volatile {
+                "1: ll %0, 0(%3)\n\t"
+                "addu %1, %0, %2\n\t"
+                "sc %1, 0(%3)\n\t"
+                "beqz %1, 1b"
+                : "=&r"(result), "=&r"(tmp)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        sparc64:
+            u32 result;
+            u32 tmp;
+            asm volatile {
+                "1: lduw [%3], %0\n\t"
+                "add %0, %1, %2\n\t"
+                "cas [%3], %0, %2\n\t"
+                "cmp %2, %0\n\t"
+                "bne 1b"
+                : "=&r"(result), "=&r"(tmp)
+                : "r"(delta), "r"((u64)&self.value)
+                : "memory"
+            }
+            return result;
+        default:
+            u32 r = self.value;
+            self.value += delta;
+            return r;
+        }
+    }
+
+    u32 fetchSub(u32 delta)
+    {
+        return self.fetchAdd(0u - delta);
+    }
+
+    bool compareExchange(u32 expected, u32 desired)
+    {
+        flag (ARCH) {
+        x86_64:
+            u8 ok;
+            asm volatile { "lock cmpxchgl %3, %1\n\tsete %0" : "=q"(ok), "+m"(self.value), "+a"(expected) : "r"(desired) : "cc", "memory" }
+            return ok != 0;
+        x86:
+            u8 ok;
+            asm volatile { "lock cmpxchgl %3, %1\n\tsete %0" : "=q"(ok), "+m"(self.value), "+a"(expected) : "r"(desired) : "cc", "memory" }
+            return ok != 0;
+        arm64:
+            u32 loaded;
+            u32 st;
+            asm volatile {
+                "1: ldaxr %w0, [%3]\n\t"
+                "cmp %w0, %w1\n\t"
+                "b.ne 2f\n\t"
+                "stlxr %w4, %w2, [%3]\n\t"
+                "cbnz %w4, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        arm32:
+            u32 loaded;
+            u32 st;
+            asm volatile {
+                "dmb ish\n\t"
+                "1: ldrex %0, [%3]\n\t"
+                "cmp %0, %1\n\t"
+                "bne 2f\n\t"
+                "strex %4, %2, [%3]\n\t"
+                "cmp %4, #0\n\t"
+                "bne 1b\n\t"
+                "2:\n\t"
+                "dmb ish"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        riscv64:
+            u32 loaded;
+            u32 st;
+            asm volatile {
+                "1: lr.w %0, 0(%3)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "sc.w %4, %2, 0(%3)\n\t"
+                "bnez %4, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        riscv32:
+            u32 loaded;
+            u32 st;
+            asm volatile {
+                "1: lr.w %0, 0(%3)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "sc.w %4, %2, 0(%3)\n\t"
+                "bnez %4, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(st)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        ppc64:
+            u32 loaded;
+            asm volatile {
+                "1: lwarx %0, 0, %3\n\t"
+                "cmplw %0, %1\n\t"
+                "bne- 2f\n\t"
+                "stwcx %2, 0, %3\n\t"
+                "bne- 1b\n\t"
+                "2:"
+                : "=&r"(loaded)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        ppc:
+            u32 loaded;
+            asm volatile {
+                "1: lwarx %0, 0, %3\n\t"
+                "cmplw %0, %1\n\t"
+                "bne- 2f\n\t"
+                "stwcx %2, 0, %3\n\t"
+                "bne- 1b\n\t"
+                "2:"
+                : "=&r"(loaded)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        mips64:
+            u32 loaded;
+            u32 tmp;
+            asm volatile {
+                "1: ll %0, 0(%4)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "move %3, %2\n\t"
+                "sc %3, 0(%4)\n\t"
+                "beqz %3, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(tmp)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        mips:
+            u32 loaded;
+            u32 tmp;
+            asm volatile {
+                "1: ll %0, 0(%4)\n\t"
+                "bne %0, %1, 2f\n\t"
+                "move %3, %2\n\t"
+                "sc %3, 0(%4)\n\t"
+                "beqz %3, 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(tmp)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        sparc64:
+            u32 loaded;
+            u32 tmp;
+            asm volatile {
+                "1: lduw [%4], %0\n\t"
+                "cmp %0, %1\n\t"
+                "bne 2f\n\t"
+                "mov %2, %3\n\t"
+                "cas [%4], %0, %3\n\t"
+                "cmp %3, %0\n\t"
+                "bne 1b\n\t"
+                "2:"
+                : "=&r"(loaded), "=&r"(tmp)
+                : "r"(expected), "r"(desired), "r"((u64)&self.value)
+                : "memory"
+            }
+            return loaded == expected;
+        default:
+            if (self.value == expected)
+            {
+                self.value = desired;
+                return true;
+            }
+            return false;
+        }
+    }
+}

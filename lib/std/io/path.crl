@@ -1,0 +1,148 @@
+mod string = import("std/text/string.crl");
+
+const char SEP = '/';
+const char ALT_SEP = '\\';
+const string.strView CUR_DIR = string.strView::fromCstr(".");
+const string.strView PARENT_DIR = string.strView::fromCstr("..");
+const string.strView SEP_STR = string.strView::fromCstr("/");
+
+pub u64 findLastSep(string.strView p)
+{
+    for (u64 i = p.len; i > 0; i--)
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) return i - 1;
+    return p.len + 1;
+}
+
+pub bool isAbsolute(string.strView p)
+{
+    return p.len > 0 && p.ptr[0] == SEP;
+}
+
+pub bool hasExtension(string.strView p)
+{
+    u64 lastDot = p.len + 1;
+    for (u64 i = p.len; i > 0; i--)
+    {
+        if (p.ptr[i - 1] == '.') { lastDot = i - 1; break; }
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) break;
+    }
+    if (lastDot >= p.len) return false;
+    u64 lastSep = findLastSep(p);
+    return lastDot > lastSep;
+}
+
+pub string.strView extension(string.strView p)
+{
+    u64 lastDot = p.len + 1;
+    for (u64 i = p.len; i > 0; i--)
+    {
+        if (p.ptr[i - 1] == '.') { lastDot = i - 1; break; }
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) break;
+    }
+    if (lastDot >= p.len) return string.strView::empty();
+    u64 lastSep = findLastSep(p);
+    if (lastDot <= lastSep) return string.strView::empty();
+    return string.strView::fromParts(p.ptr + lastDot, p.len - lastDot);
+}
+
+pub string.strView stem(string.strView p)
+{
+    u64 lastDot = p.len + 1;
+    for (u64 i = p.len; i > 0; i--)
+    {
+        if (p.ptr[i - 1] == '.') { lastDot = i - 1; break; }
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) break;
+    }
+    u64 lastSep = p.len + 1;
+    for (u64 i = p.len; i > 0; i--)
+    {
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) { lastSep = i - 1; break; }
+    }
+    u64 start = lastSep < p.len ? lastSep + 1 : 0;
+    u64 end = lastDot < p.len ? lastDot : p.len;
+    if (end <= start) return p.len > 0 ? string.strView::fromParts(p.ptr + start, p.len - start) : string.strView::empty();
+    return string.strView::fromParts(p.ptr + start, end - start);
+}
+
+pub string.strView parent(string.strView p)
+{
+    u64 lastSep = p.len + 1;
+    for (u64 i = p.len; i > 0; i--)
+    {
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) { lastSep = i - 1; break; }
+    }
+    if (lastSep > p.len) return string.strView::empty();
+    if (lastSep == 0) return string.strView::fromCstr("/");
+    return string.strView::fromParts(p.ptr, lastSep);
+}
+
+pub string.strView filename(string.strView p)
+{
+    u64 lastSep = p.len + 1;
+    for (u64 i = p.len; i > 0; i--)
+    {
+        if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) { lastSep = i - 1; break; }
+    }
+    if (lastSep > p.len) return p;
+    return string.strView::fromParts(p.ptr + lastSep + 1, p.len - lastSep - 1);
+}
+
+pub string.String join(string.strView a, string.strView b)
+{
+    string.String out = string.String::new();
+    out.appendView(a);
+    if (a.len > 0 && a.ptr[a.len - 1] != SEP && a.ptr[a.len - 1] != ALT_SEP)
+        out.pushChar(SEP);
+    out.appendView(b);
+    return out;
+}
+
+pub string.String normalize(string.strView p)
+{
+    string.String out = string.String::new();
+    u64 i = 0;
+    bool needSep = false;
+    if (isAbsolute(p)) { out.pushChar(SEP); i++; }
+    while (i < p.len)
+    {
+        if (p.ptr[i] == SEP || p.ptr[i] == ALT_SEP) { i++; continue; }
+        u64 segStart = i;
+        while (i < p.len && p.ptr[i] != SEP && p.ptr[i] != ALT_SEP) i++;
+        string.strView seg = string.strView::fromParts(p.ptr + segStart, i - segStart);
+        if (seg.len == 0);
+        else if (seg.len == 1 && seg.ptr[0] == '.');
+        else
+        {
+            if (needSep) out.pushChar(SEP);
+            out.appendView(seg);
+            needSep = true;
+        }
+    }
+    if (out.isEmpty()) out.appendView(CUR_DIR);
+    return out;
+}
+
+pub string.String absolute(string.strView base, string.strView rel)
+{
+    if (isAbsolute(rel)) return normalize(rel);
+    string.String joined = join(base, rel);
+    string.String norm = normalize(joined.asView());
+    joined.free();
+    return norm;
+}
+
+pub string.String changeExtension(string.strView p, string.strView newExt)
+{
+    string.strView ext = extension(p);
+    string.String out = string.String::new();
+    if (ext.len > 0)
+        out.appendView(string.strView::fromParts(p.ptr, p.len - ext.len));
+    else
+        out.appendView(p);
+    if (newExt.len > 0)
+    {
+        if (newExt.ptr[0] != '.') out.pushChar('.');
+        out.appendView(newExt);
+    }
+    return out;
+}

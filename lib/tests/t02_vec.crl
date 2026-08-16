@@ -1,0 +1,17 @@
+mod vec = import("std/collections/vec.crl");
+
+i32 main()
+{
+    vec.vec<u64> v = vec.vec<u64>::withCap(4);
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    if (v.len != 3) return 1;
+    if (v.at(0) != 10) return 2;
+    if (v.at(2) != 30) return 3;
+    u64 sum = 0;
+    for (u64 i = 0; i < v.len; i++)
+        sum = sum + v.at(i);
+    if (sum != 60) return 4;
+    return 0;
+}

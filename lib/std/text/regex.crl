@@ -1,0 +1,102 @@
+
+mod libc = import("std/platform/libc.crl");
+mod vec = import("std/collections/vec.crl");
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+
+const i32 REG_EXTENDED = 1;
+const i32 REG_ICASE = 2;
+const i32 REG_NOSUB = 4;
+
+pub struct Regex
+{
+    void* impl[8];
+    bool compiled;
+    u64 groupCount;
+    u8* findBuf;
+    u64 findBufCap;
+
+    bool compile(strView pattern, bool caseInsensitive)
+    {
+        u8* buf = mman.alloc<u8>(pattern.len + 1);
+        if (buf == null) return false;
+        mman.copy<u8>(buf, pattern.ptr, pattern.len);
+        buf[pattern.len] = 0;
+        i32 flags = REG_EXTENDED;
+        if (caseInsensitive) flags |= REG_ICASE;
+        i32 rc = libc.regcomp(self.impl, buf, flags);
+        mman.dealloc<u8>(buf);
+        self.compiled = rc == 0;
+        if (self.compiled)
+        {
+            // regex_t stores the subexpression count as its first member; impl aliases it
+            self.groupCount = (u64)self.impl[0] + 1;
+        }
+        else self.groupCount = 0;
+        return self.compiled;
+    }
+
+    void free()
+    {
+        if (self.compiled) libc.regfree(self.impl);
+        self.compiled = false;
+        if (self.findBuf != null) { mman.dealloc<u8>(self.findBuf); self.findBuf = null; }
+        self.findBufCap = 0;
+    }
+
+    bool matches(strView input)
+    {
+        if (!self.compiled) return false;
+        u8* buf = mman.alloc<u8>(input.len + 1);
+        if (buf == null) return false;
+        mman.copy<u8>(buf, input.ptr, input.len);
+        buf[input.len] = 0;
+        i64 pmatch[2];
+        i32 rc = libc.regexec(self.impl, buf, 1, pmatch, 0);
+        mman.dealloc<u8>(buf);
+        if (rc != 0) return false;
+        // Full-string match, must start at 0 and cover the whole input
+        return pmatch[0] == 0 && (u64)pmatch[1] == input.len;
+    }
+
+    bool find(strView input, vec<strView>* groups)
+    {
+        if (!self.compiled) return false;
+        if (self.findBuf == null || self.findBufCap < input.len + 1)
+        {
+            if (self.findBuf != null) mman.dealloc<u8>(self.findBuf);
+            self.findBufCap = input.len + 1;
+            self.findBuf = mman.alloc<u8>(self.findBufCap);
+            if (self.findBuf == null) { self.findBufCap = 0; return false; }
+        }
+        mman.copy<u8>(self.findBuf, input.ptr, input.len);
+        self.findBuf[input.len] = 0;
+
+        u64 maxGroups = self.groupCount;
+        if (maxGroups < 1) maxGroups = 1;
+        groups->clear();
+        void* pmatch = mman.alloc<u8>(sizeof(i64) * 2 * maxGroups);
+        i32 rc = libc.regexec(self.impl, self.findBuf, maxGroups, pmatch, 0);
+        if (rc != 0) { mman.dealloc<u8>(pmatch); return false; }
+
+        i64* matches = (i64*)pmatch;
+        for (u64 i = 0; i < maxGroups; i++)
+        {
+            i64 so = matches[i * 2];
+            i64 eo = matches[i * 2 + 1];
+            if (so < 0 || eo < 0) { groups->push(strView::empty()); continue; }
+            groups->push(strView::fromParts(self.findBuf + so, (u64)(eo - so)));
+        }
+        mman.dealloc<u8>(pmatch);
+        return true;
+    }
+}
+
+pub i32 regexFlags(bool extended, bool icase, bool nosub)
+{
+    i32 f = 0;
+    if (extended) f |= REG_EXTENDED;
+    if (icase) f |= REG_ICASE;
+    if (nosub) f |= REG_NOSUB;
+    return f;
+}

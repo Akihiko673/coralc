@@ -1,0 +1,236 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct DCEPass
+{
+    ir_types.IrContext* ctx;
+    u64 removed;
+
+    DCEPass new(ir_types.IrContext* ctx)
+    {
+        DCEPass p;
+        p.ctx = ctx;
+        p.removed = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.removed = 0;
+        bool changed = false;
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (self.isDead(inst))
+                {
+                    inst.erase();
+                    self.removed++;
+                    changed = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    u64 removedCount()
+    {
+        return self.removed;
+    }
+
+    bool isDead(ir_types.IrInst* inst)
+    {
+        if (ir_opcodes.irOpcodeIsTerminator(inst.opcode)) return false;
+
+        // side-effecting ops are never dead
+        switch (inst.opcode)
+        {
+        case ir_opcodes.IrOpcode::Store:
+        case ir_opcodes.IrOpcode::Call:
+        case ir_opcodes.IrOpcode::Noret:
+        case ir_opcodes.IrOpcode::AtomicStore:
+        case ir_opcodes.IrOpcode::AtomicRmw:
+        case ir_opcodes.IrOpcode::AtomicCmpXchg:
+        case ir_opcodes.IrOpcode::Fence:
+        case ir_opcodes.IrOpcode::InlineAsm:
+        case ir_opcodes.IrOpcode::GcWriteBarrier:
+        case ir_opcodes.IrOpcode::GcSafepoint:
+        case ir_opcodes.IrOpcode::LandingPad:
+            return false;
+        default:
+            break;
+        }
+
+        if (inst.opcode == ir_opcodes.IrOpcode::Alloca)
+            return inst.base.nusers == 0;
+
+        return inst.base.nusers == 0;
+    }
+}
+
+pub bool irPassDce(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    DCEPass pass = DCEPass::new(ctx);
+    return pass.run(func);
+}
+
+pub struct ADCEPass
+{
+    ir_types.IrContext* ctx;
+    u64 removed;
+
+    ADCEPass new(ir_types.IrContext* ctx)
+    {
+        ADCEPass p;
+        p.ctx = ctx;
+        p.removed = 0;
+        return p;
+    }
+
+    bool isCritical(ir_types.IrInst* inst)
+    {
+        switch (inst.opcode)
+        {
+        case ir_opcodes.IrOpcode::Br:
+        case ir_opcodes.IrOpcode::CondBr:
+        case ir_opcodes.IrOpcode::Ret:
+        case ir_opcodes.IrOpcode::Unreachable:
+        case ir_opcodes.IrOpcode::Noret:
+        case ir_opcodes.IrOpcode::Store:
+        case ir_opcodes.IrOpcode::Call:
+        case ir_opcodes.IrOpcode::AtomicStore:
+        case ir_opcodes.IrOpcode::AtomicRmw:
+        case ir_opcodes.IrOpcode::AtomicCmpXchg:
+        case ir_opcodes.IrOpcode::Fence:
+        case ir_opcodes.IrOpcode::InlineAsm:
+        case ir_opcodes.IrOpcode::GcWriteBarrier:
+        case ir_opcodes.IrOpcode::GcSafepoint:
+        case ir_opcodes.IrOpcode::LandingPad:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.removed = 0;
+
+        u32 totalInsts = 0;
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+            totalInsts += func.blocks[bi].ninsts;
+
+        if (totalInsts == 0) return false;
+
+        ir_types.IrInst** allInsts = mman.alloc<ir_types.IrInst*>(totalInsts);
+        u32 idx = 0;
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+            {
+                allInsts[idx] = bb.insts[ii];
+                bb.insts[ii].base.valData = idx;
+                idx++;
+            }
+        }
+
+        u8* live = mman.alloc<u8>(totalInsts);
+        for (u32 i = 0; i < totalInsts; i++) live[i] = 0;
+
+        for (u32 i = 0; i < totalInsts; i++)
+        {
+            if (self.isCritical(allInsts[i]))
+                live[i] = 1;
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (u32 i = 0; i < totalInsts; i++)
+            {
+                if (!live[i]) continue;
+                ir_types.IrInst* inst = allInsts[i];
+                for (u32 j = 0; j < inst.nops; j++)
+                {
+                    ir_types.IrValue* op = inst.ops[j];
+                    if (!op || op.kind != ir_types.IrValueKind::Inst) continue;
+                    u32 opIdx = (u32)op.valData;
+                    if (!live[opIdx])
+                    {
+                        live[opIdx] = 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                u32 instIdx = (u32)inst.base.valData;
+                if (live[instIdx]) continue;
+                for (u32 ui = 0; ui < inst.base.nusers; ui++)
+                {
+                    ir_types.IrInst* user = inst.base.users[ui];
+                    for (u32 j = 0; j < user.nops; j++)
+                        if (user.ops[j] == &inst.base)
+                            user.ops[j] = null;
+                }
+            }
+        }
+
+        bool anyRemoved = false;
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                u32 instIdx = (u32)inst.base.valData;
+                if (!live[instIdx])
+                {
+                    inst.erase();
+                    self.removed++;
+                    anyRemoved = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+
+        mman.dealloc<ir_types.IrInst*>(allInsts);
+        mman.dealloc<u8>(live);
+
+        return anyRemoved;
+    }
+}
+
+pub bool irPassAdce(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    ADCEPass pass = ADCEPass::new(ctx);
+    return pass.run(func);
+}

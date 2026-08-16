@@ -1,0 +1,210 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod domtree = import("wallvm/domtree.crl");
+mod mman = import("std/memory/mman.crl");
+
+struct ExprTable
+{
+    ir_types.IrInst** insts;
+    u32 count;
+    u32 cap;
+
+    void init()
+    {
+        self.insts = null;
+        self.count = 0;
+        self.cap = 0;
+    }
+
+    void cloneFrom(ExprTable* other)
+    {
+        self.count = other->count;
+        self.cap = other->count;
+        if (self.cap == 0)
+        {
+            self.insts = null;
+            return;
+        }
+        self.insts = mman.alloc<ir_types.IrInst*>(self.cap);
+        for (u32 i = 0; i < self.count; i++)
+            self.insts[i] = other->insts[i];
+    }
+
+    void add(ir_types.IrInst* inst)
+    {
+        if (self.count >= self.cap)
+        {
+            u32 nc = self.cap ? self.cap * 2 : 32;
+            ir_types.IrInst** ni = mman.alloc<ir_types.IrInst*>(nc);
+            for (u32 i = 0; i < self.count; i++)
+                ni[i] = self.insts[i];
+            if (self.insts) mman.dealloc<ir_types.IrInst*>(self.insts);
+            self.insts = ni;
+            self.cap = nc;
+        }
+        self.insts[self.count++] = inst;
+    }
+
+    void free()
+    {
+        if (self.insts) mman.dealloc<ir_types.IrInst*>(self.insts);
+        self.insts = null;
+        self.count = 0;
+        self.cap = 0;
+    }
+}
+
+static bool isCandidate(ir_types.IrInst* inst)
+{
+    switch (inst.opcode)
+    {
+    case ir_opcodes.IrOpcode::Add:
+    case ir_opcodes.IrOpcode::Sub:
+    case ir_opcodes.IrOpcode::Mul:
+    case ir_opcodes.IrOpcode::And:
+    case ir_opcodes.IrOpcode::Or:
+    case ir_opcodes.IrOpcode::Xor:
+    case ir_opcodes.IrOpcode::Shl:
+    case ir_opcodes.IrOpcode::Lshr:
+    case ir_opcodes.IrOpcode::Ashr:
+    case ir_opcodes.IrOpcode::SMin:
+    case ir_opcodes.IrOpcode::SMax:
+    case ir_opcodes.IrOpcode::UMin:
+    case ir_opcodes.IrOpcode::UMax:
+    case ir_opcodes.IrOpcode::ICmp:
+    case ir_opcodes.IrOpcode::FAdd:
+    case ir_opcodes.IrOpcode::FSub:
+    case ir_opcodes.IrOpcode::FMul:
+    case ir_opcodes.IrOpcode::FDiv:
+    case ir_opcodes.IrOpcode::FCmp:
+    case ir_opcodes.IrOpcode::Trunc:
+    case ir_opcodes.IrOpcode::Zext:
+    case ir_opcodes.IrOpcode::Sext:
+    case ir_opcodes.IrOpcode::FpTrunc:
+    case ir_opcodes.IrOpcode::FpExt:
+    case ir_opcodes.IrOpcode::FpToSi:
+    case ir_opcodes.IrOpcode::SiToFp:
+    case ir_opcodes.IrOpcode::FpToUi:
+    case ir_opcodes.IrOpcode::UiToFp:
+    case ir_opcodes.IrOpcode::Bitcast:
+    case ir_opcodes.IrOpcode::Neg:
+    case ir_opcodes.IrOpcode::Not:
+    case ir_opcodes.IrOpcode::Abs:
+    case ir_opcodes.IrOpcode::FAbs:
+    case ir_opcodes.IrOpcode::FSqrt:
+    case ir_opcodes.IrOpcode::CtPop:
+    case ir_opcodes.IrOpcode::CtLz:
+    case ir_opcodes.IrOpcode::CtTz:
+    case ir_opcodes.IrOpcode::Rotl:
+    case ir_opcodes.IrOpcode::Rotr:
+    case ir_opcodes.IrOpcode::Bswap:
+    case ir_opcodes.IrOpcode::Select:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool sameOperands(ir_types.IrInst* a, ir_types.IrInst* b)
+{
+    if (a->nops != b->nops) return false;
+    for (u32 i = 0; i < a->nops; i++)
+        if (a->ops[i] != b->ops[i]) return false;
+    return true;
+}
+
+static bool areEquivalent(ir_types.IrInst* a, ir_types.IrInst* b)
+{
+    if (a->opcode != b->opcode) return false;
+    if (a->base.type != b->base.type) return false;
+    if (a->nops != b->nops) return false;
+    if (a->opcode == ir_opcodes.IrOpcode::ICmp && a->icmpPred != b->icmpPred) return false;
+    if (a->opcode == ir_opcodes.IrOpcode::FCmp && a->fcmpPred != b->fcmpPred) return false;
+
+    if (sameOperands(a, b)) return true;
+
+    if (a->nops == 2 && ir_opcodes.irOpcodeIsCommutative(a->opcode))
+    {
+        if (a->ops[0] == b->ops[1] && a->ops[1] == b->ops[0])
+            return true;
+    }
+
+    return false;
+}
+
+static ir_types.IrInst* findEquivalent(ExprTable* table, ir_types.IrInst* inst)
+{
+    for (u32 i = 0; i < table->count; i++)
+        if (areEquivalent(table->insts[i], inst))
+            return table->insts[i];
+    return null;
+}
+
+static bool processBlock(ir_types.IrBlock* bb, ExprTable* table)
+{
+    bool changed = false;
+    u32 ii = 0;
+    while (ii < bb.ninsts)
+    {
+        ir_types.IrInst* inst = bb.insts[ii];
+        if (!isCandidate(inst))
+        {
+            ii++;
+            continue;
+        }
+
+        ir_types.IrInst* existing = findEquivalent(table, inst);
+        if (existing)
+        {
+            inst.base.replaceAllUses(&existing.base);
+            inst.erase();
+            changed = true;
+            continue;
+        }
+
+        table->add(inst);
+        ii++;
+    }
+    return changed;
+}
+
+static bool processDomSubtree(ir_types.IrFunc* func, domtree.IrDomTree* dt, ir_types.IrBlock* bb, ExprTable* incoming)
+{
+    ExprTable local;
+    local.init();
+    local.cloneFrom(incoming);
+
+    bool changed = processBlock(bb, &local);
+
+    for (u32 i = 0; i < dt->nblocks; i++)
+    {
+        if (dt->blocks[i] == bb) continue;
+        if (dt->idoms[i] == bb)
+        {
+            if (processDomSubtree(func, dt, dt->blocks[i], &local))
+                changed = true;
+        }
+    }
+
+    local.free();
+    return changed;
+}
+
+pub bool irPassGvn(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func || func.nblocks == 0) return false;
+
+    domtree.IrDomTree* dt = domtree.irDomtreeNew(func);
+    if (!dt) return false;
+
+    ExprTable root;
+    root.init();
+    bool changed = processDomSubtree(func, dt, func.blocks[0], &root);
+    root.free();
+
+    domtree.irDomtreeFree(dt);
+    return changed;
+}

@@ -1,0 +1,17 @@
+@[no_warn_unsafe]
+
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod wasm32 = import("wallvm/target/wasm32/wasm32.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub bool irCodegenWasm64(ir_types.IrModule* mod_, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !mod_) return false;
+    wasm32.Wasm32Codegen cg = wasm32.Wasm32Codegen::new(ctx, true);
+    cg.emitModule(mod_);
+    if (cg.outLen == 0) return false;
+    mman.dealloc<char>(cg.out);
+    return true;
+}

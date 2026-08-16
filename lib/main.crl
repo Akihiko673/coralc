@@ -1,0 +1,8 @@
+mod vec = import("std/collections/vec.crl");
+
+i32 main()
+{
+    vec.vec<u64> v = vec.vec<u64>::withCap(4);
+    v.push(10);
+    return v.len;
+}

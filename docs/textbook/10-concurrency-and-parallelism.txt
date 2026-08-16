@@ -1,0 +1,865 @@
+Chapter 10: Concurrency & Parallelism — The Modern Challenge
+
+10.1 The Modern Challenge
+
+For three decades the processor ran faster every year, and the program that was slow today was fast tomorrow, for free. That era is over. The clock stopped climbing around the same time the power envelope did, and the way the industry answered the physics was to stop making one faster core and start putting more cores on the chip. A modern desktop has eight, sixteen, or thirty-two cores. A server has more. The result is a problem the last chapter only touched: the program from the sequential era leaves most of the machine idle. If your program uses one thread, it uses one core, and if your machine has sixteen, fifteen of them are doing nothing you asked them to do.
+
+Think of an office with sixteen desks and one worker who insists on doing everything himself. The worker walks from desk to desk, and the other fifteen sit empty. That is what a single-threaded program does on a multicore machine: it is not slow because the machine is slow; it is slow because it refuses the machine's help. The programs around you already accept the help. The video player decodes video on several cores at once. The photo editor applies filters across all of them. The game console puts work on eight cores so the frame arrives in time. They all do this with the same raw material this chapter teaches.
+
+This is the modern challenge. It is not that concurrency is new — operating systems have run many programs at once since the 1960s. It is that concurrency has moved from the operating system's problem to the programming language's problem. When the machine ran one core, a program that wanted more speed asked the OS for another process, and the price of sharing data between processes was so high that most programs simply did not. Now the cores are inside the same chip, they share the same memory, and the language has to give you a way to use them. Every serious language has answered in its own way: Java and C# give you threads and libraries, Go gives you goroutines and a hidden scheduler, Rust gives you threads and a type system that tries to prove sharing safe, Erlang gives you processes and message passing. Coral's answer is the one the previous chapter prepared you for: the thread is the operating system's thread, the sharing is guarded by the tools the standard library ships, and the correctness is written in your code, where you can see it and check it.
+
+This chapter covers the whole landscape, because the landscape is where the decisions live. It covers the threading models and why Coral chose the one it did, the thread lifecycle and what the operating system does with it, the synchronization tools — the mutex, the read-write lock, the semaphore, the condition variable — and the deadlock that waits for you the moment you hold two locks. It covers the lock-free world of atomics and memory ordering, thread-local storage, and then the two ways threads can talk: shared memory and channels. It covers the parallel patterns — data, task, and pipeline parallelism, fork-join, map-reduce — and the law that sets a ceiling on all of them. And it covers the asynchronous world of event loops, promises, and async/await, which is the other great answer to the modern challenge, and the one whose cost is paid in a currency Coral refuses to fake. By the end you should be able to look at any concurrent program — in Coral or in any other language — and say exactly where the shared state is, what protects it, and what would happen if the protection were removed.
+
+10.2 Concurrency Is Not Parallelism
+
+Before the tools, the distinction that organizes them. Concurrency and parallelism are often used as if they were the same word, and they are not. Concurrency is about dealing with many things at once: several tasks that make progress without waiting for each other, interleaved on the same processor. Parallelism is about doing many things at once: several tasks actually running simultaneously on different processors. A concurrent program can run on one core, with the scheduler switching between tasks so quickly that all of them appear to advance. A parallel program cannot run on one core, because parallel means simultaneous, and one core is one thing at a time.
+
+The supermarket analogy is the one that sticks. Imagine one cashier and two queues of customers. The cashier serves the first customer, then the second, then back to the first — everyone advances a little, and nothing ever truly happens at the same time. That is concurrency: many customers, one cashier, time shared. Now imagine two cashiers with one queue between them: customers split between two registers, truly ringing up two at once. That is parallelism: many customers, two cashiers, time multiplied. A checkout lane can be concurrent without being parallel, and it can be parallel without being concurrent, and the same is true of programs.
+
+The distinction matters because the two goals demand different tools. Concurrency is mostly an organization problem: how do several activities share time without stepping on each other? The answer is the scheduler and the synchronization tools. Parallelism is mostly a resource problem: how do several activities use several cores without interfering? The answer is the hardware and the decomposition of the work. A web server handling a thousand connections is a concurrent program; even on one core it can serve them all, because most of the time each connection is waiting for the network, not computing. A renderer splitting a 4K image across sixteen cores is a parallel program; it does nothing unless the cores are actually there. The title of this chapter yokes the two deliberately, because modern programs need both — the server also runs on sixteen cores, and the renderer also has to wait for disk — and because a language that only gives you one of them is only half a language.
+
+Coral's stance follows from the previous chapters: there is no hidden runtime to hide the difference. The thread you create is a real operating system thread, subject to the operating system's scheduler, and the hardware you have is the hardware your program gets. The language will not pretend that interleaving is parallelism, and it will not pretend that parallelism is free. What it gives you is the honest tools for both, and the knowledge of which one you are doing.
+
+10.3 Threading Models: The Menu
+
+Every language that answers the modern challenge does so by providing threads of some kind: a sequence of instructions that executes independently, alongside other sequences, sharing the program's memory. The models differ in one crucial respect: where the thread lives, and who schedules it.
+
+The operating system thread is the original. The OS kernel creates it, assigns it a stack, and runs it on a core according to the kernel's scheduler. The thread has a cost: kernel objects, a context switch that crosses the privilege boundary, a stack that must be reserved. But it has a property nothing else has: it is real. It is exactly what the hardware runs, and the scheduling it gets is the scheduling the whole machine's scheduler gives everyone.
+
+The green thread is the runtime's answer to the cost. A green thread is a thread implemented in user space, inside the language's runtime, matching many green threads to the fewer OS threads the kernel actually runs. The runtime's scheduler does the switching, often at suspension points the compiler inserts, so the switch is cheaper than a kernel switch. The cost is that the runtime must do everything the kernel does — the scheduling, the stacks, the waiting — and must decide which calls can yield, because a green thread that blocks the OS thread underneath it blocks all the green threads stacked on it.
+
+The goroutine, made famous by Go, is a green thread with a reputation. The scheduler multiplexes goroutines onto kernel threads, migrates them between stacks, and grows those stacks on demand. The model is pleasant for the programmer — spawn a function call, and the runtime figures out where it runs. The honesty required is that the pleasantness is paid for by a runtime that the language itself does not show you: the scheduling, the growth, the migration are behaviors of the hidden machinery, and a program that needs to know precisely where and when its code runs cannot see it.
+
+The coroutine is the smallest of the models. A coroutine is a function that can suspend itself and be resumed later, keeping its state. The coroutine is cooperative: it suspends when it decides to, not when a scheduler preempts it. It is also cheap, because it has no kernel object behind it at all. But a coroutine does not run on another core. It is a way of structuring control flow inside one thread, not a way of using many cores.
+
+The models are not competing implementations of the same thing; they are different answers to different questions. The OS thread answers "how do I use all the cores?", the goroutine answers "how do I get many threads without paying for many OS threads?", and the coroutine answers "how do I write a stateful loop without a state machine?". A language picks one as its public face and usually provides the others at some level, because a serious program ends up needing most of them. Coral's public face is the OS thread, for a reason the next sections develop: the thread is the one model whose cost and behavior the program can know.
+
+10.4 OS Threads in Coral
+
+In Coral, a thread is exactly the operating system's thread. The standard library's concurrent module wraps the platform's own thread interface — pthreads on a Unix system — without adding a layer of its own. The type is a handle: `Thread`, a distinct type over the platform's thread identifier. The operations are the four the platform has always had.
+
+    std.Thread t = std.threadCreate(worker, &arg);
+    std.threadJoin(t, null);
+    std.threadExit(null);
+    std.Thread me = std.threadCurrent();
+
+`threadCreate` takes a function pointer and an argument pointer, starts a new thread running that function with that argument, and returns the handle. `threadJoin` waits for the thread to finish and, if you want it, returns the thread's exit value. `threadExit` ends the calling thread with a value that a joiner can receive. `threadCurrent` identifies the calling thread. That is the whole interface, and it is the whole interface deliberately: the thread is the OS thing, the lifecycle is the OS lifecycle, and the language adds nothing between you and it.
+
+The kind of function a thread runs is the kind this language has had since chapter five: a plain function, `std.any` in and `std.any` out, with arguments passed as a pointer to a struct when they are more than one. The `std.any` is the standard library's carrier for the generic pointer — the raw handle that can point at anything — and it is worth meeting properly because it appears throughout the language's conventions. In `std/misc/any.crl` the library builds it as a struct around a `void*`, exactly one field, so that the handle has a name of its own and a home for its operations: the module's `wrap` helper builds an `std.any` from a raw pointer, the `ptr` method reads the pointer back, `isNull` tests whether it holds null, and the generic `as<T>` method returns the pointer viewed as `T*` — the typed extraction, the cast with the type named in the call. Because `any` is a struct, it is its own type rather than a spelling of `void*`: nothing converts implicitly, nothing is protected, and the program says explicitly when a raw pointer becomes an `any` and when an `any` becomes a typed pointer. The thread function type is `std.any(std.any)`: a function taking anything, returning anything. The threading convention is then the function-pointer convention with a named handle, with nothing new to learn. The cost model is also nothing new. Creating a thread costs what the OS charges to create a thread — the kernel object, the stack, the setup — and the program that creates a thread per tiny task pays exactly that, per task. Nothing is hidden. The thread is a real thing with a real price.
+
+The first threaded program is the parallel sum of an array, and it shows the whole shape at once. The work is divided in half, each half handled by a thread, and the parent joins both and adds:
+
+    struct SumJob
+    {
+        u64* data;
+        u64 n;
+        u64 result;
+    }
+
+    std.any sumWorker(std.any arg)
+    {
+        SumJob* job = arg.as<SumJob>();
+        u64 total = 0;
+        for (u64 i = 0; i < job->n; i++)
+            total += job->data[i];
+        job->result = total;
+        return std.any.wrap(null);
+    }
+
+    u64 parallelSum(u64* data, u64 n)
+    {
+        SumJob a; 
+        a.data = data;     a.n = n / 2;
+        SumJob b; 
+        b.data = data + a.n;
+        b.n = n - a.n;
+
+        std.Thread t1 = std.threadCreate(sumWorker, &a);
+        std.Thread t2 = std.threadCreate(sumWorker, &b);
+
+        sumWorker(&a);          // this thread does half the work too
+        std.threadJoin(t1, null);
+        std.threadJoin(t2, null);
+
+        return a.result + b.result;
+    }
+
+Read the safety of that program carefully, because it is the template every threaded program follows. Each thread writes its own `SumJob` — thread b touches only `b`, thread a only `a`, the parent only its own locals — so there is nothing shared, and no synchronization is needed. The parent reads `a.result` after the `threadJoin` returns, and the join is the guarantee: when `threadJoin` returns, everything the joined thread wrote is visible to the joiner. The join is the "we are done, hand me your answer" moment, and it is the boundary that makes the result safe. If the parent read `a.result` before joining, the read would race the write, and the answer would be whatever arrived first. The pattern — independent writes, then a join, then reads — is the simplest correct use of threads in the language, and it is worth holding onto: the join is the cheapest synchronization there is, because it happens once, at the end.
+
+10.5 Thread Lifecycle
+
+A thread exists in one of a small set of states, and the set is the operating system's, because the thread is the operating system's. The newly created thread has not yet been scheduled; it exists, and it waits for a core. The running thread is on a core, executing instructions. The ready thread has a core's attention to claim and waits for the scheduler to give it one. The blocked thread is waiting for something — a lock, an event, the joiner's completion — and consumes no core while it waits. The terminated thread has finished and survives only for its waiter: the value `threadJoin` returns is the only trace of it, and the resource is gone when the join returns. The states are the states every threading system teaches, and they are visible in Coral as the four calls a program makes: create, which enters the new state, wait, which enters the blocked state from the other side, join, which observes the terminated state, and exit, which produces it.
+
+The knowledge that pays is the knowledge of what a thread does not do. A running thread is preempted by the scheduler whenever the scheduler decides, at any instruction; the program cannot see the preemption, and it must not need to see it, because the correctness rule from the previous chapter covers it: shared memory requires synchronization, and the synchronization does not care about preemption. A blocked thread consumes no core, which is the entire economics of waiting: a thread that waits on a condition variable is nearly free, and a thread that spins on a flag burns a core. The lifecycle teaches the two numbers that matter out of any concurrent design: how many threads are running at once, and how many are blocked waiting on what.
+
+A down-to-earth example puts the states in motion. Consider a program with three threads: a producer preparing data, a worker transforming it, and a reporter printing progress. At any moment, the producer is either running (computing) or blocked (waiting for the consumer to take its output). The worker is either running, blocked on the queue, or — after the producer's last item — terminated and waiting for its join. The reporter runs rarely and is blocked on its timer the rest of the time. Now watch the CPU's core: it is almost always busy with one of the three, and the two blocked threads cost the machine nothing at all. If the reporter instead "waited" by re-reading progress in a tight loop, that one silly thread would consume a whole core doing nothing, and every other thread would slow down to share the rest. That is the lesson with a price tag attached: blocked is free, spinning is expensive, and the condition variable exists so you can afford to block.
+
+10.6 Scheduling and Priorities
+
+The scheduler that moves threads between these states is the operating system's, and Coral does not replace it, wrap it, or pretend it chose it. The scheduler is preemptive: it takes the core away from a running thread at its own discretion, on a timer, and gives it to another. Preemptive scheduling is the reason a thread cannot assume it will run for any length of time, and the reason the synchronization rules from the previous chapter are laws rather than habits. Everything the program needs to be correct works no matter when the swaps happen, because the tools are designed around the swap being arbitrary.
+
+The picture to hold is a dispatcher at a call center: there are more callers than agents, and the dispatcher hands calls to agents, moves callers between queues, and decides who waits. The dispatcher acts on a timer — a caller gets the agent for a slice of time, then the dispatcher may move the agent to another caller, whether the first caller was done or not. The caller cannot control the slice; the caller can only make sure that whatever it was doing could be interrupted safely at any point, which for the caller means "use the tools that make interruption invisible." For a program, that is the whole meaning of preemption: your thread can be paused at any instruction, and the only way to be safe regardless of pause points is the synchronization of this chapter and the last.
+
+Priorities are the scheduler's other dimension. A higher-priority thread is preferred over a lower-priority one both when cores are free and when they are contested. The platform's priority system is the platform's, exposed the same way the rest of the platform is exposed, and the program that needs priorities sets them and then must reason about the hazard that comes with them: priority inversion, where a high-priority thread waits on a lock held by a low-priority one, and the scheduler, following its priorities, keeps the low-priority thread off the core and the high-priority thread blocked, until the system detects the inversion and temporarily raises the low-priority holder. A real and famous case of priority inversion ran on the Mars Pathfinder rover in 1997: a low-priority task holding a shared resource starved two higher-priority tasks, the watchdog kept resetting the spacecraft bus, and the flight team fixed it by boosting the holder's priority — the same fix the textbooks teach, discovered under Martian deadline pressure. It is a reminder of the right attitude to the whole scheduler: the program does not control when it runs, and the program that needs to be correct despite the scheduler uses locks and atomics, not hopes.
+
+10.7 Green Threads and Goroutines
+
+The green thread exists because OS threads cost something. Each OS thread carries a kernel object, a reserved stack — on many systems on the order of eight megabytes of virtual address space — and a context switch that crosses into the kernel and back, on the order of a microsecond. A server that wants a thread per connection, with a hundred thousand connections, cannot afford a hundred thousand OS threads; it would exhaust memory before it exhausted throughput. The green thread answers with a user-space scheduler that multiplexes many lightweight stacks onto a few OS threads, switching at safe points the runtime chooses, at a fraction of the kernel's cost. Where the OS thread starts with a whole reserved stack, the goroutine starts with a few kilobytes and grows on demand, which is where the "millions of goroutines" claims come from.
+
+The trade is what the runtime hides. The green scheduler must decide where a green thread can yield: a call into the operating system that blocks would block the OS thread underneath and, with it, every green thread stacked above it, so the runtime must intercept blocking calls and convert them into yields — or accept the stall. The stacks must be grown and migrated, the scheduling state maintained, the fairness enforced. None of this is visible in the source, and that is exactly the complaint Coral would file: a program that relies on the runtime's invisible decisions has a cost model it cannot read. A goroutine's stack growth is an allocation the program never wrote. A green scheduler's channel handoff is a kernel call the program never sees. The hidden cost is not wrong — it is mostly a fair price for the convenience — but it is a price, and concealing it is a design decision Coral declines.
+
+Coral's position is not that these models are bad. They are good answers for languages whose whole runtime is built around them, and a program written in one should use the tool its language chose. Coral's position is that this language chose otherwise, and it chose otherwise for reasons this chapter's later sections make concrete: the memory model, the cost model, and the accounting that this entire book has been building. The thread is the OS thread, the cost is the OS cost, and the program that uses threads knows what it spends.
+
+10.8 Coroutines
+
+A coroutine is a function that suspends and resumes, preserving its own state across the suspension. It is the smallest concurrency tool, and it is best understood as a way of writing control flow rather than a way of using cores. The generator is the familiar shape of it: a function that yields a value, is suspended until its caller asks for the next one, and resumes exactly where it stopped. The pipeline is the classic use: a stage that reads a value, transforms it, passes it on, and waits — the code reads like a loop, while underneath each stage is suspended and resumed as data flows through.
+
+The practical use cases are the ones where holding a whole thread is too heavy and the work is mostly waiting. An editor's syntax highlighter that re-highlights a buffer as you type, suspending between keystrokes. A script that reads a file line by line, suspending between lines so the UI stays responsive. An input sampler in a game that yields the current input state each frame. In each case the alternative is a state machine — a struct holding "where I was," a switch on that state — and the coroutine is the same state machine with the bookkeeping supplied by the language. That is the honest way to think about coroutines: they are sugar for the struct-and-switch state machine, and the price of the sugar is that the suspension points are invisibly distributed through the function, which makes the code's control flow less obvious, not more.
+
+The coroutine is cooperative, and the cooperative property is its cost. A coroutine suspends only where the code says to suspend, which means no scheduler can preempt it; a coroutine that never suspends takes the processor forever. And a coroutine is single-threaded: it is a way to interleave work on one core, not a way to split work across many. The languages that use coroutines as their whole concurrency model — Kotlin makes them dual-use, modern C++ provides them as a library feature — pair them with something that does the parallel part. Coral's answer is the same pairing, from the other direction: the parallel part is the OS thread, and if a program's work is mostly waiting and mostly structured as stages, the program writes the stages as ordinary functions and lets the language's flow do the rest.
+
+10.9 Why Coral Gives You the OS Thread
+
+The previous sections have been circling a decision, and it is time to state it outright. Coral gives you the OS thread, and a language's concurrency model is a cost model and a memory model at once. The OS thread is the one model where the program can read its own cost: the create and join are visible calls with visible prices, the blocked thread consumes nothing, the running thread consumes a core. The OS thread is also the one model with no hidden runtime below the program: the memory model of the previous chapter — the mutex pair, the data race, the acquire and release — is the actual model of the actual machine, with nothing between the code and the hardware translating its promises.
+
+The cost of the choice is the one the green thread was invented to avoid: threads are not free, and a program that needs enormous numbers of long-lived waiting entities should think hard. The answer Coral offers to that cost is not to hide it but to provide the middle layer explicitly, and it does: the thread pool of section 10.15 is a real standard library type, solving the "I want many tasks but not many threads" problem in code the program can read, using the same primitives the program would have used, no magic between. The choice is the theme of this book in miniature: the machinery is visible, the cost is legible, and the correctness is the writer's, made checkable.
+
+10.10 The Mutex: The First Tool
+
+The previous chapter introduced the mutex as the front line of the memory model, and this chapter starts its survey of synchronization where that one left off. The `Mutex` is a standard library type over the platform's own lock, with four operations — `init`, `lock`, `unlock`, `destroy` — and the locked region between `lock` and `unlock` is the smallest unit of safety. It serializes: one thread at a time, ever. It orders: the memory operations before the `unlock` are seen by the thread after the corresponding `lock`, which is the acquire/release pair the previous chapter's memory model was built on. And it is honest: a forgotten `lock` is a racing access that no tool inside the language can catch at compile time, exactly as a forgotten `dealloc` is a leak that no tool can catch at compile time. The mutex's power comes from the discipline of making every access go through it, and the discipline is written in code the reader can check.
+
+The easiest way to feel why the mutex exists is to break it. Here is a program that should count to 200,000 — and will not, if the lock is removed:
+
+    u64 counter;
+    std.Mutex lock;
+
+    std.any bumper(std.any arg)
+    {
+        for (u64 i = 0; i < 100000; i++)
+        {
+            lock.lock();
+            counter++;
+            lock.unlock();
+        }
+        return std.any.wrap(null);
+    }
+
+    void runIt()
+    {
+        lock.init();
+        std.Thread a = std.threadCreate(bumper, null);
+        std.Thread b = std.threadCreate(bumper, null);
+        std.threadJoin(a, null);
+        std.threadJoin(b, null);
+        std.print("counter is ", counter, "\n");
+        lock.destroy();
+    }
+
+With the lock, the program prints 200000, every time. Without the two lock lines, it prints something smaller, different on every run — 173412 one run, 189005 the next. Now try to predict which run, and you have met the race. The reason is the shape of the increment: `counter++` is really three operations — read the value, add one, write it back — and two threads can interleave them as read-read-add-write-write, both writing the same result, losing one increment. The race is not about speed or luck in the abstract; it is this concrete loss of work, and the lock's job is to make the three operations indivisible from each other's view. That is the whole mutex: the single-lane bridge over the river, where two cars cannot pass at the same time, and the toll is the delay.
+
+The shadows of the mutex deserve the same paragraphs every concurrency text gives them. A lock held too long serializes more than it protects: the locked region is the part of the program that cannot overlap, so the region should be as small as the correctness allows. A lock held across a blocking call is a stopped world: every other thread wanting the lock waits on the blocking. And the lock's guarantee is only about memory in the locked region: a value read outside the lock, while another thread writes it inside, is a race regardless of how carefully the locked region is written. The rule that organizes all of it: the lock is a pair of lines, and for every shared value, the program must be able to say which pair of lines guards it.
+
+10.11 The Read-Write Lock
+
+The read-write lock is the mutex with the readers unburdened. The insight is that most shared data is read far more often than it is written, and reads do not conflict with reads: two threads reading the same value at the same time is safe, because neither changes anything. The `rwlock` allows any number of readers to hold it at once, and only one writer, alone. Its interface is the honest reflection of that asymmetry: `readLock` and `unlock` for the readers, `writeLock` and `unlock` for the writer, and `tryReadLock` and `tryWriteLock` for the callers that must not block.
+
+The classic use case is the configuration cache: a server that keeps its settings in a struct, read by every request thread on every request, updated by an administrator a few times a day. Without concurrency thinking, the code is two functions over a global:
+
+    std.rwlock configLock;
+    Config config;
+
+    void readConfig(Config* out)
+    {
+        configLock.readLock();
+        *out = config;
+        configLock.unlock();
+    }
+
+    void updateConfig(Config* next)
+    {
+        configLock.writeLock();
+        config = *next;
+        configLock.unlock();
+    }
+
+The request threads call `readConfig`; the admin thread calls `updateConfig`. Hundreds of readers pass through the read lock at once — a request never waits for another request. The one writer, rare, pauses them all for the instant of the assignment. The same structure appears wherever the read/write ratio is lopsided: a dictionary of active sessions in a web server, a page cache in an operating system, a symbol table in a compiler backend being consulted constantly and rebuilt rarely.
+
+The payoff is real for read-mostly data: readers proceed in parallel, and the throughput of the read path does not collapse to one-at-a-time. The cost is real too, and it is the cost of all asymmetry. The read-write lock is more expensive to acquire than a plain mutex, because the state it manages is more complex than a binary held/not-held. Writers can starve under a stream of readers, if the implementation lets a steady arrival of readers keep the writer waiting forever. And the worst failure mode of the read-write lock is the unread: a program that holds the read lock and writes anyway has turned the whole apparatus into a placebo, with the syntax of safety and none of the effect. The read-write lock is a tool for the case that justifies it — reads dominant, writes rare, and the reader code honest — and a wrong choice everywhere else, where the plain mutex is cheaper and simpler.
+
+10.12 The Semaphore
+
+The semaphore is the counter that coordinates. Where the mutex is a gate that lets one through, the semaphore is a gate that lets a fixed number through: it starts with a count, `wait` decrements it and blocks if it is zero, `post` increments it and wakes a waiter. The standard library's `semaphore` exposes the platform's own counting semaphore with `init(value)`, `wait`, `post`, the non-blocking `tryWait`, and `value` to read the count.
+
+The two uses organize the pattern library. The counting semaphore is a resource limiter: a pool of four database connections, shared by eighty threads, where any thread may borrow one but never more than four exist: 
+
+    std.semaphore connections;
+    connections.init(4);
+
+    void fetchPage(const char* url)
+    {
+        connections.wait();
+        defer connections.post();
+
+        openConnection(url);
+        readAndClose(url);
+    }
+
+The `wait` takes a slot; the `defer` returns it when the function leaves, by any path — the semaphore's guarantee is "never more than four connections open, whatever happens in between." Change the initial value to put a ceiling on anything: ten concurrent downloads, eight workers doing a heavy computation, three printers shared by a print server, one `init(1)` for a gate that turns into a turnstile. The semaphore is the tool for "at most N of these at once," and the count is the number you can read in the code.
+
+The second use is the binary semaphore as a signal: `init(0)`, one thread `wait`s, another `post`s, and the waiting thread wakes when the posting thread decides. That is a rendezvous in one line. But the binary semaphore is almost a mutex, and the almost is a warning: the mutex has an owner, and an owner's unlock is guarded by the ownership; the semaphore has no owner, and any thread's `post` can release another thread's `wait`. That distinction is the whole difference between the mutual-exclusion guarantee and a coordination count. Use the semaphore to limit and to signal, and use the mutex to own.
+
+10.13 The Condition Variable: Waiting on a Predicate
+
+The condition variable is the tool for waiting on a predicate, and it answers the question the semaphore cannot: "how does a thread wait for a condition — work available, space free, state changed — without burning a core and without polling?" The answer's shape is a nap with a wake-up alarm. The waiting thread says "I need this condition; wake me when it might be true," and the waking thread says "the condition may now be true; someone check it." The `ConditionVar` provides `wait`, `signal`, and `broadcast`: `wait` releases the mutex and blocks the thread; `signal` wakes one waiter; `broadcast` wakes all of them. Every `wait` must be paired with a mutex, and the protocol is rigid — rigid because the wake-up is a suggestion, not a guarantee.
+
+Three hazards make the protocol rigid, and each has a name. The *lost wakeup*: a thread checks the condition, finds it false, and is about to sleep — when the producer produces and signals, and the signal finds nobody to wake, and the thread sleeps forever, having missed the one event it waited for. The fix is the protocol's core: check and sleep must be one indivisible step, which is why `wait` takes the mutex, releases it atomically while sleeping, and re-acquires it when woken. The *spurious wakeup*: the platform may wake a waiter for its own reasons, entirely without a signal, so the woken thread cannot assume the condition held; it must check again. The *stale predicate*: multiple threads wait on the same condition, one signal arrives, and some other waiter takes the resource — the woken thread must check whether anything is actually left. All three have the same medicine: the wait is inside a `while` loop that re-checks the condition, never an `if`.
+
+    self.mutex.lock();
+    while (self.items == 0 && !self.closed)
+        self.cond.wait(&self.mutex);
+    ...
+    self.mutex.unlock();
+
+That is the canonical wait, and the `while` is not a style choice; it is the contract. The next section shows the canonical wait doing its job, in a complete program.
+
+10.14 The Producer and the Consumer: A Complete Exchange
+
+The producer-consumer queue is the "hello world" of condition variables: one thread produces items, another consumes them, and between them sits a fixed-size buffer that never overflows and never loses an item. It is also the engine that the rest of the chapter's tools — the thread pool, the channel, the actor — are built on, so it is worth building once, completely, out of the primitives: a ring buffer of `u64`s, a mutex, and two condition variables, one for "an item is ready" and one for "room is free."
+
+    pub struct BoundedQueue
+    {
+        std.Mutex mutex;
+        std.ConditionVar itemReady;
+        std.ConditionVar roomFree;
+        u64* items;
+        u64 cap;
+        u64 head;
+        u64 count;
+        bool closed;
+
+        bool init(u64 capacity)
+        {
+            self.items = std.mman.alloc<u64>(capacity);
+            if (self.items == null) return false;
+            self.mutex.init();
+            self.itemReady.init();
+            self.roomFree.init();
+            self.cap = capacity;
+            self.head = 0;
+            self.count = 0;
+            self.closed = false;
+            return true;
+        }
+
+        void destroy()
+        {
+            self.mutex.destroy();
+            self.itemReady.destroy();
+            self.roomFree.destroy();
+            std.mman.dealloc<u64>(self.items);
+        }
+
+        void push(u64 v)
+        {
+            self.mutex.lock();
+            while (self.count == self.cap && !self.closed)
+                self.roomFree.wait(&self.mutex);
+            if (self.closed) { self.mutex.unlock(); return; }
+
+            self.items[(self.head + self.count) % self.cap] = v;
+            self.count++;
+            self.itemReady.signal();
+            self.mutex.unlock();
+        }
+
+        bool pop(u64* out)
+        {
+            self.mutex.lock();
+            while (self.count == 0 && !self.closed)
+                self.itemReady.wait(&self.mutex);
+            if (self.count == 0) { self.mutex.unlock(); return false; }
+
+            *out = self.items[self.head];
+            self.head = (self.head + 1) % self.cap;
+            self.count--;
+            self.roomFree.signal();
+            self.mutex.unlock();
+            return true;
+        }
+
+        void close()
+        {
+            self.mutex.lock();
+            self.closed = true;
+            self.itemReady.broadcast();
+            self.roomFree.broadcast();
+            self.mutex.unlock();
+        }
+    }
+
+Read it the way a reviewer would, because this is the program that correctness lives or dies in. Every access to `items`, `count`, `head`, `closed` happens under the mutex; there is no line that touches the state outside the locked region, and a review can check that line by line. Each wait is a `while`, rechecking its predicate after every wakeup, because the platform can wake a thread for its own reasons and another thread may have taken the thing it waited for. The `push` signals `itemReady` after adding — one waiter, one wake — and the `pop` signals `roomFree` after removing, so a blocked producer hears the moment a slot opens. The ring arithmetic `(head + count) % cap` is the whole buffer discipline: the item at `head` is the oldest, the count is how many are live, and the modulo keeps the indices in range without ever moving an item. And the `close` — the poison pill, the shutdown — broadcasts to both conditions, so every thread blocked in either wait wakes, sees `closed`, and leaves. A producer that pushes after the close is dropped silently; a consumer finds `count == 0` and returns false; no thread is left asleep forever.
+
+The program that uses it is the pattern in motion — a producer thread pushing one hundred values, a consumer thread taking them:
+
+    std.any producerMain(std.any arg)
+    {
+        BoundedQueue* q = arg.as<BoundedQueue>();
+        for (u64 i = 1; i <= 100; i++)
+            q->push(i);
+        q->close();
+        return std.any.wrap(null);
+    }
+
+    std.any consumerMain(std.any arg)
+    {
+        BoundedQueue* q = arg.as<BoundedQueue>();
+        u64 v;
+        u64 total = 0;
+        while (q->pop(&v)) total += v;
+        std.print("sum is ", total, "\n");
+        return std.any.wrap(null);
+    }
+
+    void runExchange()
+    {
+        BoundedQueue q;
+        q.init(16);
+
+        std.Thread producer = std.threadCreate(producerMain, &q);
+        std.Thread consumer = std.threadCreate(consumerMain, &q);
+
+        std.threadJoin(producer, null);
+        std.threadJoin(consumer, null);
+        q.destroy();
+    }
+
+The buffer holds 16; the producer pushes 100; the queue never drops, never overflows, and the sum always comes out 5050 — because the producer blocks when the buffer is full, and the consumer wakes it. That blocking *is* backpressure: the fast side waits for the slow side, instead of the memory growing until the machine dies. And notice the consumer's loop ends on `false`: the close broadcast woke it, `count` was zero, and `pop` returned false. The join is not even the synchronization here — the queue itself was. This single program is the seed of the thread pool, the channel, and the actor of the sections ahead; everything that follows is this exchange wearing different clothes.
+
+10.15 The Thread Pool
+
+The thread pool exists because thread creation is expensive and thread count is a resource. Creating a thread per task spends the setup cost per task; running a hundred threads against sixteen cores spends the contention the cores cannot absorb. The pool is the middle: a fixed number of threads, created once, and a queue of tasks they drain — the BoundedQueue of the previous section with the tasks as the items and the workers as the consumers, which is exactly what the standard library's `threadpool` is. The standard library's version uses the mutex guarding the queue, the condition variable waking the workers, and a stop flag for shutdown, and its interface is the sensible three: `init(numThreads)`, `enqueue(func, arg)`, and `deinit`.
+
+The worker loop is the previous section's consumer loop, generalized:
+
+    void _worker()
+    {
+        for (;;)
+        {
+            self.mutex.lock();
+            while (self.queueHead == null && !self.stop)
+                self.cond.wait(&self.mutex);
+
+            if (self.stop && self.queueHead == null)
+            {
+                self.mutex.unlock();
+                return;
+            }
+
+            Task* t = self.queueHead;
+            self.queueHead = t->next;
+            if (self.queueHead == null) self.queueTail = null;
+            self.mutex.unlock();
+
+            t->func(t->arg);
+        }
+    }
+
+This is the real worker loop from the standard library's thread pool. The `wait` is inside a `while`, for the reasons of the previous two sections. The stop flag has its own waking discipline: `deinit` sets `stop` under the lock and broadcasts, so a worker sleeping in the wait wakes, re-checks the `while` predicate, and this time the predicate fails — `stop` is true — and the loop exits through the second check, after draining whatever tasks were still queued. A task enqueued just before the stop is either run or freed, never stranded, and never leaked. The pool is the pattern of the previous section in production form, and its economics are worth stating exactly: it replaces `threadCreate` per task with one `threadCreate` per worker, and the per-task cost becomes the cost of a queue push and a signal. The concurrency is bounded — with eight workers, at most eight tasks run at once, and the machine's cores set the efficient bound.
+
+The pool's everyday use cases are the ones that involve many small pieces of work: a batch image converter turning a directory of photos, a compiler backend lowering a function per task, a web server handing a request to a worker instead of creating a thread per connection, a build system compiling a file per task across eight workers. The shape of use is always the same three calls:
+
+    std.threadpool pool;
+    if (!pool.init(8)) return;
+    pool.enqueue(renderChunk, &chunk0);
+    pool.enqueue(renderChunk, &chunk1);
+    pool.enqueue(renderChunk, &chunk2);
+    pool.deinit();
+
+The `deinit` is the join of the previous section — it waits for every task before returning, which is the property the word counter at the end of the chapter leans on. The pool is Coral's honest middle ground, and it is the answer the language gives to the goroutine's question: many tasks, few threads, no hidden scheduler, the whole mechanism in code you can read.
+
+10.16 Deadlock
+
+Deadlock is the failure mode that needs no bad luck, only four conditions at once. The four are named after Coffman, and they are the textbook's most transferable paragraph. A deadlock needs mutual exclusion — resources no thread can share, the locks. It needs hold-and-wait — a thread holding a resource while waiting for another. It needs no preemption — the resources are not taken away from a holder. And it needs a circular wait — a cycle of threads, each holding what the next one wants. When all four hold, the set of threads is stuck forever, and no scheduler can help, because none of the threads is waiting on the scheduler; each waits on a thread that waits on it.
+
+The example that makes it real is money. A bank transfer between two accounts touches two accounts, and a careful implementation locks both — the account being debited and the account being credited:
+
+    void transfer(Account* from, Account* to, u64 amount)
+    {
+        from->lock.lock();
+        to->lock.lock();
+
+        from->balance -= amount;
+        to->balance += amount;
+
+        to->lock.unlock();
+        from->lock.unlock();
+    }
+
+Now two tellers run this at once: Alice moves 10 from account X to account Y, while Bob moves 10 from Y to X. Alice locks X and wants Y; Bob locks Y and wants X. Both hold, both wait, and the bank freezes mid-transfer, the money in neither account, forever. The four conditions all hold: the accounts' locks are exclusive, both threads hold one lock while wanting the other, nothing takes a lock away, and the cycle X→Y→X closes. The famous version of the story is the dining philosophers: five philosophers, five forks, each holding the fork at his left hand and waiting for the fork at his right — one cycle, five deaths by conceptual starvation, and the classic picture every concurrency course hangs on the wall.
+
+The remedies map onto the conditions. Prevention breaks one of the four conditions, usually by lock ordering: give every lock a total order, and take locks only in that order, and the circular wait becomes impossible — the transfer takes the account with the smaller account number first, say, and the X-then-Y and Y-then-X calls both resolve to the same order, and the cycle cannot form. Detection watches the wait-for graph and acts when a cycle appears, a strategy for systems that can recover. Avoidance is the subtlest, the Banker's algorithm: before granting a resource, the system simulates the worst case — every holder demands everything it might — and refuses grants that could lead to a state from which no schedule can complete. The Banker is a loan officer: lend only so much that some order of repayments always exists. These are the three strategies, and the one that costs nothing at runtime is the one that lives in the code: order the locks. Coral's contribution to the lesson is the same as its contribution to everything: no annotations, no automatic detection, no runtime heroics. The deadlock is prevented by the order the program writes, and the discipline is checkable in a review.
+
+10.17 Lock-Free Programming: The Atomics
+
+The mutex is the general tool, and the atomics are the one-word tool, and for a single shared word the atomics are sometimes all a program needs. The standard library ships `AtomicU64` and `AtomicU32`, each wrapping exactly one value, with the operations the hardware itself provides: `load` and `store`, the atomic `fetchAdd` and `fetchSub` that both read and update in one indivisible step, and `compareExchange`, the test-and-swap that writes a new value only if the current one matches an expected value, reporting whether it did. These are not simulated operations; on x86_64 they are the `lock xadd` and `lock cmpxchg` machine instructions, and on aarch64 the `ldar`, `stlr`, `ldaxr`, `stlxr` acquire-release pair — the platform's own primitives, written inline, per architecture, in the standard library.
+
+The everyday use cases for atomics share one shape: a counter that many threads update and the program must not lose updates on. The progress bar of a parallel build — each finished task calls `fetchAdd(1)`, and the UI thread reads `load()` — is the shape. The unique-identifier generator — every new object takes the next ticket number — is the shape:
+
+    std.AtomicU64 ticket;
+
+    u64 nextTicket()
+    {
+        return ticket.fetchAdd(1);
+    }
+
+Two threads call `nextTicket` at the same instant, and they receive two different numbers, each of which will never be handed out again. A mutex would do the same job, and the difference is not correctness but cost: the fetch-add is one machine instruction, no kernel, no waiting, at a price the lock cannot match — and the price is the reason the word-sized counter is the atomic's home turf.
+
+    std.AtomicU64 counter;
+
+    void bump()
+    {
+        counter.fetchAdd(1);
+    }
+
+The term lock-free means something precise: at least one thread is always making progress, no thread can be blocked indefinitely by another's scheduling, because there is nothing to block on. The price of the guarantee is the discipline at the call site: the atomic protects one word, and only one word, and the program that wraps a whole structure in atomics has stepped outside the tools' promise. The mutex protects a region; the atomic protects a cell. They are different sizes of tool, and the memory-ordering story they share is the next section.
+
+10.18 Memory Ordering and the Atomic Contract
+
+The atomics work because the hardware memory model has rules, and the rules are the same ones the previous chapter's mutex used. A processor does not read and write memory in the order the program wrote; the hardware reorders, speculates, and buffers, so long as no single thread can observe the difference. The rules appear when threads observe each other's writes, and the vocabulary is the standard one. *Sequential consistency* is the strongest rule: the program behaves as if all threads' operations were interleaved in some single global order. *Acquire* orders the operations before it with the associated operation: an acquire load that reads a value guarantees that everything after it sees everything the writer published before the release store. *Release* is the mirror: a release store guarantees that everything before it is visible to whoever acquires the value. The release publishes, the acquire subscribes, and between the two — the same pair the previous chapter's mutex was built on — data moves across the thread boundary intact.
+
+The concrete shape is the handoff: one thread prepares data and flags it ready; another waits for the flag and reads the data. The classic example:
+
+    struct Shard
+    {
+        std.AtomicU64 ready;
+        u64 data[1024];
+    }
+
+    std.any producer(std.any arg)
+    {
+        Shard* s = arg.as<Shard>();
+        for (u64 i = 0; i < 1024; i++) s->data[i] = i * i;
+        s->ready.store(1);
+        return std.any.wrap(null);
+    }
+
+    std.any consumer(std.any arg)
+    {
+        Shard* s = arg.as<Shard>();
+        while (s->ready.load() == 0) { }
+        u64 checksum = 0;
+        for (u64 i = 0; i < 1024; i++) checksum += s->data[i];
+        return std.any.wrap((void*)checksum);
+    }
+
+The consumer's `while` loop is a busy-wait, and the text will not pretend it is good style — real programs use the join or the condition variable of the earlier sections, and the busy-wait is a teaching scaffold, or a last-resort wait that must be short. What the example proves is ordering. The producer wrote 1024 values and then `store(1)`. The consumer that sees `load() == 1` is guaranteed to see all 1024 values — the store released the writes, the load acquired them, and the publish-subscribe pair moved the data intact. If `ready` were an ordinary `u64`, this program could read half-written data on a weakly-ordered machine, no matter how "obviously" the flag comes last. It is the same guarantee the mutex gave in the previous chapter, restated for the word-sized tool.
+
+The standard library's atomics compile to the strong end of the spectrum. The `load` and `store` on x86 carry the fences, and the aarch64 forms use the acquire-release ldar/stlr instructions by construction; the compare-exchange uses the locked compare-swap on x86 and the load-exclusive/store-exclusive loop on aarch64. Coral does not yet offer the whole menu of orderings — the relaxed and the one-way — and the omission is a stance rather than a gap: the weak orderings are where the deepest bugs live, and the tools the language ships are the ones whose intuitions match the mutex pair the program already knows. The contract, then, is the one from the previous chapter, restated for the word-sized case: a shared value is read and written through the atomic, the atomic's operations are ordered by the platform's acquire-release semantics, and the program that reads the value without the atomic while another thread writes it with one has a race, with all the horror the previous chapter gave that word. The atomic is not a mutex you can forget; it is a mutex for one word.
+
+10.19 The ABA Problem
+
+The compare-exchange is the read-modify-write built into one instruction, and the instruction has a shadow that every lock-free algorithm eventually meets. The pattern is the classic one: load a value, compute a new value from what was loaded, compare-exchange the new value in, and if the exchange fails because the value changed, load again and retry. The shadow is that the value can change and change back. Thread A loads the value 1, plans to store 2. Thread B changes the cell to 5 and back to 1, exactly the value A loaded; A's compare-exchange succeeds, on the false belief that nothing changed in between. The cell holds the same bits and a different world.
+
+The concrete story is the free-list, the lock-free data structure everyone meets first. A stack built without locks pops a node: load the head pointer, plan to make the head the node's next, compare-exchange. Thread A loads head = node P. Thread B pops P and pushes it back — or pops P, frees it, and a new allocation reuses the same address for node Q — and the head is P again, bit for bit. A's compare-exchange succeeds, and the stack's head is now Q's next, not P's next, and there was never P's next to point at. The address looked unchanged; the world had changed; the stack is corrupt. This is the ABA problem, named for the three states of its bit pattern: A, B, A.
+
+The standard fixes have standard names: tag the value with a counter that the free path increments, so removal-and-reallocation changes the tag even when the pointer matches; or delay reuse until no thread can hold the old reference, the hazard-pointer and epoch-reclamation families. The lesson for this chapter is the one the atomic section already pushed, from a sharper angle: the compare-exchange is a powerful primitive and a narrow promise. It promises "this cell is this value, now." It does not promise "the world is as you left it." The lock-free structure's difficulty is not the instructions; it is the stories the instructions cannot hear, and the reason the standard library and this book both point the pointer-heavy concurrent structures at the mutex — the lock makes the load, the check, and the retry one indivisible region, and the region is where the story stays told.
+
+10.20 Thread-Local Storage
+
+Thread-local storage is the memory model's loophole, deliberately. A thread-local variable is a global in everything except the sharing: each thread sees its own private copy, and no thread can race on another thread's copy, because no thread can see it. The platform has the mechanism built in — the pointer to a thread's descriptor block, the slot indexed by the compiler's relocation — and languages expose it as a keyword or a wrapper. The connective tissue is performance: the thread-local is how an allocator keeps per-thread caches without a global lock, how a logger keeps per-thread buffers without contention, how a random generator keeps per-thread state without sharing. The thread-local is the lock that would never be contended, sold as a variable.
+
+The most famous thread-local in existence is `errno`, the C library's error code, and its story is the model's elevator pitch. Old versions of the C library kept the error in a single global: thread A fails a call and sets it; thread B succeeds a moment later and clears it; A checks the error and blames itself for B's. The modern library keeps one `errno` per thread, and each thread's error reporting is its own business. The same pattern serves the per-thread random generator — each thread advances its own state, no lock needed, reproducibility per thread intact — and the per-thread allocator cache — a thread's freed blocks go into its own list, and only the rare cross-thread free touches the global. In every case the alternative is a mutex held on every use, and the thread-local is the contempt-free shortcut.
+
+Coral's position on thread-local storage is the position it held on the other hidden machinery, and it amounts to a design review rather than a refusal: the thread-local is a piece of implicit state. The value lives in memory the calling code never named, is initialized by machinery the calling code never wrote, and belongs to a thread that is not visible from the spelling. In a language whose whole memory discipline is visibility — stack values die with their block, heap values are released where the code says, ownership is a shape — the thread-local is a quiet exception to every rule the discipline made. The alternative that fits the language is the one the pool and the context struct already use: pass the state explicitly. The worker gets its per-thread scratch as part of its argument, the allocator holds its per-thread cache in the context it manages, and the program that reads the code sees the state, the ownership, and the lifetime. Not because the thread-local is forbidden — it is a platform capability, and low-level code has its palm out for it — but because the explicit form is checkable, and this language's whole argument is that the checkable form is the one you want.
+
+10.21 Communication: The Two Worlds
+
+Threads that share memory and threads that pass messages are the two architectures the rest of the chapter organizes, and the distinction is worth a section of its own because it is spiritual, not just mechanical. Shared memory is the model the previous sections built: the threads inhabit one address space, the shared value sits in it, and the synchronization — mutex, atomic, condition — governs access. The strength is speed and directness: the data is where the code is, the access is a load or a store, and the synchronization tools are the whole apparatus. The weakness is the pairing: every shared value needs its guard, every guard needs its discipline, and the correctness of large shared systems is the audit of who touched what under which lock. Message passing is the other world: the threads do not share; they send and receive, and the data moves across the boundary in whole messages. The strength is the boundary itself: a thread's state is its own, the only contact is the message protocol, and a thread that cannot reach another thread's state cannot corrupt it. The weakness is the cost of the boundary: the message must be copied or ownership transferred, the protocol must be designed, and the direct load becomes a round trip.
+
+Two real systems make the difference concrete. A game engine: the render thread and the physics thread share the world state, the physics thread updates it at a fixed rate, the render thread reads it at the frame rate, and a mutex guards the exchange — shared memory, chosen because the state is huge and copying it sixty times a second would waste it. A chat server: a hundred connections, each owned by its handler thread, and the handlers never touch each other's state — they send messages with the user's name and text, and the only shared thing is the exchange channel — message passing, chosen because the data is small and the isolation is worth more than the copy. The two architectures are not a matter of taste; they are a matter of where the boundary pays for itself, which is exactly the question the next sections quantify.
+
+10.22 The Channel: Bounded, Unbounded, Synchronous
+
+The channel is message passing's tool, and its semantics come in three flavors with three different feelings. The *bounded* channel holds a fixed number of messages; a send on a full channel blocks until there is room, and the blocking is the backpressure that makes the producer wait instead of the memory grow. The *unbounded* channel never blocks the sender; the price is that nothing slows the producer down, and under a slow receiver the memory grows without limit. The *synchronous* channel is the bounded channel of size zero: the send is a rendezvous that blocks until the receiver takes the message, and producer and receiver meet in time — useful when the message's whole purpose is the meeting itself, the handshake between two threads that must not drift apart.
+
+Coral does not ship a channel type, because a channel is a pattern, and the pattern was already built in section 10.14 — the BoundedQueue is a channel: the buffer's capacity is the bound, the `push` is the send that blocks when full, the `pop` is the receive that blocks when empty, and every line of its protocol was reviewed there. The three flavors are then three policy choices over the same engine. Set the capacity to sixteen, and you have the bounded channel with backpressure: a video encoder's frame queue that cannot grow past sixteen frames, however fast the capture side runs. Set the capacity to the whole heap and never close, and you have the unbounded channel: a logging pipeline where a log burst must never block the application, and the memory is the price of the burst — a price the program chose. Gravel the capacity to zero, and you have the rendezvous: two threads that meet each other, the handoff between a worker and its supervisor where the neither-of-us-moved-on property is the point.
+
+    BoundedQueue frames;      // capacity 16, bounded
+    frames.init(16);
+
+    // capture side
+    frames.push(frame);        // blocks when 16 frames are queued
+
+    // encode side
+    frames.pop(&f);             // blocks when empty
+
+The use cases for channels are the cases where the boundary is a flow: the frame queue between a camera and an encoder, the request queue between a network listener and the workers, the event queue between the UI and the game logic. The channel's discipline is the boundary's law: the sender knows only the queue, the receiver knows only the queue, and neither knows the other's state — which is precisely why the two can be changed independently, why the producer can be replaced without touching the consumer, and why a reviewer can read the whole conversation from the one type.
+
+10.23 The Actor Model
+
+The actor model is the message-passing world made into a discipline, and its shape is the Erlang shape, still the clearest explanation of why the model exists. An actor is a self-contained entity: state that belongs to it alone, a mailbox that receives messages, and a behavior that processes them one at a time. Actors do not call each other; they send, and the send is asynchronous, and the mailbox is the only contact. The consequences are the model's selling points. There is no shared state to guard, because there is no shared state: the actor's data is behind its mailbox, and the mutex's whole problem class simply does not arise. An actor can be paused, restarted, or moved wholesale, because its state is its own.
+
+The honest Coral translation treats the actor as a pattern over the tools built earlier in this chapter: a struct holding the actor's state, a queue under a mutex as the mailbox — the BoundedQueue of 10.14, exactly — and a worker thread running the message loop. The smallest real actor is the counter that cannot race, because only one thread ever touches its state:
+
+    pub struct CounterActor
+    {
+        BoundedQueue mailbox;
+        std.Thread thread;
+        u64 value;
+    }
+
+    std.any counterMain(std.any arg)
+    {
+        CounterActor* a = arg.as<CounterActor>();
+        u64 msg;
+        while (a->mailbox.pop(&msg))
+        {
+            if (msg == 0) break;          // the stop message
+            a->value += msg;
+        }
+        return std.any.wrap(null);
+    }
+
+    void spawnCounter(CounterActor* a)
+    {
+        a->mailbox.init(32);
+        a->thread = std.threadCreate(counterMain, a);
+    }
+
+Anything that wants to add to the counter sends the amount through the mailbox; nobody ever touches `a->value` except the actor's own thread. No locks around `value`, no race to audit, because the mailbox is the only door and the door is single-file. The messages here are plain `u64`s with a convention for stop; a real actor carries struct pointers or tagged unions through the same door, and the door's job is unchanged.
+
+A *supervision tree* is the model's answer to failure, and it is worth translating because it is the model's deep idea. In Erlang, actors form a hierarchy: a parent actor supervises its children, and a crashed child is restarted by its parent — the tree contains the crash instead of propagating it. In Coral's vocabulary this is the previous chapter's ownership and `defer` applied at the process shape: the supervisor owns the child's resources, and when the child's thread exits — crashed or finished — the supervisor's join returns, the supervisor's code decides what the exit meant, and the restart is a fresh `threadCreate` with fresh state, its memory accounted for by the supervisor's own discipline. The actor model's gift is not a new primitive; it is a boundary. The mailbox is the one place ownership crosses, and a program organized around the boundary has less to audit, because there is only one door.
+
+10.24 Shared Memory vs. Message Passing: The Tradeoffs
+
+The two worlds have been presented, and the choice between them deserves the honest ledger. Shared memory wins on speed and directness: the access is a load, the correspondence between the code and the machine state is one-to-one, and the tools for guarding it are the small set this chapter has covered. It loses on auditability: the larger the shared system, the harder it is to see the whole protection story, and the failure modes — the forgotten lock, the wrong lock, the value read outside the lock — are the quiet ones that reproduce only under load. Message passing wins on isolation: the boundary is in the type of the message and the shape of the mailbox, the state behind the boundary is untouched by definition, and the failure modes are the loud ones — a message of the wrong shape, a mailbox that overflows. It loses on movement: the message is a copy or a handoff, and the copy is a cost the shared load never pays.
+
+The decision rule that falls out of the honest ledger is not ideological. Where the data is small and the boundary is clean, pass the message and sleep at night — the chat message, the task description, the frame *reference* if the frame is too big to copy, with ownership handed across the door. Where the data is large and the access is frequent, share it under a mutex and make the guard part of the structure — the physics world, the configuration struct, the symbol table. Where the boundary is between administrative domains — a worker pool and its manager, a server and its clients — the message is the natural shape, and the mutex that would guard shared state between them is a design smell. Neither model is the "right" one, and the skill the chapter is teaching is reading which part of a program is which, and choosing the tool that matches — and being ready to move a boundary when the traffic profile changes, which is the point of keeping the boundary visible.
+
+10.25 Data Parallelism
+
+The parallel patterns are the answer to the parallel question: given the cores, how is the work divided? The first answer is data parallelism: the same operation applied to many elements, and the elements divided among the cores. The shape is the array op — the pixel transformation, the matrix element, the waveform sample — where the operation on element *i* has nothing to do with the operation on element *j*, and the work is embarrassingly parallel, which is an honest technical term for "the division is trivial."
+
+The concrete example is the kind of operation every image and audio program does daily — darkening a picture, one pixel at a time. First the serial version, which is also each worker's job:
+
+    void darken(u8* pixels, u64 n)
+    {
+        for (u64 i = 0; i < n; i++)
+        {
+            u8 v = pixels[i];
+            pixels[i] = (u8)(v < 30 ? 0 : v - 30);
+        }
+    }
+
+Now divide: give each of eight workers a slice of the pixel array, `pixels` through `pixels + n/8`, and the slices never overlap, so the workers never touch the same byte — no lock, no atomic, no race, because the sharing is designed out of the problem. That is the entire art of data parallelism at its core, and it is why the pattern is the first one taught: the correctness is in the division of the index ranges, and the division is two lines. The same shape runs in audio (a volume ramp over 100,000 samples), in matrices (each worker does its rows of the product), in ray tracing (each worker owns a band of scanlines).
+
+The machine side of data parallelism is where the term SIMD lives: the single-instruction-multiple-data vector units that operate on several lanes at once — sixteen bytes darkened in one instruction on the right hardware — the compiler's auto-vectorization when the loop's shape allows it, and the GPU, the data-parallel machine taken to its extreme, with thousands of lanes running the same kernel over millions of elements. The art of data parallelism in a systems language is making the loop's shape visible: the loop over elements with no loop-carried dependency, the alignment that lets the vector unit take whole lanes, the batches that keep the memory bus busy. Coral's contribution is the one this book has made at every level: the cost is visible, the loop is ordinary code, and the vectorization is what the hardware and compiler honestly deliver, measured rather than assumed.
+
+10.26 Task Parallelism
+
+Where data parallelism divides the data, task parallelism divides the work: the program is a set of tasks — chunks of work with nothing between them — and the cores run them. The task shape is the thread pool's shape, and section 10.15 already built it: the tasks are the enqueued functions, the workers are the pool's threads, and the concurrency is the pool's size. The traditional use case is the batch: a hundred files to parse, a thousand URLs to fetch, a directory of images to recompress — where the natural unit of work is the file, not the pixel, and the pool runs one task per file:
+
+    std.any parseFile(std.any arg)
+    {
+        const char* path = arg.as<const char>();
+        ParseResult r = parseFileAt(path);
+        storeResult(r);
+        return std.any.wrap(null);
+    }
+
+    void parseDirectory(const char** paths, u64 n)
+    {
+        std.threadpool pool;
+        pool.init(8);
+        for (u64 i = 0; i < n; i++)
+            pool.enqueue(parseFile, std.any.wrap((void*)paths[i]));
+        pool.deinit();
+    }
+
+The pool's `deinit` waits for every parse before returning, so the results are complete exactly when this function returns. That "wait for all" is the join again, wearing the pool's clothes.
+
+The art is the division, and the division has a name for its failure: the imbalance. If one task takes twice the others, the machine idles for it; if the tasks are fine enough, the imbalance averages out, and the pool's threads stay busy; if they are coarse, the straggler rules. The concrete story is a build system: compile a hundred small files and one enormous file, and the build finishes only when the enormous one finishes, however many cores are idle around it. The rule of thumb the pattern teaches is the size of the grain: fine enough to balance, coarse enough to amortize the queue operations. The pool's bounded concurrency is the whole economics — eight workers, eight tasks running, the rest queued — and the straggler's cost is the pool's one weakness, and the fix is the smaller task.
+
+10.27 Pipeline Parallelism
+
+The pipeline divides the work by stage rather than by element: the task flows through stages, each stage's output is the next stage's input, and each stage is a worker that can proceed on the next task while the previous stage still works on the one before it. The pipeline's profile is the throughput shape: the serial version takes the task's total time per item; the pipelined version takes the total time of the first item plus the rate of the slowest stage per item thereafter. The pipeline wins when the stages are balanced and the items are many; it wins nothing when one stage dominates, because the pipeline is only as fast as its slowest stage.
+
+The everyday example is the photo pipeline — load from disk, decode, resize, save — a batch of a thousand photos through a program where each stage is a library call and the stages are naturally independent. Each stage is a thread; each boundary is a bounded queue:
+
+    BoundedQueue loaded;    loaded.init(8);    // raw bytes -> decoder
+    BoundedQueue resized;   resized.init(8);   // decoded -> resizer
+
+    std.any loaderMain(std.any arg)
+    {
+        const char** paths = arg.as<const char*>();
+        for (u64 i = 0; i < 1000; i++)
+        {
+            u8* raw = readFileBytes(paths[i]);
+            loaded.push((u64)raw);
+        }
+        loaded.close();
+        return std.any.wrap(null);
+    }
+
+    std.any decoderMain(std.any arg)
+    {
+        u64 raw;
+        while (loaded.pop(&raw))
+        {
+            Image img = decodeImage((u8*)raw);
+            resized.push((u64)img.pixels);
+            std.mman.dealloc<u8>((u8*)raw);
+        }
+        resized.close();
+        return std.any.wrap(null);
+    }
+
+    std.any resizerMain(std.any arg)
+    {
+        u64 pixels;
+        while (resized.pop(&pixels))
+        {
+            Image img2;
+            img2.pixels = (u8*)pixels;
+            saveImage(resizeImage(img2));
+            std.mman.dealloc<u8>((u8*)pixels);
+        }
+        return std.any.wrap(null);
+    }
+
+Three threads, three stages, two queues between them. The loader can run ahead by eight files, then its push blocks — the bounded queues apply backpressure from the slow stage to the fast one, the same blocking from section 10.14, now between stages. While the resizer works on photo 3, the decoder works on photo 4 and the loader reads photo 5, and the machine's three cores are all busy doing different things with no locks in sight; the only shared words in the entire program live inside the queues. The pipeline is the pattern for the throughput-critical program — the video encode, the compiler backend, the log processor, the ETL job — and its discipline is the stage boundary, kept clean and kept single-owner: each stage owns its queue slot, each thread owns its stage, the raw bytes change hands exactly where the queue hands them out, and the conversation between stages is the queue's protocol, which is why the queue's correctness was worth a whole section.
+
+10.28 Fork-Join and Map-Reduce
+
+The fork-join pattern is recursion in the shape of parallelism: a problem divided, the halves run in parallel, the results combined. The shape is the divide-and-conquer of chapter five given threads: fork at the division, join at the combination, and the recursion's depth is the available parallelism's ceiling. The join is the point the whole pattern exists for: the parent waits for the children's results, and the waiting is precisely what section 10.4's `threadJoin` is. The map-reduce pattern is fork-join with the work restructured into its modern form: *map* applies the independent operation to every element, *reduce* combines the mapped results with an associative operation, and the parallelism lives in the map. The sum of an array is the canonical example — each chunk mapped to its sum, the chunk sums reduced by addition — and the shape is the one every parallel framework since has dressed differently:
+
+    u64 parallelSum(u64* data, u64 n)
+    {
+        if (n <= 1024)
+        {
+            u64 total = 0;
+            for (u64 i = 0; i < n; i++) total += data[i];
+            return total;
+        }
+        u64 half = n / 2;
+        return parallelSum(data, half) + parallelSum(data + half, n - half);
+    }
+
+The recursive call is the fork's honest spelling: with the thread pool the lower half is a task, with plain threads the halves are two threads and the parent joins; either way, the shape of parallelism is the shape of the divide, and the ceiling is the recursion's depth, set by the threshold where the fork is no longer worth it — the 1024 in the example is exactly that threshold, the grain size of section 10.26 written as a constant.
+
+The important word is *associative*: the reduction's order must not matter, and the operation that is not associative — the rounding in a floating-point sum, the order-dependent accumulation — quietly makes the parallel result differ from the serial result. This is not theory: a parallel sum of floats will often differ from the serial sum in the last digits, because the addition runs in a different grouping, and the program that needs the identical answer either sorts the reduction or documents the difference. The pattern's lesson is determinism's shape: map is safe by construction, reduce is safe only when the operation is honest about associativity, and the program that must be certain its parallel sum equals its serial sum checks the operation, not the framework. The real world's map-reduce — the search index built by mapping documents to terms and reducing the term lists; the word count run over the web's pages; the analytics job that maps every event to a bucket and reduces the buckets — all hang on the same property, and all inherit the same discipline.
+
+10.29 Amdahl's Law
+
+Every pattern in this chapter hits the same ceiling, and the ceiling has a name and a formula: Amdahl's law. If a fraction *P* of the program is parallelizable and *1 − P* is inherently serial, the speedup from *N* cores is at most 1 / ((1 − P) + P/N). As N grows, the speedup approaches 1/(1 − P), and the serial part rules absolutely: a program that is 90% parallel is capped at 10× speedup no matter how many cores are added, and the cap is the sentence the law delivers to every design. The numbers are worth feeling in the stomach: a program that is 50% parallel is capped at 2× on any machine, however many cores; the 90% program caps at 10×; the 99% program caps at 100× — and each extra nine of the parallel fraction buys a zero of the ceiling, which is why the serious parallel programmers spend their lives hunting percentages, not cores.
+
+The code's serial part is everything the previous sections guarded: the critical section under the mutex, the join that gathers results, the single queue every worker drains, the straggler the pipeline waits for, the parsing of the first input that must precede the parallel work and the writing of the last output that must follow it. The classic report generator shows the shape: reading the file, then the parallel transform, then writing the output — and the two I/O seconds at the ends are serial time, however parallel the middle becomes. Each serial second is a term in (1 − P), and each is invisible on one core and dominant on sixteen.
+
+The law's lesson is the design's priority: shrink the serial part, then parallelize the rest. The locked region is shrunk by holding less — the "amortize the reads, lock the commit" pattern in the config cache of section 10.11. The join is shrunk by combining incrementally rather than gathering at the end — the tree-shaped reduction of section 10.28 joins O(log n) times instead of once over everything. The queue is shrunk by batching, so the workers contend less. The straggler is shrunk by balancing the tasks — the fine grain of section 10.26. And the law's counterweight is worth a paragraph: it assumes the baseline is serial and the cores all identical, and in the real machine the constant factors — the cache the parallel workers share, the memory bandwidth all cores contend for — make the real curve bend sooner than the formula. The chapter's patterns are each a raid on the same serial fraction, and the law is why the raid planning is where the speedup is won.
+
+10.30 Async Programming: The Single-Threaded Answer
+
+The concurrency chapter's last territory is the asynchronous world, and it is the answer to a different question from the ones the threads answered. The threaded question was "how do I use many cores?" The async question is "how do I handle many connections on few threads?" The answer's premise is the observation of section 10.5: a thread waiting on I/O consumes no core, and a server with a thousand connections spends most of its time with most of its threads blocked. The event loop inverts the premise: one thread, a loop, and a set of pending events. The loop waits on all the sources at once, and when any of them is ready — a socket readable, a timer expired — the loop dispatches the associated callback and waits again. The one-thread-per-connection server becomes the one-loop served by callbacks, and the thousand connections cost a thousand small state records instead of a thousand threads.
+
+The most famous event-loop programs in the world are the ones you have already used: Redis, the database, runs its core on one loop, and serves hundreds of thousands of requests per second because requests spend microseconds in the loop and milliseconds waiting on the network; nginx changed the server industry by serving ten thousand connections on a handful of worker loops; and Node.js, whatever you think of it, proved that one loop can carry the whole web. Their economics are the event loop's economics: the loop itself is nearly free, and the work is nearly all waiting, and waiting is nearly free — the one loop is the answer to the thousand threads.
+
+The smallest honest event loop is small enough to write, and writing it is the best way to see what the machinery really is. Here is a timer loop — the skeleton of every bigger loop — where the events are callbacks with deadlines:
+
+    struct Timer
+    {
+        u64 at;                 // the time the callback is due
+        void(std.any) fn;       // what runs when it is due
+        std.any arg;
+    }
+
+    void runLoop(Timer* events, u64* count)
+    {
+        while (*count > 0)
+        {
+            u64 best = 0;
+            for (u64 i = 1; i < *count; i++)
+                if (events[i].at < events[best].at) best = i;
+
+            u64 t = now();                  // the current time
+            if (events[best].at > t)
+                sleepMicros(events[best].at - t);
+
+            void(std.any) fn = events[best].fn;
+            std.any arg = events[best].arg;
+            events[best] = events[--*count];   // remove the fired event
+            fn(arg);                            // run its callback
+        }
+    }
+
+The loop's shape is all there: find the next due event, wait exactly until it is due, run its callback, repeat. Add a list of file descriptors and a platform call that waits on all of them — the real loop's only addition — and you have Redis's heart. The callbacks are the model's difficulty and its death by a thousand cuts. Each callback continues the story where the last one left off, and the program's flow — the linear sequence of read, compute, write — becomes a chain of closures, the chain known everywhere as the callback pyramid, the code that reads like an arrow pointing at the failure handling. Even in Coral's plain machinery the shape is visible: the continuation is a `void(std.any)` passed onward, each stage indented, each stage's error handling a separate door:
+
+    void fetchURL(const char* url, void(std.any) onDone)
+    {
+        openAsync(url, connected);
+    }
+
+    void connected(std.any c)
+    {
+        sendAsync(c, replied);
+    }
+
+    void replied(std.any s)
+    {
+        readAsync(s, done);
+    }
+
+The linear story — open, send, read, done — is here a chain of four functions, each handed to the next one's callback slot, and the pyramid is just the indentation of the same chain written inline. The promise (or future) flattens the wall: an object that represents a value that will exist, with operations to chain continuations — *do this when the read completes, then this when the transformation completes* — and the chains read as a pipeline instead of a pyramid. The final form is async/await: the language's syntax over the same machinery, letting the linear code be written linearly, with the compiler turning each await into the state machine the event loop needs.
+
+Coral's stance on the async machinery is the stance it has held on every hidden runtime, and it is worth stating without hedging. The event loop is a legitimate architecture with a real economics, and the language does not forbid it: the event loop is a loop, the callback is a function pointer, and the promise is a struct with a state field, all built from chapter six's tools — the timer loop above compiles in Coral today. But Coral does not put the loop in the syntax, and does not color the functions, and the reason is the chapter's whole theme repeated at the highest level: the machinery's complexity — the state machines the compiler synthesizes, the callback chains, the cancellation, the polling — is hidden, and the hidden cost is the cost this book has refused since the first chapter. The thread that blocks on a socket is dead simple to reason about and costs nothing while it waits. The async version of the same story is the state machine that must be synthesized, resumed, and canceled correctly, and its difficulty is the difficulty the syntax was invented to hide. The decision the language leaves to the program is the honest one: the thread-per-connection server when the connections are measured in hundreds, the event loop written by hand when they are measured in tens of thousands, and no syntax pretending the two are the same shape.
+
+10.31 Cancellation, Timeouts, and Backpressure
+
+The async world's support machinery deserves its own section because it is where the async programs actually die, and the machinery taught here transfers to every model in the chapter. Cancellation is the question of what happens when the work is no longer wanted: the client that disconnected, the request that was superseded, the shutdown that arrived. A thread is canceled by cooperation — the stop flag the pool's worker checks, the flag that the cancellation path sets under the mutex — and the cooperative shape is the honest one, because nothing can force a thread off a loop except the loop's own exit. The download manager is the everyday example: each download is a loop over network reads, and the cancel button does not kill the thread; it sets the `canceled` flag, and the loop checks it between reads, closes the connection, and lets the threads exit and join normally — the memory accounted for by the `defer` that releases the connection and the file on the way out, whatever the flag said.
+
+The timeout is cancellation by clock: the operation that must not wait forever, implemented as the timer in the event loop's set of events, or the platform wait with a deadline. The HTTP client that hangs forever on a dead server is the textbook example; the timeout is the deadline that turns "wait forever" into "wait two seconds, then fail loudly, cleanly, on the ordinary error path." Backpressure is the refusal that keeps the system from being overwhelmed: the bounded channel of section 10.22, whose full state makes the producer wait — the video encoder's sixteen frames, the photo pipeline's eight queued files — and the refusal that lets a slow consumer slow a fast producer instead of growing the memory without bound. The three are the same lesson wearing three hats: the program that can stop, the program that can wait, and the program that can refuse are the programs that remain responsive, and each is a design decision about boundaries — when to leave, when to give up, when to say no — that no language can automate and every serious program must make.
+
+10.32 The Double Buffer: One Pattern, Many Lessons
+
+The double buffer is the concurrent design every game, every video player, and every audio device uses, and it is worth its own section because it assembles this chapter's hard-won lessons into one small, real structure. The problem it solves is the one the renderer meets every frame: a producer thread is drawing the next frame while the consumer thread is displaying the current one, and the consumer must never see a half-drawn frame. The answer's shape: two buffers, and an atomic that says which one is the published one. The writer draws into the buffer that is not published; the reader displays the buffer that is.
+
+    struct Renderer
+    {
+        FrameData buffers[2];
+        std.AtomicU64 front;      // which buffer is published
+    }
+
+    FrameData* beginFrame(Renderer* r)
+    {
+        return &r->buffers[1 - r->front.load()];
+    }
+
+    void publishFrame(Renderer* r)
+    {
+        r->front.store(1 - r->front.load());
+    }
+
+The reader side is one load and one use: read `front`, use the buffer it names. The wiring is all this chapter's lessons at once. Only one word is shared — the `front` index — and it is an atomic, with the strong publish-subscribe ordering of section 10.18: the store that flips `front` releases every frame write before it, and the reader's load acquires the whole frame. The frame data itself is never synchronized, because it never needs to be: at any instant, exactly one buffer is the reader's, and the writer draws only in the other one, so the two threads' loads and stores never touch the same buffer. The reader is guaranteed a complete frame — the previous one or the new one, never a mixture — and that guarantee, the always-complete frame, is the entire point of the pattern. Staleness is a feature, not a bug: seeing the previous frame is how the pattern avoids seeing any torn one.
+
+The honesty that makes the pattern worth teaching is its one caveat, and the caveat is where the discipline lives. The short version of the pattern assumes the reader finishes reading the published buffer before the writer begins the next frame — the writer must not start drawing into the buffer the reader may still hold. In the render loop, the discipline is the vertical blank: the writer waits for the display to show the frame before the next one starts. Where that assumption cannot be made — a slow reader, a bursty writer — the pattern's fixes are named: add a third buffer, so the writer always has a buffer no reader can hold, or add a handshake, the done-signal of section 10.13's vocabulary, so the writer waits on the reader's word. Every introduction of the pattern to a textbook omits that paragraph; the professional version is the one that includes it, and this book's version is the professional one. The pattern's place in the toolkit: the fast path of any producer-consumer exchange where the consumer can tolerate one frame of staleness — the game's render thread publishing to the display thread, the audio callback's buffer handoff, the telemetry thread publishing metrics that the UI samples.
+
+10.33 The Color of Functions
+
+The async world's wart has a name: the color of functions, from the essay that made the term popular. Synchronous functions and asynchronous functions are different colors: one can be called anywhere and blocks, the other must be awaited and poisons everything it touches. A synchronous function that wants to call an async function is stuck: it cannot block the loop, and it has no way to await without becoming async itself, and the color spreads upward through the call graph until the program is a sea of async, or the sync core of the program is walled off behind a fence that blocks the loop and kills the whole economics. The frameworks mitigate — the sync-to-async bridge, the block-on-thread escape hatches — and the mitigation is a confession: the boundary is real, and every system that mixes the two colors pays for the crossing.
+
+The metaphor that made the essay famous is the takeout window. A red (synchronous) function is a customer who goes inside the restaurant, orders, and waits at the counter until the food comes; a blue (asynchronous) function is also allowed to order but may not wait — it leaves its number and comes back when called. The problem: a red function that wants to place a blue order has no way to wait without breaking the restaurant's rules, so it must become blue itself, and suddenly the whole menu is blue — or the kitchen hires a red-only employee to wait (the bridge), which defeats the point. Every language with both colors lives this story daily.
+
+The chapter's final observation is Coral's answer to the color problem, which is the same answer it gave to the deep questions: the language has no colors, because it has no async syntax, and the honest machinery — the thread, the pool, the loop written by hand — is the same everywhere, without a syntax dividing the world. A function that submits work to the pool is an ordinary function. A function that waits on a socket would block its caller's thread, and the caller decides, in the ordinary code, whether to run it on a worker or to structure around it. The boundary that in the colored languages is enforced by the type system's colors is in Coral a boundary of architecture, drawn in the code, and the cost of not having the automatic color is the cost of drawing the boundaries yourself — the cost every chapter in this book has been, in the end, about.
+
+10.34 A Worked Example: The Parallel Word Counter
+
+The chapter's tools together, in a program the shape of the real world: a text file, and the count of its words, done in parallel. The structure is the section 10.28 shape — map the chunks, reduce the counts — with the pool of section 10.15 providing the workers and the task grain set by the pattern's rule of thumb: chunks fine enough to balance, coarse enough to amortize.
+
+    struct Job
+    {
+        const u8* data;   // the chunk
+        u64 len;          // its length
+        u64* count;       // where the map writes its result
+    }
+
+    void countWordsJob(std.any arg)
+    {
+        Job* job = arg.as<Job>();
+        u64 words = 0;
+        bool inWord = false;
+        for (u64 i = 0; i < job->len; i++)
+        {
+            bool ws = job->data[i] == ' ' || job->data[i] == '\n'
+                   || job->data[i] == '\t';
+            if (!ws && !inWord) words++;
+            inWord = !ws;
+        }
+        *job->count = words;
+    }
+
+    u64 countFile(char* text, u64 size, u32 workers)
+    {
+        const u64 chunkSize = 65536;
+
+        std.threadpool pool;
+        if (!pool.init(workers)) return 0;
+
+        u64 nChunks = (size + chunkSize - 1) / chunkSize;
+        Job* jobs = std.mman.alloc<Job>(nChunks);
+        u64* counts = std.mman.alloc<u64>(nChunks);
+        if (jobs == null || counts == null) return 0;
+
+        for (u64 i = 0; i < nChunks; i++)
+        {
+            jobs[i].data = (const u8*)text + i * chunkSize;
+            jobs[i].len = size >= (i + 1) * chunkSize
+                        ? chunkSize : size - i * chunkSize;
+            jobs[i].count = &counts[i];
+            pool.enqueue(countWordsJob, &jobs[i]);
+        }
+
+        pool.deinit();
+
+        u64 total = 0;
+        for (u64 i = 0; i < nChunks; i++) total += counts[i];
+        std.mman.dealloc<Job>(jobs);
+        std.mman.dealloc<u64>(counts);
+        return total;
+    }
+
+Every piece of this chapter is in the program, and so is every piece of the preceding one. The pool's `deinit` is the join: the counter reads the counts only after the pool has completed every task, because `deinit` joins the workers, and the joining is the happens-after that ordering the counts' publication. The per-chunk result is written to its own slot, so there is not a single shared word in the map phase, and no synchronization is needed at all — the chapter's first lesson, that the best synchronization is the one not needed. The reduction is associative addition, and the answer is identical to the serial count by construction, because the count of a union of adjacent chunks is the sum of the counts of the chunks — the associativity lesson of section 10.28, here invisible because addition is honest. The boundary between the counted and the unaccounted — the last chunk's `len` — is the boundary the program draws itself, the way every loop in the book has. And the file's buffer would be released with a `defer` in the caller, and the pool's threads with `deinit`. The program's memory is accounted for line by line, and its parallelism is accounted for the same way, because they are the same accounting: the release is paired with the acquisition, the join with the fork, and nothing runs or dies that the code did not say.
+
+10.35 The Concurrency Verdict
+
+The modern challenge, reviewed. The machine has many cores, and the language must answer with a way to use them; and the machine has many connections, and the language must answer with a way to feed them; and both answers are the same answer, disguised: the sharing must be guarded, the boundaries must be drawn, and the machinery must be legible. Coral's answer is the answer this chapter has built from the previous one's materials. The thread is the operating system's thread, with the lifecycle and the scheduling and the cost the OS gives it. The shared word is guarded by the atomic, the shared region by the mutex, the shared read-mostly by the read-write lock, the shared resource by the semaphore, the shared condition by the condition variable and its while-loop — and the while-loop itself is the first lesson of the whole chapter, that the wait must recheck, because the world moves while you sleep. The many tasks run on the pool, whose workers, queue, mutex, and condition variable are the real standard library code, readable in full. The many messages flow through channels and actors built from the same pieces, the BoundedQueue reviewed once and reused as the channel's engine, the actor's mailbox, and the pool's backbone. The parallel patterns divide the work, and Amdahl's law sets the honest ceiling. And the asynchronous world, with its promises and its colors, is a legitimate part of the landscape — one Coral declines to put in the syntax, so that the cost of the machinery stays where the program can read it.
+
+The verdict is the verdict every chapter has reached, because it is the same verdict. The alternative to the guard is the race, and the race is the failure that has no error message, because the torn value looks like a value. The alternative to the boundary is the tangle, and the tangle is the audit no one can perform. The alternative to the legible machinery is the hidden runtime, and the hidden runtime is the cost no one can read. Coral's concurrency does not make concurrent programming easy; nothing does, and any language that promises ease is selling a view of a simpler world. Coral's concurrency makes concurrent programming checkable: the shared state is named, the guards are pairs of lines, the boundaries are boundaries in the code, and the program that must be correct can be read, and the program that can be read can be reviewed, and the program that can be reviewed can be trusted. That is the whole of it — the modern challenge answered with the language's oldest tools: the visible price, the responsible writer, and the machine, honestly operated.
+
+Chapter 10 Summary
+
+Concurrency is dealing with many things at once, interleaved; parallelism is doing many things at once, simultaneous — one cashier with many queues versus two cashiers with one — and a program must know which it is doing and choose the tools accordingly.
+
+Coral's threading model is the OS thread: threadCreate, threadJoin, threadExit, and threadCurrent wrap the platform's own threads, and the lifecycle, scheduling, and priorities are the operating system's, with no hidden runtime between the code and the machine.
+
+The green thread and the goroutine are user-space answers to the thread's cost, and the coroutine is a way of structuring control flow rather than a way of using cores; Coral gives you the OS thread and the thread pool, the honest middle ground.
+
+The mutex serializes and orders: one thread at a time, with the acquire-release pair moving memory across the boundary, and the broken counter — read, add, write, interleaved — is the race the lock exists for; the parallel sum is the template, independent writes, one join, then the reads.
+
+The read-write lock lets readers proceed in parallel and the writer alone — the configuration cache's read-everything, write-rarely shape; the counting semaphore limits resources — four connections, ten downloads, three printers — with init, wait, post.
+
+The condition variable waits on a predicate with a nap and an alarm: the wait is a while-loop, because wakeups are spurious and another thread may have taken the thing you waited for; the producer-consumer exchange is the complete program, blocking when full, waking when room appears, and closing by broadcast.
+
+The thread pool is the real worker pattern: a fixed number of threads, a queue under a mutex, a condition variable for the wakeups, and a stop flag for a shutdown that drains the queue without stranding a task.
+
+Deadlock needs mutual exclusion, hold-and-wait, no preemption, and circular wait; the bank transfer that takes two locks in conflicting order is the real-world shape, and the fixes are prevention by lock ordering, detection in the wait-for graph, and avoidance by the Banker's algorithm.
+
+The atomics are the one-word tools: load, store, fetchAdd, fetchSub, and compareExchange, compiling to the platform's own locked instructions — the ticket generator and the progress counter are their everyday shapes — and the contract covers exactly one word.
+
+The flag-and-data handoff is the ordering bargain: the store publishes the writes, the load acquires them, and the data crosses the boundary intact — the same acquire-release pair the mutex uses, in the atomics' vocabulary.
+
+The ABA problem is the compare-exchange's shadow: a value that changes and changes back defeats the test-and-swap, and the lock-free pointer structures are the ones the mutex is for.
+
+Thread-local storage is implicit per-thread state — errno's own story — and Coral's answer is the explicit context: the state passed in the argument, visible in the code, checkable in a review.
+
+Shared memory and message passing are the two architectures — the physics engine shares the world state, the chat server passes messages — and the design decision is where the boundaries go.
+
+The channel is a queue with a protocol — bounded for backpressure, synchronous for the rendezvous, unbounded for the burst that must never block — built in Coral from the mutex, the buffer, and the condition variable, exactly the shape of the BoundedQueue of this chapter.
+
+The actor model is the message-passing discipline: state behind a mailbox, one message at a time, and supervision as the restart hierarchy, translated into Coral as a struct, a queue, and a worker thread that owns its state, no locks needed.
+
+Data parallelism divides the elements — the pixel slice, the row of the matrix — and needs no synchronizing at all when the ranges do not overlap; task parallelism divides the work into pool tasks, and the straggler sets the pace; pipeline parallelism divides the stages, and the slowest stage rules, bounded queues doing the backpressure between them.
+
+Fork-join is recursion in parallel shape, and map-reduce is it restructured: map is safe by construction, and reduce is safe only when the operation is associative, so the parallel result equals the serial one.
+
+Amdahl's law sets the ceiling: the speedup approaches 1/(1 − P) as the cores grow — 50% parallel caps at 2×, 90% at 10×, 99% at 100× — and the design's priority is shrinking the serial part, the critical section, the join, the single queue.
+
+Async programming serves many connections on few threads: the event loop, the callbacks, the promises, and async/await are machinery for the shape — Redis, nginx, and Node.js run on it — and Coral leaves the machinery out of the syntax, so the loop written by hand keeps its cost visible.
+
+Cancellation, timeouts, and backpressure are the boundaries of responsiveness — the stop flag, the deadline, the refusal — and every serious program draws them itself.
+
+The color of functions is the async world's wart, the takeout-window boundary that the type system enforces between sync and async; Coral has no colors, because the ordinary function, the thread, and the pool are the same machinery everywhere.
+
+The double buffer is one pattern, many lessons: only the front index is shared, an atomic publishes the frame, the reader always sees a complete frame, staleness is a feature, and the caveat — the writer must not touch the buffer a reader may still hold — is the discipline the third buffer or a handshake exists for.
+
+The parallel word counter is the chapter in miniature: the pool is the fork, the deinit is the join, the per-chunk slots need no synchronization because nothing is shared, and the addition is associative, so the parallel answer is the serial answer.
+
+Coral's concurrency makes the concurrent program checkable: the shared state is named, the guards are pairs of lines, the boundaries are in the code, and the machine is operated honestly, with its prices visible and its failures the ones the writer can point at.

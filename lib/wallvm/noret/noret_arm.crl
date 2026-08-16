@@ -1,0 +1,133 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+
+pub struct NoretArm
+{
+    u64 exitCode;
+    char* out;
+    u32 outLen;
+    u32 outCap;
+
+    NoretArm new(u64 exitCode)
+    {
+        NoretArm n;
+        n.exitCode = exitCode;
+        n.out = null;
+        n.outLen = 0;
+        n.outCap = 0;
+        return n;
+    }
+
+    void ensureCap(NoretArm*, u32 needed)
+    {
+        if (self.outLen + needed <= self.outCap) return;
+        u32 newCap = self.outCap ? self.outCap * 2 : 64;
+        while (self.outLen + needed > newCap) newCap *= 2;
+        char* newOut = mman.alloc<char>(newCap);
+        if (self.out)
+        {
+            mman.copy<char>(newOut, self.out, self.outLen);
+            mman.dealloc<char>(self.out);
+        }
+        self.out = newOut;
+        self.outCap = newCap;
+    }
+
+    void c(NoretArm*, char ch)
+    {
+        self.ensureCap(1);
+        self.out[self.outLen++] = ch;
+    }
+
+    void s(NoretArm*, const char* str) // on sum '.s()' shit
+    {
+        u32 len = 0;
+        while (str[len]) len++;
+        self.ensureCap(len);
+        for (u32 i = 0; i < len; i++)
+            self.out[self.outLen++] = str[i];
+    }
+
+    const char* getString(NoretArm*)
+    {
+        self.ensureCap(1);
+        self.out[self.outLen] = 0;
+        return self.out;
+    }
+
+    void clear(NoretArm*)
+    {
+        self.outLen = 0;
+    }
+
+    void destroy(NoretArm*)
+    {
+        if (self.out) mman.dealloc<char>(self.out);
+    }
+
+    void emitLinuxSyscall(NoretArm*)
+    {
+        self.emitMovImm("r0", self.exitCode);
+        self.c('\n');
+        self.emitMovImm("r7", 1);
+        self.c('\n');
+        self.s("\tsvc #0");
+        self.c('\n');
+    }
+
+    void emitWindowsTerminate(NoretArm*)
+    {
+        self.emitMovImm("r0", self.exitCode);
+        self.c('\n');
+        self.s("\tbl ExitProcess");
+        self.c('\n');
+    }
+
+    void emitBareMetalHalt(NoretArm*)
+    {
+        self.s(".halt:");
+        self.c('\n');
+        self.s("\twfi");
+        self.c('\n');
+        self.s("\tb .halt");
+        self.c('\n');
+    }
+
+    void emitNoretPlatform(NoretArm*, const char* platform)
+    {
+        if (platformMatch(platform, "LINUX"))
+            self.emitLinuxSyscall();
+        else if (platformMatch(platform, "WINDOWS"))
+            self.emitWindowsTerminate();
+        else
+            self.emitBareMetalHalt();
+    }
+
+    void emitMovImm(NoretArm*, const char* reg, u64 imm)
+    {
+        self.s("\tmov ");
+        self.s(reg);
+        self.s(", #");
+        u64 val = imm;
+        char buf[24];
+        u32 n = 0;
+        if (val == 0) buf[n++] = '0';
+        else { while (val) { buf[n++] = (char)('0' + val % 10); val /= 10; } }
+        for (i32 i = (i32)n - 1; i >= 0; i--) self.c(buf[i]);
+    }
+}
+
+static bool platformMatch(const char* platform, const char* known)
+{
+    if (!platform || !known) return false;
+    u32 i = 0;
+    while (platform[i] && known[i])
+    {
+        char a = platform[i];
+        char k = known[i];
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (a != k) return false;
+        i++;
+    }
+    return platform[i] == 0 && known[i] == 0;
+}

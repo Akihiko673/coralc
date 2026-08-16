@@ -1,0 +1,188 @@
+@[no_warn_unsafe]
+
+mod libc = import("std/platform/libc.crl");
+mod vec = import("std/collections/vec.crl");
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct Process
+{
+    i32 pid;
+    i32 stdinFd;
+    i32 stdoutFd;
+    i32 stderrFd;
+}
+
+pub struct ProcessResult
+{
+    i32 exitCode;
+    bool signaled;
+    i32 termSignal;
+}
+
+pub struct pollfd
+{
+    i32 fd;
+    i16 events;
+    i16 revents;
+}
+
+void _closeIoFd(i32* fd)
+{
+    if (*fd >= 0) { libc.close(*fd); *fd = -1; }
+}
+
+pub Process spawn(string.strView cmd, vec.vec<string.strView>* args)
+{
+    i32 stdinPipe[2];
+    i32 stdoutPipe[2];
+    i32 stderrPipe[2];
+    libc.pipe(stdinPipe);
+    libc.pipe(stdoutPipe);
+    libc.pipe(stderrPipe);
+    if (stdinPipe[0] < 0 || stdinPipe[1] < 0 || stdoutPipe[0] < 0 || stdoutPipe[1] < 0 || stderrPipe[0] < 0 || stderrPipe[1] < 0)
+    {
+        _closeIoFd(&stdinPipe[0]); _closeIoFd(&stdinPipe[1]);
+        _closeIoFd(&stdoutPipe[0]); _closeIoFd(&stdoutPipe[1]);
+        _closeIoFd(&stderrPipe[0]); _closeIoFd(&stderrPipe[1]);
+        Process p; p.pid = -1; p.stdinFd = -1; p.stdoutFd = -1; p.stderrFd = -1;
+        return p;
+    }
+
+    i32 pid = libc.fork();
+    if (pid < 0)
+    {
+        libc.close(stdinPipe[0]); libc.close(stdinPipe[1]);
+        libc.close(stdoutPipe[0]); libc.close(stdoutPipe[1]);
+        libc.close(stderrPipe[0]); libc.close(stderrPipe[1]);
+        Process p; p.pid = -1; return p;
+    }
+
+    if (pid == 0)
+    {
+        libc.close(stdinPipe[1]);
+        libc.close(stdoutPipe[0]);
+        libc.close(stderrPipe[0]);
+        libc.dup2(stdinPipe[0], 0);
+        libc.dup2(stdoutPipe[1], 1);
+        libc.dup2(stderrPipe[1], 2);
+
+        u64 n = args != null ? args->count(args) : 0;
+        u64 totalLen = 0;
+        for (u64 i = 0; i < n; i++)
+        {
+            string.strView a = args->at(args, i);
+            totalLen += (a.len < 4095u ? a.len : 4095u) + 1;
+        }
+        char** argv = mman.alloc<char*>(n + 1);
+        char* buf = mman.alloc<char>(totalLen);
+        u64 offset = 0;
+        for (u64 i = 0; i < n; i++)
+        {
+            string.strView a = args->at(args, i);
+            u64 len = a.len < 4095u ? a.len : 4095u;
+            mman.copy<u8>((u8*)buf + offset, (const u8*)a.ptr, len);
+            buf[offset + len] = 0;
+            argv[i] = buf + offset;
+            offset += len + 1;
+        }
+        argv[n] = null;
+        libc.execvp(cmd.ptr, (const char**)argv);
+        libc._exit(127);
+    }
+
+    libc.close(stdinPipe[0]);
+    libc.close(stdoutPipe[1]);
+    libc.close(stderrPipe[1]);
+
+    Process p;
+    p.pid = pid;
+    p.stdinFd = stdinPipe[1];
+    p.stdoutFd = stdoutPipe[0];
+    p.stderrFd = stderrPipe[0];
+    return p;
+}
+
+pub ProcessResult waitFor(Process* p)
+{
+    i32 status;
+    i32 rc = libc.waitpid(p->pid, &status, 0);
+    if (rc < 0)
+    {
+        ProcessResult r;
+        r.signaled = false;
+        r.termSignal = 0;
+        r.exitCode = -1;
+        return r;
+    }
+    _closeIoFd(&p->stdinFd);
+    _closeIoFd(&p->stdoutFd);
+    _closeIoFd(&p->stderrFd);
+
+    ProcessResult r;
+    if (status & 0x7F)
+    {
+        r.signaled = true;
+        r.termSignal = status & 0x7F;
+        r.exitCode = -1;
+    }
+    else
+    {
+        r.signaled = false;
+        r.termSignal = 0;
+        r.exitCode = (status >> 8) & 0xFF;
+    }
+    return r;
+}
+
+pub i64 writeStdin(Process* p, const char* data, u64 len)
+{
+    return libc.write(p->stdinFd, data, len);
+}
+
+pub i64 readStdout(Process* p, u8* buf, u64 maxLen)
+{
+    return libc.read(p->stdoutFd, buf, maxLen);
+}
+
+pub i64 readStderr(Process* p, u8* buf, u64 maxLen)
+{
+    return libc.read(p->stderrFd, buf, maxLen);
+}
+
+pub i32 run(string.strView cmd, vec.vec<string.strView>* args)
+{
+    Process p = spawn(cmd, args);
+    if (p.pid < 0) return -1;
+    _closeIoFd(&p.stdinFd);
+    // poll both pipes so the child never blocks writing while the parent
+    // waits for the other pipe
+    u8 buf[4096];
+    for (;;)
+    {
+        pollfd fds[2];
+        u64 nfds = 0;
+        if (p.stdoutFd >= 0) { fds[nfds].fd = p.stdoutFd; fds[nfds].events = 1; fds[nfds].revents = 0; nfds++; }
+        if (p.stderrFd >= 0) { fds[nfds].fd = p.stderrFd; fds[nfds].events = 1; fds[nfds].revents = 0; nfds++; }
+        if (nfds == 0) break;
+        i32 rc = libc.poll(fds, nfds, -1);
+        if (rc <= 0) break;
+        for (u64 i = 0; i < nfds; i++)
+        {
+            if ((fds[i].revents & 17) == 0) continue;
+            i64 n = libc.read(fds[i].fd, buf, 4096);
+            if (n <= 0)
+            {
+                if (fds[i].fd == p.stdoutFd) _closeIoFd(&p.stdoutFd);
+                else _closeIoFd(&p.stderrFd);
+            }
+        }
+    }
+    ProcessResult r = waitFor(&p);
+    return r.exitCode;
+}
+
+pub void exit(i32 code)
+{
+    libc._exit(code);
+}

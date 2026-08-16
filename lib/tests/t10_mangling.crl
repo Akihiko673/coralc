@@ -1,0 +1,29 @@
+// t10, mangling rules
+//  - root-file decls are never mangled (main, triple stay as-is)
+//  - imported non-extern decls are mangled with the module alias (mm_*)
+//  - imported externs (functions AND variables) are never mangled
+mod mm = import("manglemod.crl");
+
+i32 triple(i32 x)
+{
+    return x * 3;
+}
+
+i32 main()
+{
+    if (mm.calc(5) != 10) return 1;
+
+    mm.boxed b;
+    b.val = 42;
+    if (b.val != 42) return 2;
+
+    u64 n = mm.strlen("hello");
+    if (n != 5) return 3;
+
+    u8** env = mm.environ;
+    if (env == null) return 4;
+
+    if (triple(14) != 42) return 5;
+
+    return 0;
+}

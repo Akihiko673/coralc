@@ -1,0 +1,123 @@
+mod libc = import("std/platform/libc.crl");
+mod mman = import("std/memory/mman.crl");
+mod tok = import("token");
+mod lex = import("lexer");
+mod str = import("std/text/string.crl");
+
+const u32 MAX_FILE = 16 * 1024 * 1024;
+
+u8* readFile(str.strView path, u32* outLen)
+{
+    i32 fd = libc.open(path.ptr, 0, 0); // O_RDONLY
+    if (fd < 0) return null;
+    u64 cap = 65536;
+    u8* buf = mman.alloc<u8>(cap);
+    u32 n = 0;
+    for (;;)
+    {
+        if (n + 4096 > cap)
+        {
+            u64 nc = cap * 2;
+            u8* nb = mman.alloc<u8>(nc);
+            for (u32 i = 0; i < n; i++) nb[i] = buf[i];
+            mman.dealloc<u8>(buf);
+            buf = nb;
+            cap = nc;
+        }
+        i64 r = libc.read(fd, buf + n, 4096);
+        if (r <= 0) break;
+        n += (u32)r;
+    }
+    libc.close(fd);
+    *outLen = n;
+    return buf;
+}
+
+void dumptoks(const u8* src, tok.LexTok* toks, u32 n, tok.LexErr* errs, u32 nerrs)
+{
+    for (u32 i = 0; i < n; i++)
+    {
+        tok.LexTok* t = &toks[i];
+        if (t->id == tok.TOK_EOF) { libc.write(2, "EOF\n", 4); break; }
+        u8 buf[80];
+        u32 bl = 0;
+        selfNum(buf, &bl, t->row);
+        buf[bl++] = ':';
+        selfNum(buf, &bl, t->col);
+        buf[bl++] = ' ';
+        str.strView cls = str.strView::empty();
+        if (t->id == tok.TOK_IDENT) cls = str.strView::fromCstr("ident");
+        else if (t->id == tok.TOK_INT) cls = str.strView::fromCstr("int");
+        else if (t->id == tok.TOK_FLOAT) cls = str.strView::fromCstr("float");
+        else if (t->id == tok.TOK_STR) cls = str.strView::fromCstr("str");
+        else if (t->id == tok.TOK_CHAR) cls = str.strView::fromCstr("char");
+        else cls = str.strView::fromCstr("tok");
+        u32 cl = 0;
+        while (cl < cls.len) { buf[bl++] = (u8)cls.ptr[cl]; cl++; }
+        buf[bl++] = ' ';
+        u32 w = t->len;
+        if (w > 40) w = 40;
+        for (u32 j = 0; j < w; j++) buf[bl++] = src[t->start + j];
+        buf[bl++] = '\n';
+        libc.write(2, buf, bl);
+    }
+    for (u32 i = 0; i < nerrs; i++)
+    {
+        libc.write(2, "lex error: ", 11);
+        libc.write(2, errs[i].msg.ptr, errs[i].msg.len);
+        libc.write(2, "\n", 1);
+    }
+}
+
+void selfNum(u8* buf, u32* bl, u32 v)
+{
+    char tmp[12];
+    u32 p = 12;
+    if (v == 0) tmp[--p] = '0';
+    while (v) { tmp[--p] = (char)('0' + v % 10); v /= 10; }
+    while (p < 12) buf[(*bl)++] = (u8)tmp[p++];
+}
+
+i32 main(i32 argc, char** argv)
+{
+    if (argc < 2) return 1;
+    bool dump = false;
+    i32 first = 1;
+    if (argv[1][0] == '-' && argv[1][1] == 't')
+    {
+        dump = true;
+        first = 2;
+    }
+    i32 fails = 0;
+    for (i32 fi = first; fi < argc; fi++)
+    {
+        str.strView path = str.strView::fromCstr(argv[fi]);
+        u32 len = 0;
+        u8* src = readFile(path, &len);
+        if (!src)
+        {
+            libc.write(2, "can't open ", 11);
+            libc.write(2, path.ptr, path.len);
+            libc.write(2, "\n", 1);
+            fails++;
+            continue;
+        }
+        libc.write(2, "==> ", 4);
+        libc.write(2, path.ptr, path.len);
+        libc.write(2, "\n", 1);
+        lex.Lexer lx = lex.Lexer::new(src, len);
+        lex.LexResult res = lx.lex();
+        if (dump)
+            dumptoks(src, res.toks, res.n, res.errs, res.nerrs);
+        else
+            for (u32 i = 0; i < res.nerrs; i++)
+            {
+                libc.write(2, "lex error: ", 11);
+                libc.write(2, res.errs[i].msg.ptr, res.errs[i].msg.len);
+                libc.write(2, "\n", 1);
+            }
+        if (res.nerrs > 0) fails++;
+    }
+    libc.write(2, fails == 0 ? "LEX OK\n" : "LEX FAIL\n", fails == 0 ? 7 : 9);
+    return fails == 0 ? 0 : 1;
+}

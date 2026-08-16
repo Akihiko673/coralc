@@ -1,0 +1,139 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+
+pub struct ListNode<T>
+{
+    T value;
+    ListNode<T>* prev;
+    ListNode<T>* next;
+}
+
+pub struct linkedlist<T>
+{
+    ListNode<T>* head;
+    ListNode<T>* tail;
+    u64 len;
+
+    static linkedlist<T> new()
+    {
+        linkedlist<T> l;
+        l.head = null;
+        l.tail = null;
+        l.len = 0;
+        return l;
+    }
+
+    void dispose()
+    {
+        ListNode<T>* cur = self.head;
+        while (cur != null)
+        {
+            ListNode<T>* next = cur->next;
+            mman.dealloc<ListNode<T>>(cur);
+            cur = next;
+        }
+        self.head = null;
+        self.tail = null;
+        self.len = 0;
+    }
+
+    u64 count() { return self.len; }
+    bool isEmpty() { return self.len == 0; }
+
+    void pushFront(T val)
+    {
+        ListNode<T>* node = mman.alloc<ListNode<T>>(1);
+        node->value = val;
+        node->prev = null;
+        node->next = self.head;
+        if (self.head != null) self.head->prev = node;
+        else self.tail = node;
+        self.head = node;
+        self.len++;
+    }
+
+    void pushBack(T val)
+    {
+        ListNode<T>* node = mman.alloc<ListNode<T>>(1);
+        node->value = val;
+        node->next = null;
+        node->prev = self.tail;
+        if (self.tail != null) self.tail->next = node;
+        else self.head = node;
+        self.tail = node;
+        self.len++;
+    }
+
+    T popFront()
+    {
+        assert(self.head != null);
+        ListNode<T>* node = self.head;
+        T val = node->value;
+        self.head = node->next;
+        if (self.head != null) self.head->prev = null;
+        else self.tail = null;
+        mman.dealloc<ListNode<T>>(node);
+        self.len--;
+        return val;
+    }
+
+    T popBack()
+    {
+        assert(self.tail != null);
+        ListNode<T>* node = self.tail;
+        T val = node->value;
+        self.tail = node->prev;
+        if (self.tail != null) self.tail->next = null;
+        else self.head = null;
+        mman.dealloc<ListNode<T>>(node);
+        self.len--;
+        return val;
+    }
+
+    T front()
+    {
+        assert(self.head != null);
+        return self.head->value;
+    }
+
+    T back()
+    {
+        assert(self.tail != null);
+        return self.tail->value;
+    }
+
+    void insertAfter(ListNode<T>* node, T val)
+    {
+        if (node == null) { self.pushFront(val); return; }
+        ListNode<T>* newNode = mman.alloc<ListNode<T>>(1);
+        newNode->value = val;
+        newNode->prev = node;
+        newNode->next = node->next;
+        if (node->next != null) node->next->prev = newNode;
+        else self.tail = newNode;
+        node->next = newNode;
+        self.len++;
+    }
+
+    void remove(ListNode<T>* node)
+    {
+        if (node == null) return;
+        if (node->prev != null) node->prev->next = node->next;
+        else self.head = node->next;
+        if (node->next != null) node->next->prev = node->prev;
+        else self.tail = node->prev;
+        mman.dealloc<ListNode<T>>(node);
+        self.len--;
+    }
+
+    void each(void(T) fn)
+    {
+        ListNode<T>* cur = self.head;
+        while (cur != null)
+        {
+            fn(cur->value);
+            cur = cur->next;
+        }
+    }
+}

@@ -1,0 +1,205 @@
+@[no_warn_unsafe]
+
+mod libc = import("std/platform/libc.crl");
+
+const i32 SEEK_SET = 0;
+const i32 SEEK_CUR = 1;
+
+pub struct FileReader
+{
+    i32 fd;
+
+    FileReader fromFd(i32 fd)
+    {
+        FileReader r;
+        r.fd = fd;
+        return r;
+    }
+
+    bool readBytes(u8* dst, u64 n)
+    {
+        u64 total = 0;
+        while (total < n)
+        {
+            i64 r = libc.read(self.fd, dst + total, n - total);
+            if (r <= 0) return false;
+            total += (u64)r;
+        }
+        return true;
+    }
+
+    u8 readU8() { u8 v = 0; self.readBytes(&v, 1); return v; }
+
+    u16 readU16Le()
+    {
+        u8 b[2] = {0, 0};
+        self.readBytes(b, 2);
+        return (u16)b[0] | ((u16)b[1] << 8);
+    }
+
+    u32 readU32Le()
+    {
+        u8 b[4] = {0, 0, 0, 0};
+        self.readBytes(b, 4);
+        return (u32)b[0] | ((u32)b[1] << 8) | ((u32)b[2] << 16) | ((u32)b[3] << 24);
+    }
+
+    u64 readU64Le()
+    {
+        u8 b[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        self.readBytes(b, 8);
+        u64 v = 0;
+        for (u32 j = 0; j < 8; j++)
+            v |= (u64)b[j] << (8u * j);
+        return v;
+    }
+
+    i8 readI8() { return (i8)self.readU8(); }
+    i16 readI16Le() { return (i16)self.readU16Le(); }
+    i32 readI32Le() { return (i32)self.readU32Le(); }
+    i64 readI64Le() { return (i64)self.readU64Le(); }
+
+    u16 readU16Be()
+    {
+        u8 b[2] = {0, 0};
+        self.readBytes(b, 2);
+        return ((u16)b[0] << 8) | (u16)b[1];
+    }
+
+    u32 readU32Be()
+    {
+        u8 b[4] = {0, 0, 0, 0};
+        self.readBytes(b, 4);
+        return ((u32)b[0] << 24) | ((u32)b[1] << 16) | ((u32)b[2] << 8) | (u32)b[3];
+    }
+
+    u64 readU64Be()
+    {
+        u8 b[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        self.readBytes(b, 8);
+        u64 v = 0;
+        for (u32 j = 0; j < 8; j++)
+            v |= (u64)b[j] << (8u * (7u - j));
+        return v;
+    }
+
+    i16 readI16Be() { return (i16)self.readU16Be(); }
+    i32 readI32Be() { return (i32)self.readU32Be(); }
+    i64 readI64Be() { return (i64)self.readU64Be(); }
+
+    f32 readF32Le() { u32 v = self.readU32Le(); return *(f32*)&v; }
+    f64 readF64Le() { u64 v = self.readU64Le(); return *(f64*)&v; }
+    f32 readF32Be() { u32 v = self.readU32Be(); return *(f32*)&v; }
+    f64 readF64Be() { u64 v = self.readU64Be(); return *(f64*)&v; }
+
+    void skip(u64 n)
+    {
+        if (n <= 0x7FFFFFFFFFFFFFFFu) libc.lseek(self.fd, (i64)n, SEEK_CUR);
+    }
+}
+
+pub struct FileWriter
+{
+    i32 fd;
+
+    FileWriter fromFd(i32 fd)
+    {
+        FileWriter w;
+        w.fd = fd;
+        return w;
+    }
+
+    bool writeBytes(const u8* src, u64 n)
+    {
+        u64 total = 0;
+        while (total < n)
+        {
+            i64 r = libc.write(self.fd, src + total, n - total);
+            if (r <= 0) return false;
+            total += (u64)r;
+        }
+        return true;
+    }
+
+    void writeU8(u8 v) { self.writeBytes(&v, 1); }
+
+    void writeU16Le(u16 v)
+    {
+        u8 b[2];
+        b[0] = (u8)v;
+        b[1] = (u8)(v >> 8);
+        self.writeBytes(b, 2);
+    }
+
+    void writeU32Le(u32 v)
+    {
+        u8 b[4];
+        b[0] = (u8)v;
+        b[1] = (u8)(v >> 8);
+        b[2] = (u8)(v >> 16);
+        b[3] = (u8)(v >> 24);
+        self.writeBytes(b, 4);
+    }
+
+    void writeU64Le(u64 v)
+    {
+        u8 b[8];
+        for (u32 j = 0; j < 8; j++)
+            b[j] = (u8)(v >> (8u * j));
+        self.writeBytes(b, 8);
+    }
+
+    void writeI8(i8 v) { self.writeU8((u8)v); }
+    void writeI16Le(i16 v) { self.writeU16Le((u16)v); }
+    void writeI32Le(i32 v) { self.writeU32Le((u32)v); }
+    void writeI64Le(i64 v) { self.writeU64Le((u64)v); }
+
+    void writeU16Be(u16 v)
+    {
+        u8 b[2];
+        b[0] = (u8)(v >> 8);
+        b[1] = (u8)v;
+        self.writeBytes(b, 2);
+    }
+
+    void writeU32Be(u32 v)
+    {
+        u8 b[4];
+        b[0] = (u8)(v >> 24);
+        b[1] = (u8)(v >> 16);
+        b[2] = (u8)(v >> 8);
+        b[3] = (u8)v;
+        self.writeBytes(b, 4);
+    }
+
+    void writeU64Be(u64 v)
+    {
+        u8 b[8];
+        for (u32 j = 0; j < 8; j++)
+            b[j] = (u8)(v >> (8u * (7u - j)));
+        self.writeBytes(b, 8);
+    }
+
+    void writeI16Be(i16 v) { self.writeU16Be((u16)v); }
+    void writeI32Be(i32 v) { self.writeU32Be((u32)v); }
+    void writeI64Be(i64 v) { self.writeU64Be((u64)v); }
+
+    void writeF32Le(f32 v) { self.writeU32Le(*(u32*)&v); }
+    void writeF64Le(f64 v) { self.writeU64Le(*(u64*)&v); }
+    void writeF32Be(f32 v) { self.writeU32Be(*(u32*)&v); }
+    void writeF64Be(f64 v) { self.writeU64Be(*(u64*)&v); }
+}
+
+pub u16 bswapU16(u16 v) { return ((v >> 8) & 0x00FF) | ((v << 8) & 0xFF00); }
+pub u32 bswapU32(u32 v)
+{
+    return ((v >> 24) & 0x000000FF) | ((v >> 8) & 0x0000FF00) |
+           ((v << 8) & 0x00FF0000) | ((v << 24) & 0xFF000000);
+}
+pub u64 bswapU64(u64 v)
+{
+    return ((v >> 56) & 0x00000000000000FF) | ((v >> 40) & 0x000000000000FF00) |
+           ((v >> 24) & 0x0000000000FF0000) | ((v >> 8) & 0x00000000FF000000) |
+           ((v << 8) & 0x000000FF00000000) | ((v << 24) & 0x0000FF0000000000) |
+           ((v << 40) & 0x00FF000000000000) | ((v << 56) & 0xFF00000000000000);
+}

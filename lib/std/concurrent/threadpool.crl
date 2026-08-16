@@ -1,0 +1,127 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod thread = import("std/concurrent/thread.crl");
+
+struct Task
+{
+    void(void*) func;
+    void* arg;
+    Task* next;
+}
+
+pub struct threadpool
+{
+    thread.Mutex mutex;
+    thread.ConditionVar cond;
+    thread.Thread* threads;
+    Task* queueHead;
+    Task* queueTail;
+    u32 threadCount;
+    bool stop;
+
+    bool init(u32 numThreads)
+    {
+        self.mutex.init();
+        self.cond.init();
+        self.queueHead = null;
+        self.queueTail = null;
+        self.threadCount = numThreads;
+        self.stop = false;
+
+        if (numThreads == 0) return false;
+        self.threads = mman.alloc<thread.Thread>(numThreads);
+        if (self.threads == null) return false;
+        for (u32 i = 0; i < numThreads; i++)
+        {
+            self.threads[i] = thread.threadCreate(_workerEntry, (void*)self);
+            if (self.threads[i] == (thread.Thread)0)
+            {
+                self.stop = true;
+                self.cond.broadcast();
+                for (u32 j = 0; j < i; j++)
+                    thread.threadJoin(self.threads[j], null);
+                mman.dealloc<thread.Thread>(self.threads);
+                self.threads = null;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void deinit()
+    {
+        self.mutex.lock();
+        self.stop = true;
+        self.mutex.unlock();
+        self.cond.broadcast();
+
+        for (u32 i = 0; i < self.threadCount; i++)
+            thread.threadJoin(self.threads[i], null);
+
+        self.mutex.lock();
+        while (self.queueHead != null)
+        {
+            Task* t = self.queueHead;
+            self.queueHead = t->next;
+            mman.dealloc<Task>(t);
+        }
+        self.mutex.unlock();
+
+        mman.dealloc<thread.Thread>(self.threads);
+        self.threads = null;
+        self.mutex.destroy();
+        self.cond.destroy();
+    }
+
+    bool enqueue(void(void*) func, void* arg)
+    {
+        if (func == null) return false;
+
+        Task* t = mman.alloc<Task>(1);
+        if (t == null) return false;
+        t->func = func;
+        t->arg = arg;
+        t->next = null;
+
+        self.mutex.lock();
+        if (self.stop) { self.mutex.unlock(); mman.dealloc<Task>(t); return false; }
+        if (self.queueTail != null) self.queueTail->next = t;
+        else self.queueHead = t;
+        self.queueTail = t;
+        self.mutex.unlock();
+        self.cond.signal();
+        return true;
+    }
+
+    u32 threadCount() { return self.threadCount; }
+
+    void _worker()
+    {
+        for (;;)
+        {
+            self.mutex.lock();
+            while (self.queueHead == null && !self.stop)
+                self.cond.wait(&self.mutex);
+
+            if (self.stop && self.queueHead == null)
+            {
+                self.mutex.unlock();
+                return;
+            }
+
+            Task* t = self.queueHead;
+            self.queueHead = t->next;
+            if (self.queueHead == null) self.queueTail = null;
+            self.mutex.unlock();
+
+            t->func(t->arg);
+            mman.dealloc<Task>(t);
+        }
+    }
+}
+
+void _workerEntry(void* arg)
+{
+    ((threadpool*)arg)->_worker();
+}

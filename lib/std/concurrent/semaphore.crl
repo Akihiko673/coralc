@@ -1,0 +1,39 @@
+mod libc = import("std/platform/libc.crl");
+mod arr = import("std/collections/arr.crl");
+
+pub struct semaphore
+{
+    arr.arr<void*, 8> impl;
+
+    bool init(u32 value)
+    {
+        return libc.sem_init(self.impl, 0, value) == 0;
+    }
+
+    void destroy()
+    {
+        libc.sem_destroy(self.impl);
+    }
+
+    void wait()
+    {
+        libc.sem_wait(self.impl);
+    }
+
+    bool tryWait()
+    {
+        return libc.sem_trywait(self.impl) == 0;
+    }
+
+    void post()
+    {
+        libc.sem_post(self.impl);
+    }
+
+    i32 value()
+    {
+        i32 v;
+        libc.sem_getvalue(self.impl, &v);
+        return v;
+    }
+}

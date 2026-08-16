@@ -1,0 +1,40 @@
+mod libc = import("std/platform/libc.crl");
+
+pub struct mutex
+{
+    void* impl[6];
+
+    void init()
+    {
+        libc.pthread_mutex_init(self.impl, null);
+    }
+
+    void initRecursive()
+    {
+        u8 attr[8];
+        libc.pthread_mutexattr_init(attr);
+        libc.pthread_mutexattr_settype(attr, 1);
+        libc.pthread_mutex_init(self.impl, attr);
+        libc.pthread_mutexattr_destroy(attr);
+    }
+
+    void destroy()
+    {
+        libc.pthread_mutex_destroy(self.impl);
+    }
+
+    void lock()
+    {
+        libc.pthread_mutex_lock(self.impl);
+    }
+
+    void unlock()
+    {
+        libc.pthread_mutex_unlock(self.impl);
+    }
+
+    bool tryLock()
+    {
+        return libc.pthread_mutex_trylock(self.impl) == 0;
+    }
+}

@@ -1,0 +1,556 @@
+@[no_warn_unsafe]
+
+mod libc = import("std/platform/libc.crl");
+mod mman = import("std/memory/mman.crl");
+mod string = import("std/text/string.crl");
+mod fmt = import("std/text/fmt.crl");
+mod limits = import("std/core/limits.crl");
+
+void _writeStr(i32 fd, string.strView s)
+{
+    if (s.len > 0) libc.write(fd, s.ptr, s.len);
+}
+
+i32 _fprintI8(i32 fd, i8 v)
+{
+    string.String s = fmt.formatInt((i64)v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintI16(i32 fd, i16 v)
+{
+    string.String s = fmt.formatInt((i64)v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintI32(i32 fd, i32 v)
+{
+    string.String s = fmt.formatInt((i64)v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintI64(i32 fd, i64 v)
+{
+    string.String s = fmt.formatInt(v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintU8(i32 fd, u8 v)
+{
+    string.String s = fmt.formatUint((u64)v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintU16(i32 fd, u16 v)
+{
+    string.String s = fmt.formatUint((u64)v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintU32(i32 fd, u32 v)
+{
+    string.String s = fmt.formatUint((u64)v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintU64(i32 fd, u64 v)
+{
+    string.String s = fmt.formatUint(v, 10u, false);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintF32(i32 fd, f32 v)
+{
+    char buf[64];
+    i32 len = libc.snprintf(buf, 64u, "%.6g", v);
+    if (len > 0) libc.write(fd, buf, (u64)len);
+    return len;
+}
+
+i32 _fprintF64(i32 fd, f64 v)
+{
+    char buf[64];
+    i32 len = libc.snprintf(buf, 64u, "%.15g", v);
+    if (len > 0) libc.write(fd, buf, (u64)len);
+    return len;
+}
+
+i32 _fprintBool(i32 fd, bool v)
+{
+    if (v) { libc.write(fd, "true", 4u); return 4; }
+    else { libc.write(fd, "false", 5u); return 5; }
+}
+
+i32 _fprintChar(i32 fd, char v)
+{
+    libc.write(fd, &v, 1u);
+    return 1;
+}
+
+i32 _fprintPtr(i32 fd, const void* v)
+{
+    string.String s = fmt.formatHex((u64)v, true);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintCstr(i32 fd, const char* s)
+{
+    u64 len = libc.strlen(s);
+    if (len > 0) libc.write(fd, s, len);
+    return (i32)len;
+}
+
+i32 _fprintBytes(i32 fd, const char* ptr, u64 len)
+{
+    if (ptr && len > 0) libc.write(fd, ptr, len);
+    return (i32)len;
+}
+
+i32 _fprintNewline(i32 fd)
+{
+    libc.write(fd, "\n", 1u);
+    return 1;
+}
+
+i32 _fprintFlush(i32 fd)
+{
+    (void)fd;
+    return 0;
+}
+
+i32 _fprintHex(i32 fd, u64 v)
+{
+    string.String s = fmt.formatHex(v, true);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+i32 _fprintBin(i32 fd, u64 v)
+{
+    string.String s = fmt.formatBin(v, true);
+    _writeStr(fd, s.asView());
+    i32 len = (i32)s.len;
+    s.free();
+    return len;
+}
+
+// womdering if i should inline this funtions.
+// cuz calling a funtion to call another funtion
+// taking the same args still requires stack setup
+// in the surrent ir. maybe ill add an optimization for it
+i32 _sysPrintI8(i8 v) { return _fprintI8(1, v); }
+i32 _sysPrintI16(i16 v) { return _fprintI16(1, v); }
+i32 _sysPrintI32(i32 v) { return _fprintI32(1, v); }
+i32 _sysPrintI64(i64 v) { return _fprintI64(1, v); }
+i32 _sysPrintU8(u8 v) { return _fprintU8(1, v); }
+i32 _sysPrintU16(u16 v) { return _fprintU16(1, v); }
+i32 _sysPrintU32(u32 v) { return _fprintU32(1, v); }
+i32 _sysPrintU64(u64 v) { return _fprintU64(1, v); }
+i32 _sysPrintF32(f32 v) { return _fprintF32(1, v); }
+i32 _sysPrintF64(f64 v) { return _fprintF64(1, v); }
+i32 _sysPrintBool(bool v) { return _fprintBool(1, v); }
+i32 _sysPrintChar(char v) { return _fprintChar(1, v); }
+i32 _sysPrintPtr(const void* v) { return _fprintPtr(1, v); }
+i32 _sysPrintCstr(const char* s) { return _fprintCstr(1, s); }
+i32 _sysPrintBytes(const char* ptr, u64 len) { return _fprintBytes(1, ptr, len); }
+i32 _sysPrintNewline() { return _fprintNewline(1); }
+i32 _sysPrintFlush() { return _fprintFlush(1); }
+i32 _sysPrintHex(u64 v) { return _fprintHex(1, v); }
+i32 _sysPrintBin(u64 v) { return _fprintBin(1, v); }
+
+i32 _sysEPrintI8(i8 v) { return _fprintI8(2, v); }
+i32 _sysEPrintI16(i16 v) { return _fprintI16(2, v); }
+i32 _sysEPrintI32(i32 v) { return _fprintI32(2, v); }
+i32 _sysEPrintI64(i64 v) { return _fprintI64(2, v); }
+i32 _sysEPrintU8(u8 v) { return _fprintU8(2, v); }
+i32 _sysEPrintU16(u16 v) { return _fprintU16(2, v); }
+i32 _sysEPrintU32(u32 v) { return _fprintU32(2, v); }
+i32 _sysEPrintU64(u64 v) { return _fprintU64(2, v); }
+i32 _sysEPrintF32(f32 v) { return _fprintF32(2, v); }
+i32 _sysEPrintF64(f64 v) { return _fprintF64(2, v); }
+i32 _sysEPrintBool(bool v) { return _fprintBool(2, v); }
+i32 _sysEPrintChar(char v) { return _fprintChar(2, v); }
+i32 _sysEPrintPtr(const void* v) { return _fprintPtr(2, v); }
+i32 _sysEPrintCstr(const char* s) { return _fprintCstr(2, s); }
+i32 _sysEPrintBytes(const char* ptr, u64 len) { return _fprintBytes(2, ptr, len); }
+i32 _sysEPrintNewline() { return _fprintNewline(2); }
+i32 _sysEPrintHex(u64 v) { return _fprintHex(2, v); }
+i32 _sysEPrintBin(u64 v) { return _fprintBin(2, v); }
+
+i32 _sysReadByte()
+{
+    return libc.getchar();
+}
+
+u64 _sysReadLine(u8* buf, u64 maxBytes)
+{
+    if (maxBytes == 0u) return 0;
+    u64 i = 0;
+    while (i < maxBytes - 1u)
+    {
+        i32 c = libc.getchar();
+        if (c < 0 || c == '\n') break;
+        if (c != '\r')
+        {
+            buf[i] = (u8)c;
+            ++i;
+        }
+    }
+    buf[i] = 0;
+    return i;
+}
+
+void _fprintOne<T>(i32 fd, T val)
+{
+    comptime
+    {
+        if (T == i8) { _fprintI8(fd, (i8)val); return; }
+        if (T == i16) { _fprintI16(fd, (i16)val); return; }
+        if (T == i32) { _fprintI32(fd, (i32)val); return; }
+        if (T == i64) { _fprintI64(fd, (i64)val); return; }
+        if (T == u8) { _fprintU8(fd, (u8)val); return; }
+        if (T == u16) { _fprintU16(fd, (u16)val); return; }
+        if (T == u32) { _fprintU32(fd, (u32)val); return; }
+        if (T == u64) { _fprintU64(fd, (u64)val); return; }
+        if (T == f32) { _fprintF32(fd, (f32)val); return; }
+        if (T == f64) { _fprintF64(fd, (f64)val); return; }
+        if (T == bool) { _fprintBool(fd, (bool)val); return; }
+        if (T == char) { _fprintChar(fd, (char)val); return; }
+        if (T == (const char*))
+        {
+            _fprintBytes(fd, (const char*)val, libc.strlen((const char*)val));
+            return;
+        }
+        if (T == string.strView) { _fprintBytes(fd, val.ptr, val.len); return; }
+        if (T == string.String) { _fprintBytes(fd, val.ptr, val.len); return; }
+        if (T == (void*)) { _fprintPtr(fd, (const void*)val); return; }
+        if (T == FmtSpaces)
+        {
+            FmtSpaces v = val;
+            for (u64 i = 0u; i < v.count; ++i) _fprintChar(fd, ' ');
+            return;
+        }
+        if (T == FmtRepeat)
+        {
+            FmtRepeat v = val;
+            for (u64 i = 0u; i < v.count; ++i) _fprintChar(fd, v.ch);
+            return;
+        }
+        if (T == FmtHex)
+        {
+            FmtHex v = val;
+            _fprintHex(fd, v.value);
+            return;
+        }
+        if (T == FmtBin)
+        {
+            FmtBin v = val;
+            _fprintBin(fd, v.value);
+            return;
+        }
+        if (T == FmtFixed)
+        {
+            FmtFixed v = val;
+            string.String s = fmt.formatFloat(v.value, v.precision);
+            _writeStr(fd, s.asView());
+            s.free();
+            return;
+        }
+    }
+}
+
+void _printOne<T>(T val) { _fprintOne(1, val); }
+void _eprintOne<T>(T val) { _fprintOne(2, val); }
+
+// Variadic, no runtime loop
+// i was thinking of adding a '!'. then, in compile time
+// variadics, it'll be differentiated from libc runtime
+// variadics, say, print<T!...args>(T!... args); ion know
+// if there is a need. you nigga tell me
+pub void print<T...>(T... args)
+{
+    for (var arg : args) _fprintOne(1, arg);
+}
+
+pub void nprint<T...>(T... args)
+{
+    for (var arg : args) _fprintOne(1, arg);
+    _fprintNewline(1);
+}
+
+pub void eprint<T...>(T... args)
+{
+    for (var arg : args) _fprintOne(2, arg);
+}
+
+pub void neprint<T...>(T... args)
+{
+    for (var arg : args) _fprintOne(2, arg);
+    _fprintNewline(2);
+}
+
+// Print manipulator types
+pub struct FmtSpaces { u64 count; }
+pub struct FmtRepeat { char ch; u64 count; }
+pub struct FmtHex { u64 value; }
+pub struct FmtBin { u64 value; }
+pub struct FmtFixed { f64 value; u64 precision; }
+
+pub FmtSpaces spaces(u64 count)
+{
+    FmtSpaces s;
+    s.count = count;
+    return s;
+}
+
+pub FmtRepeat repeat(char ch, u64 count)
+{
+    FmtRepeat r;
+    r.ch = ch;
+    r.count = count;
+    return r;
+}
+
+pub FmtHex hex(u64 value)
+{
+    FmtHex h;
+    h.value = value;
+    return h;
+}
+
+pub FmtBin bin(u64 value)
+{
+    FmtBin b;
+    b.value = value;
+    return b;
+}
+
+pub FmtFixed fixed(f64 value, u64 precision)
+{
+    FmtFixed f;
+    f.value = value;
+    f.precision = precision;
+    return f;
+}
+
+pub void flush()
+{
+    _fprintFlush(1);
+}
+
+i64 _readI64()
+{
+    string.String s = string.String::new();
+    readLine(&s);
+    bool ok;
+    i64 v = parseI64(s.asView(), &ok);
+    s.free();
+    return v;
+}
+
+u64 _readU64()
+{
+    string.String s = string.String::new();
+    readLine(&s);
+    bool ok;
+    u64 v = parseU64(s.asView(), &ok);
+    s.free();
+    return v;
+}
+
+f64 _readF64()
+{
+    string.String s = string.String::new();
+    readLine(&s);
+    bool ok;
+    f64 v = parseF64(s.asView(), &ok);
+    s.free();
+    return v;
+}
+
+bool _readBool()
+{
+    string.String s = string.String::new();
+    readLine(&s);
+    string.strView sv = s.asView();
+    sv = sv.trim();
+    bool result = sv.equals( string.strView::fromCstr("true"))
+               || sv.equals( string.strView::fromCstr("1"))
+               || sv.equals( string.strView::fromCstr("yes"));
+    s.free();
+    return result;
+}
+
+pub i64 parseI64(string.strView sv, bool* ok)
+{
+    *ok = false;
+    if (sv.len == 0u) return 0;
+    u64 i = 0;
+    bool neg = false;
+
+    if (sv.ptr[0] == '-')
+    {
+        neg = true;
+        ++i;
+    } else if (sv.ptr[0] == '+')
+    {
+        ++i;
+    }
+    if (i == sv.len) return 0;
+
+    u64 result = 0;
+    u64 limit = neg ? 9223372036854775808u : (u64)limits.INT64_MAX;
+    while (i < sv.len)
+    {
+        u8 c = sv.ptr[i++];
+        if (c < '0' || c > '9') return 0;
+        u64 digit = (u64)(c - '0');
+        if (result > (limit - digit) / 10u) return 0;
+        result = result * 10u + digit;
+    }
+    *ok = true;
+    if (neg)
+    {
+        if (result == 9223372036854775808u) return limits.INT64_MIN;
+        return -(i64)result;
+    }
+    return (i64)result;
+}
+
+pub u64 parseU64(string.strView sv, bool* ok)
+{
+    *ok = false;
+    if (sv.len == 0u) return 0;
+    u64 i = 0;
+    if (sv.ptr[0] == '+') ++i;
+    if (i == sv.len) return 0;
+    u64 result = 0;
+    while (i < sv.len)
+    {
+        u8 c = sv.ptr[i++];
+        if (c < '0' || c > '9') return 0;
+        u64 digit = (u64)(c - '0');
+        if (result > (0xFFFFFFFFFFFFFFFFu - digit) / 10u) return 0;
+        result = result * 10u + digit;
+    }
+    *ok = true;
+    return result;
+}
+
+pub f64 parseF64(string.strView sv, bool* ok)
+{
+    *ok = false;
+    if (sv.len == 0u) return 0.0;
+
+    char buf[256];
+    u64 len = sv.len < 255u ? sv.len : 255u;
+    mman.copy<u8>(buf, (const u8*)sv.ptr, len);
+    buf[len] = 0;
+
+    char* endptr;
+    f64 result = libc.strtod(buf, &endptr);
+    if (endptr == buf) return 0.0;
+    while (*endptr == ' ' || *endptr == '\t' || *endptr == '\n' || *endptr == '\r') endptr++;
+    if (*endptr != 0) return 0.0;
+    *ok = true;
+    return result;
+}
+
+pub char readChar()
+{
+    i32 b = libc.getchar();
+    return b < 0 ? 0 : (char)b;
+}
+
+pub bool readLine(string.String* out)
+{
+    out->clear(out);
+    for (;;)
+    {
+        i32 b = libc.getchar();
+        if (b < 0) return !out->isEmpty(out);
+        if (b == '\n') return true;
+        if (b != '\r') out->pushChar(out, (char)b);
+    }
+}
+
+pub void read<T>(T* out)
+{
+    comptime
+    {
+        if (T == i8) { *out = (i8)_readI64(); return; }
+        if (T == i16) { *out = (i16)_readI64(); return; }
+        if (T == i32) { *out = (i32)_readI64(); return; }
+        if (T == i64) { *out = _readI64(); return; }
+        if (T == u8) { *out = (u8)_readU64(); return; }
+        if (T == u16) { *out = (u16)_readU64(); return; }
+        if (T == u32) { *out = (u32)_readU64(); return; }
+        if (T == u64) { *out = _readU64(); return; }
+        if (T == f32) { *out = (f32)_readF64(); return; }
+        if (T == f64) { *out = _readF64(); return; }
+        if (T == bool) { *out = _readBool(); return; }
+        if (T == char) { *out = readChar(); return; }
+        if (T == string.String) { readLine(out); return; }
+    }
+}
+
+pub T readVal<T>()
+{
+    T result;
+    read(&result);
+    return result;
+}
+
+struct ios
+{
+    void print<T...>(T... args)
+    {
+        for (var arg : args) _fprintOne(1, arg);
+    }
+
+    void nprint<T...>(T... args)
+    {
+        for (var arg : args) _fprintOne(1, arg);
+        _fprintNewline(1);
+    }
+
+    void eprint<T...>(T... args)
+    {
+        for (var arg : args) _fprintOne(2, arg);
+    }
+
+    void neprint<T...>(T... args)
+    {
+        for (var arg : args) _fprintOne(2, arg);
+        _fprintNewline(2);
+    }
+}

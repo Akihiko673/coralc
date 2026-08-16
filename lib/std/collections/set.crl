@@ -1,0 +1,106 @@
+mod hashmap = import("std/collections/hashmap.crl");
+mod vec = import("std/collections/vec.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct set<T>
+{
+    hashmap.hashmap<T, bool> inner;
+    u64(T) hashFn;
+    bool(T, T) eqFn;
+
+    static set<T> new(u64(T) hf, bool(T, T) ef)
+    {
+        set<T> s;
+        s.inner = hashmap.hashmap<T, bool>::new(hf, ef);
+        s.hashFn = hf;
+        s.eqFn = ef;
+        return s;
+    }
+
+    void dispose() { self.inner.dispose(); }
+    u64 count() { return self.inner.count(); }
+    bool isEmpty() { return self.inner.count() == 0; }
+
+    void insert(T val)
+    {
+        self.inner.insert(val, true);
+    }
+
+    bool contains(T val)
+    {
+        return self.inner.contains(val);
+    }
+
+    void remove(T val)
+    {
+        self.inner.remove(val);
+    }
+
+    void clear()
+    {
+        self.inner.clear();
+    }
+
+    vec<T> toVec()
+    {
+        return self.inner.keys();
+    }
+
+    void each(void(T) fn)
+    {
+        vec<T> keys = self.inner.keys();
+        for (u64 i = 0; i < keys.count(); i++)
+            fn(keys.at(i));
+    }
+
+    set<T> union(const set<T>* other)
+    {
+        set<T> result = set<T>::new(self.hashFn, self.eqFn);
+        vec<T> k = self.toVec();
+        for (u64 i = 0; i < k.count(); i++)
+            result.insert(k.at(i));
+        vec<T> ok = other->toVec();
+        for (u64 i = 0; i < ok.count(); i++)
+            result.insert(ok.at(i));
+        return result;
+    }
+
+    set<T> intersection(const set<T>* other)
+    {
+        set<T> result = set<T>::new(self.hashFn, self.eqFn);
+        vec<T> k = self.toVec();
+        for (u64 i = 0; i < k.count(); i++)
+        {
+            T val = k.at(i);
+            if (other->contains(val)) result.insert(val);
+        }
+        return result;
+    }
+
+    set<T> difference(const set<T>* other)
+    {
+        set<T> result = set<T>::new(self.hashFn, self.eqFn);
+        vec<T> k = self.toVec();
+        for (u64 i = 0; i < k.count(); i++)
+        {
+            T val = k.at(i);
+            if (!other->contains(val)) result.insert(val);
+        }
+        return result;
+    }
+
+    bool isSubset(const set<T>* other)
+    {
+        vec<T> k = self.toVec();
+        for (u64 i = 0; i < k.count(); i++)
+        {
+            if (!other->contains(k.at(i))) return false;
+        }
+        return true;
+    }
+
+    bool isSuperset(const set<T>* other)
+    {
+        return other->isSubset(self);
+    }
+}

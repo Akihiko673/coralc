@@ -1,0 +1,473 @@
+@[no_warn_unsafe]
+
+mod mman = import("lib/embed/mman.crl");
+
+pub struct _strView
+{
+    const u8* ptr;
+    u64 len;
+
+    static _strView fromParts(const u8* ptr, u64 len)
+    {
+        _strView sv;
+        sv.ptr = ptr;
+        sv.len = len;
+        return sv;
+    }
+
+    static _strView fromCstr(const u8* cstr)
+    {
+        _strView sv;
+        sv.ptr = cstr;
+        sv.len = 0;
+        while (cstr[sv.len] != 0) sv.len++;
+        return sv;
+    }
+
+    static _strView empty()
+    {
+        _strView sv;
+        sv.ptr = null;
+        sv.len = 0;
+        return sv;
+    }
+}
+
+flag (ENDIAN) {
+little:
+    pub const bool IS_LITTLE_ENDIAN = true;
+    pub const bool IS_BIG_ENDIAN = false;
+big:
+    pub const bool IS_LITTLE_ENDIAN = false;
+    pub const bool IS_BIG_ENDIAN = true;
+default:
+    pub const bool IS_LITTLE_ENDIAN = false;
+    pub const bool IS_BIG_ENDIAN = true;
+}
+
+pub u16 _bswapU16(u16 v)
+{
+    return ((v >> 8) & 0x00FF) | ((v << 8) & 0xFF00);
+}
+
+pub u32 _bswapU32(u32 v)
+{
+    return ((v >> 24) & 0x000000FF) |
+           ((v >> 8) & 0x0000FF00) |
+           ((v << 8) & 0x00FF0000) |
+           ((v << 24) & 0xFF000000);
+}
+
+pub u64 _bswapU64(u64 v)
+{
+    return ((v >> 56) & 0x00000000000000FF) |
+           ((v >> 40) & 0x000000000000FF00) |
+           ((v >> 24) & 0x0000000000FF0000) |
+           ((v >> 8) & 0x00000000FF000000) |
+           ((v << 8) & 0x000000FF00000000) |
+           ((v << 24) & 0x0000FF0000000000) |
+           ((v << 40) & 0x00FF000000000000) |
+           ((v << 56) & 0xFF00000000000000);
+}
+
+pub i16 bswapI16(i16 v) { return (i16)_bswapU16((u16)v); }
+pub i32 bswapI32(i32 v) { return (i32)_bswapU32((u32)v); }
+pub i64 bswapI64(i64 v) { return (i64)_bswapU64((u64)v); }
+
+pub u16 htons(u16 v)
+{
+    flag (ENDIAN) {
+    little:
+        return _bswapU16(v);
+    default:
+        return v;
+    }
+}
+
+pub u16 ntohs(u16 v)
+{
+    flag (ENDIAN) {
+    little:
+        return _bswapU16(v);
+    default:
+        return v;
+    }
+}
+
+pub u32 htonl(u32 v)
+{
+    flag (ENDIAN) {
+    little:
+        return _bswapU32(v);
+    default:
+        return v;
+    }
+}
+
+pub u32 ntohl(u32 v)
+{
+    flag (ENDIAN) {
+    little:
+        return _bswapU32(v);
+    default:
+        return v;
+    }
+}
+
+pub u64 htonll(u64 v)
+{
+    flag (ENDIAN) {
+    little:
+        return _bswapU64(v);
+    default:
+        return v;
+    }
+}
+
+pub u64 ntohll(u64 v)
+{
+    flag (ENDIAN) {
+    little:
+        return _bswapU64(v);
+    default:
+        return v;
+    }
+}
+
+pub struct ByteReader
+{
+    const u8* data;
+    u64 len;
+    u64 pos;
+
+    ByteReader fromBytes(const u8* data, u64 len)
+    {
+        ByteReader r;
+        r.data = data;
+        r.len = len;
+        r.pos = 0;
+        return r;
+    }
+
+    ByteReader fromStrView(_strView sv)
+    {
+        return ByteReader::fromBytes(sv.ptr, sv.len);
+    }
+
+    bool eof(const self*)
+    {
+        return self->pos >= self->len;
+    }
+
+    u64 remaining(const self*)
+    {
+        return self->len - self->pos;
+    }
+
+    bool readBytes(u8* dst, u64 n)
+    {
+        if (self.pos + n > self.len) return false;
+        mmanCopy(dst, self.data + self.pos, n);
+        self.pos += n;
+        return true;
+    }
+
+    u8 readU8 () { u8 v; self.readBytes((u8*)&v, 1); return v; }
+    u16 readU16Le() { u16 v; self.readBytes((u8*)&v, 2); return v; }
+    u32 readU32Le() { u32 v; self.readBytes((u8*)&v, 4); return v; }
+    u64 readU64Le() { u64 v; self.readBytes((u8*)&v, 8); return v; }
+
+    u16 readU16Be() { return bswapU16(self.readU16Le()); }
+    u32 readU32Be() { return bswapU32(self.readU32Le()); }
+    u64 readU64Be() { return bswapU64(self.readU64Le()); }
+
+    i8 readI8 () { return (i8)self.readU8(); }
+    i16 readI16Le() { return (i16)self.readU16Le(); }
+    i32 readI32Le() { return (i32)self.readU32Le(); }
+    i64 readI64Le() { return (i64)self.readU64Le(); }
+
+    i16 readI16Be() { return (i16)self.readU16Be(); }
+    i32 readI32Be() { return (i32)self.readU32Be(); }
+    i64 readI64Be() { return (i64)self.readU64Be(); }
+
+    f32 readF32Le() { u32 v = self.readU32Le(); return *(f32*)&v; }
+    f64 readF64Le() { u64 v = self.readU64Le(); return *(f64*)&v; }
+    f32 readF32Be() { u32 v = self.readU32Be(); return *(f32*)&v; }
+    f64 readF64Be() { u64 v = self.readU64Be(); return *(f64*)&v; }
+
+    _strView readStrView(u64 n)
+    {
+        if (self.pos + n > self.len) return _strView::empty();
+        _strView sv = _strView::fromParts(self.data + self.pos, n);
+        self.pos += n;
+        return sv;
+    }
+}
+
+pub struct ByteWriter
+{
+    u8* data;
+    u64 len;
+    u64 cap;
+    u64 pos;
+
+    ByteWriter withCapacity(u64 cap)
+    {
+        ByteWriter w;
+        w.data = ealloc<u8>(cap);
+        w.len = 0;
+        w.cap = cap;
+        w.pos = 0;
+        return w;
+    }
+
+    ByteWriter new()
+    {
+        return ByteWriter::withCapacity(256);
+    }
+
+    void dispose()
+    {
+        edealloc<u8>(self.data);
+        self.data = null;
+        self.len = 0;
+        self.cap = 0;
+        self.pos = 0;
+    }
+
+    u8* asBytes(const self*)
+    {
+        return self->data;
+    }
+
+    u64 byteCount(const self*)
+    {
+        return self->pos;
+    }
+
+    _strView asStrView(const self*)
+    {
+        return _strView::fromParts(self->data, self->pos);
+    }
+
+    void _ensure(u64 extra)
+    {
+        if (self.pos + extra <= self.cap) return;
+        u64 newCap = self.cap * 2;
+        if (newCap < self.pos + extra) newCap = self.pos + extra;
+        self.data = erealloc<u8>(self.data, newCap);
+        self.cap = newCap;
+    }
+
+    void writeBytes(const u8* src, u64 n)
+    {
+        self._ensure(n);
+        mmanCopy(self.data + self.pos, src, n);
+        self.pos += n;
+        if (self.pos > self.len) self.len = self.pos;
+    }
+
+    void writeU8 (u8 v) { self.writeBytes((u8*)&v, 1); }
+    void writeU16Le(u16 v) { self.writeBytes((u8*)&v, 2); }
+    void writeU32Le(u32 v) { self.writeBytes((u8*)&v, 4); }
+    void writeU64Le(u64 v) { self.writeBytes((u8*)&v, 8); }
+
+    void writeU16Be(u16 v) { self.writeU16Le(bswapU16(v)); }
+    void writeU32Be(u32 v) { self.writeU32Le(bswapU32(v)); }
+    void writeU64Be(u64 v) { self.writeU64Le(bswapU64(v)); }
+
+    void writeI8 (i8 v) { self.writeU8((u8)v); }
+    void writeI16Le(i16 v) { self.writeU16Le((u16)v); }
+    void writeI32Le(i32 v) { self.writeU32Le((u32)v); }
+    void writeI64Le(i64 v) { self.writeU64Le((u64)v); }
+
+    void writeI16Be(i16 v) { self.writeU16Be((u16)v); }
+    void writeI32Be(i32 v) { self.writeU32Be((u32)v); }
+    void writeI64Be(i64 v) { self.writeU64Be((u64)v); }
+
+    void writeF32Le(f32 v) { self.writeU32Le(*(u32*)&v); }
+    void writeF64Le(f64 v) { self.writeU64Le(*(u64*)&v); }
+    void writeF32Be(f32 v) { self.writeU32Be(*(u32*)&v); }
+    void writeF64Be(f64 v) { self.writeU64Be(*(u64*)&v); }
+
+    void writeStrView(_strView sv)
+    {
+        self.writeBytes(sv.ptr, sv.len);
+    }
+}
+
+pub u8 mmioReadU8 (u64 addr) { return *(volatile u8*)addr; }
+pub u16 mmioReadU16(u64 addr) { return *(volatile u16*)addr; }
+pub u32 mmioReadU32(u64 addr) { return *(volatile u32*)addr; }
+pub u64 mmioReadU64(u64 addr) { return *(volatile u64*)addr; }
+
+pub void mmioWriteU8(u64 addr, u8 v) { *(volatile u8*)addr = v; }
+pub void mmioWriteU16(u64 addr, u16 v) { *(volatile u16*)addr = v; }
+pub void mmioWriteU32(u64 addr, u32 v) { *(volatile u32*)addr = v; }
+pub void mmioWriteU64(u64 addr, u64 v) { *(volatile u64*)addr = v; }
+
+pub u16 mmioReadU16Be(u64 addr) { return bswapU16(mmioReadU16(addr)); }
+pub u32 mmioReadU32Be(u64 addr) { return bswapU32(mmioReadU32(addr)); }
+pub u64 mmioReadU64Be(u64 addr) { return bswapU64(mmioReadU64(addr)); }
+
+pub void mmioWriteU16Be(u64 addr, u16 v) { mmioWriteU16(addr, bswapU16(v)); }
+pub void mmioWriteU32Be(u64 addr, u32 v) { mmioWriteU32(addr, bswapU32(v)); }
+pub void mmioWriteU64Be(u64 addr, u64 v) { mmioWriteU64(addr, bswapU64(v)); }
+
+pub bool bitTest(u64 value, u64 bit)
+{
+    return (value & (1u << bit)) != 0;
+}
+
+pub u64 bitSet(u64 value, u64 bit)
+{
+    return value | (1u << bit);
+}
+
+pub u64 bitClear(u64 value, u64 bit)
+{
+    return value & ~(1u << bit);
+}
+
+pub u64 bitToggle(u64 value, u64 bit)
+{
+    return value ^ (1u << bit);
+}
+
+pub u64 bitExtract(u64 value, u64 start, u64 len)
+{
+    if (start >= 64 || len >= 64) return 0;
+    return (value >> start) & ((1u << len) - 1);
+}
+
+pub u64 bitInsert(u64 value, u64 field, u64 start, u64 len)
+{
+    if (start >= 64 || len >= 64 || start + len > 64) return value;
+    u64 mask = ((1u << len) - 1) << start;
+    return (value & ~mask) | ((field << start) & mask);
+}
+
+pub u64 bitReverse(u64 value, u64 bits)
+{
+    if (bits > 64) bits = 64;
+    u64 result = 0;
+    for (u64 i = 0; i < bits; i++)
+        result = (result << 1) | ((value >> i) & 1);
+    return result;
+}
+
+pub u8 bitParity(u8 value)
+{
+    value ^= value >> 4;
+    value ^= value >> 2;
+    value ^= value >> 1;
+    return value & 1;
+}
+
+pub u64 bitCountOnes(u64 value)
+{
+    u64 count = 0;
+    while (value != 0)
+    {
+        count++;
+        value &= value - 1;
+    }
+    return count;
+}
+
+pub u64 bitCountZeros(u64 value)
+{
+    return 64 - bitCountOnes(value);
+}
+
+pub i64 bitClz(u64 value)
+{
+    flag (ARCH) {
+    x86_64:
+        if (value == 0) return 64;
+        i64 result;
+        asm { lzcnt %0, %1 : "=r"(result) : "r"(value) };
+        return result;
+    arm64:
+        i64 result;
+        asm { clz %0, %1 : "=r"(result) : "r"(value) };
+        return result;
+    default:
+        if (value == 0) return 64;
+        i64 count = 0;
+        while ((value & 0x8000000000000000) == 0)
+        {
+            count++;
+            value <<= 1;
+        }
+        return count;
+    }
+}
+
+pub i64 bitCtz(u64 value)
+{
+    flag(ARCH) {
+    x86_64:
+        if (value == 0) return 64;
+        i64 result;
+        asm { tzcnt %0, %1 : "=r"(result) : "r"(value) };
+        return result;
+    arm64:
+        i64 result;
+        asm
+        {
+            rbit %0, %1
+            clz %0, %0
+            : "=r"(result)
+            : "r"(value)
+        };
+    default:
+        if (value == 0) return 64;
+        i64 count = 0;
+        while ((value & 1) == 0)
+        {
+            count++;
+            value >>= 1;
+        }
+        return count;
+    }
+}
+
+pub u64 alignUp(u64 value, u64 alignment)
+{
+    u64 mask = alignment - 1;
+    return (value + mask) & ~mask;
+}
+
+pub u64 alignDown(u64 value, u64 alignment)
+{
+    return value & ~(alignment - 1);
+}
+
+pub bool isAligned(u64 value, u64 alignment)
+{
+    return (value & (alignment - 1)) == 0;
+}
+
+pub u64 nextPowerOf2(u64 value)
+{
+    if (value <= 1) return 1;
+    value--;
+    value |= value >> 1;
+    value |= value >> 2;
+    value |= value >> 4;
+    value |= value >> 8;
+    value |= value >> 16;
+    value |= value >> 32;
+    return value + 1;
+}
+
+pub u64 prevPowerOf2(u64 value)
+{
+    return nextPowerOf2(value) >> 1;
+}
+
+pub bool isPowerOf2(u64 value)
+{
+    return value != 0 && (value & (value - 1)) == 0;
+}

@@ -1,0 +1,214 @@
+
+mod string = import("std/text/string.crl");
+
+pub u64 split(strView sv, char delim, strView* out, u64 maxParts)
+{
+    if (maxParts == 0) return 0;
+    u64 count = 0;
+    u64 start = 0;
+    for (u64 i = 0; i <= sv.len; i++)
+    {
+        if (count + 1 >= maxParts)
+        {
+            out[count++] = strView::fromParts(sv.ptr + start, sv.len - start);
+            return count;
+        }
+        if (i == sv.len || sv.ptr[i] == delim)
+        {
+            out[count++] = strView::fromParts(sv.ptr + start, i - start);
+            start = i + 1;
+        }
+    }
+    return count;
+}
+
+pub vec<strView> splitVec(strView sv, char delim)
+{
+    vec<strView> v = vec<strView>::new();
+    u64 start = 0;
+    for (u64 i = 0; i <= sv.len; i++)
+    {
+        if (i == sv.len || sv.ptr[i] == delim)
+        {
+            v.push(&v, strView::fromParts(sv.ptr + start, i - start));
+            start = i + 1;
+        }
+    }
+    return v;
+}
+
+pub strView trim(strView sv)
+{
+    u64 start = 0;
+    while (start < sv.len && (sv.ptr[start] == ' ' || sv.ptr[start] == '\t' || sv.ptr[start] == '\n' || sv.ptr[start] == '\r'))
+        start++;
+    u64 end = sv.len;
+    while (end > start && (sv.ptr[end - 1] == ' ' || sv.ptr[end - 1] == '\t' || sv.ptr[end - 1] == '\n' || sv.ptr[end - 1] == '\r'))
+        end--;
+    return strView::fromParts(sv.ptr + start, end - start);
+}
+
+pub strView trimLeft(strView sv)
+{
+    u64 start = 0;
+    while (start < sv.len && (sv.ptr[start] == ' ' || sv.ptr[start] == '\t' || sv.ptr[start] == '\n' || sv.ptr[start] == '\r'))
+        start++;
+    return strView::fromParts(sv.ptr + start, sv.len - start);
+}
+
+pub strView trimRight(strView sv)
+{
+    u64 end = sv.len;
+    while (end > 0 && (sv.ptr[end - 1] == ' ' || sv.ptr[end - 1] == '\t' || sv.ptr[end - 1] == '\n' || sv.ptr[end - 1] == '\r'))
+        end--;
+    return strView::fromParts(sv.ptr, end);
+}
+
+pub bool startsWith(strView sv, strView prefix)
+{
+    if (sv.len < prefix.len) return false;
+    for (u64 i = 0; i < prefix.len; i++)
+        if (sv.ptr[i] != prefix.ptr[i]) return false;
+    return true;
+}
+
+pub bool endsWith(strView sv, strView suffix)
+{
+    if (sv.len < suffix.len) return false;
+    u64 offset = sv.len - suffix.len;
+    for (u64 i = 0; i < suffix.len; i++)
+        if (sv.ptr[offset + i] != suffix.ptr[i]) return false;
+    return true;
+}
+
+pub bool contains(strView sv, strView sub)
+{
+    if (sub.len > sv.len) return false;
+    for (u64 i = 0; i <= sv.len - sub.len; i++)
+    {
+        bool match = true;
+        for (u64 j = 0; j < sub.len; j++)
+        {
+            if (sv.ptr[i + j] != sub.ptr[j]) { match = false; break; }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+pub i64 indexOf(strView sv, strView sub)
+{
+    if (sub.len > sv.len) return -1;
+    for (u64 i = 0; i <= sv.len - sub.len; i++)
+    {
+        bool match = true;
+        for (u64 j = 0; j < sub.len; j++)
+        {
+            if (sv.ptr[i + j] != sub.ptr[j]) { match = false; break; }
+        }
+        if (match) return (i64)i;
+    }
+    return -1;
+}
+
+pub i64 indexOfChar(strView sv, char ch)
+{
+    for (u64 i = 0; i < sv.len; i++)
+        if (sv.ptr[i] == ch) return (i64)i;
+    return -1;
+}
+
+pub i64 lastIndexOf(strView sv, strView sub)
+{
+    if (sub.len > sv.len) return -1;
+    u64 limit = sv.len - sub.len;
+    for (u64 i = limit; i > 0; i--)
+    {
+        bool match = true;
+        for (u64 j = 0; j < sub.len; j++)
+        {
+            if (sv.ptr[i + j] != sub.ptr[j]) { match = false; break; }
+        }
+        if (match) return (i64)i;
+    }
+    if (sub.len <= sv.len)
+    {
+        bool match = true;
+        for (u64 j = 0; j < sub.len; j++)
+            if (sv.ptr[j] != sub.ptr[j]) { match = false; break; }
+        if (match) return 0;
+    }
+    return -1;
+}
+
+pub string replace(strView sv, strView from, strView to)
+{
+    string out = string.new();
+    if (from.len == 0)
+    {
+        for (u64 i = 0; i <= sv.len; i++)
+        {
+            out.pushView(&out, to);
+            if (i < sv.len) out.pushView(&out, strView::fromParts(sv.ptr + i, 1));
+        }
+        return out;
+    }
+    u64 i = 0;
+    while (i < sv.len)
+    {
+        i64 idx = indexOf(strView::fromParts(sv.ptr + i, sv.len - i), from);
+        if (idx < 0)
+        {
+            out.pushView(&out, strView::fromParts(sv.ptr + i, sv.len - i));
+            break;
+        }
+        if ((u64)idx > 0) out.pushView(&out, strView::fromParts(sv.ptr + i, (u64)idx));
+        out.pushView(&out, to);
+        i += (u64)idx + from.len;
+    }
+    return out;
+}
+
+pub string join(const strView* parts, u64 count, strView sep)
+{
+    string out = string.new();
+    for (u64 i = 0; i < count; i++)
+    {
+        if (i > 0) out.pushView(&out, sep);
+        out.pushView(&out, parts[i]);
+    }
+    return out;
+}
+
+pub string joinVec(const vec<strView>* parts, strView sep)
+{
+    string out = string.new();
+    for (u64 i = 0; i < parts->count(parts); i++)
+    {
+        if (i > 0) out.pushView(&out, sep);
+        out.pushView(&out, parts->at(parts, i));
+    }
+    return out;
+}
+
+pub strView substr(strView sv, u64 start, u64 len)
+{
+    if (start >= sv.len) return strView::empty();
+    u64 remaining = sv.len - start;
+    u64 clen = len < remaining ? len : remaining;
+    return strView::fromParts(sv.ptr + start, clen);
+}
+
+pub bool equalsIgnoreCase(strView a, strView b)
+{
+    if (a.len != b.len) return false;
+    for (u64 i = 0; i < a.len; i++)
+    {
+        char ca = a.ptr[i];
+        char cb = b.ptr[i];
+        if (ca >= 'A' && ca <= 'Z') ca += 0x20;
+        if (cb >= 'A' && cb <= 'Z') cb += 0x20;
+        if (ca != cb) return false;
+    }
+    return true;
+}

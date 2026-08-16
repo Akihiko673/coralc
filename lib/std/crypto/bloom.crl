@@ -1,0 +1,79 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct bloom
+{
+    vec<u64> bits;
+    u64 numBits;
+    u64 numHashes;
+
+    bloom new(u64 numBits, u64 numHashes)
+    {
+        bloom b;
+        if (numBits == 0) numBits = 1;
+        u64 words = (numBits + 63) / 64;
+        b.bits = vec<u64>::withCap(words > 0 ? words : 1);
+        for (u64 i = 0; i < words; i++) b.bits.push(0u);
+        b.numBits = numBits;
+        b.numHashes = numHashes;
+        return b;
+    }
+
+    void dispose() { self.bits.dispose(); }
+
+    u64 _hash(const u8* data, u64 len, u64 seed)
+    {
+        u64 h = seed;
+        for (u64 i = 0; i < len; i++)
+        {
+            h ^= (u64)data[i];
+            h *= 0x9E3779B97F4A7C15;
+            h ^= h >> 31;
+        }
+        return h;
+    }
+
+    void insert(const u8* data, u64 len)
+    {
+        for (u64 i = 0; i < self.numHashes; i++)
+        {
+            u64 h = self._hash(data, len, i * 0x9E3779B9);
+            u64 bit = h % self.numBits;
+            u64 word = bit / 64;
+            u64 off = bit % 64;
+            *self.bits.atPtr(word) |= (1u << off);
+        }
+    }
+
+    bool contains(const u8* data, u64 len)
+    {
+        for (u64 i = 0; i < self.numHashes; i++)
+        {
+            u64 h = self._hash(data, len, i * 0x9E3779B9);
+            u64 bit = h % self.numBits;
+            u64 word = bit / 64;
+            u64 off = bit % 64;
+            if ((self.bits.at(word) & (1u << off)) == 0) return false;
+        }
+        return true;
+    }
+
+    void clear()
+    {
+        for (u64 i = 0; i < self.bits.count(); i++)
+            *self.bits.atPtr(i) = 0;
+    }
+
+    u64 bitsCount()
+    {
+        u64 total = 0;
+        for (u64 i = 0; i < self.bits.count(); i++)
+        {
+            u64 v = self.bits.at(i);
+            while (v != 0) { total++; v &= v - 1; }
+        }
+        return total;
+    }
+}

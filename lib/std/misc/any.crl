@@ -1,0 +1,27 @@
+@[no_warn_unsafe]
+pub struct any
+{
+    void* p;
+
+    void* ptr()
+    {
+        return p;
+    }
+
+    bool isNull()
+    {
+        return p == null;
+    }
+
+    T* as<T>()
+    {
+        return (T*)p;
+    }
+}
+
+pub any wrap(void* value)
+{
+    any a;
+    a.p = value;
+    return a;
+}

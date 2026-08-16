@@ -1,0 +1,57 @@
+mod string = import("std/text/string.crl");
+mod ios = import("std/io/ios.crl");
+mod time = import("std/core/time.crl");
+
+pub enum LogLevel
+{
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal
+}
+
+pub struct Logger
+{
+    LogLevel minLevel;
+    string.String name;
+
+    Logger new(string.strView name, LogLevel minLevel)
+    {
+        Logger l;
+        l.name = string.String.fromView(name);
+        l.minLevel = minLevel;
+        return l;
+    }
+
+    void dispose()
+    {
+        self.name.free();
+    }
+
+    void setLevel(LogLevel level) { self.minLevel = level; }
+
+    bool enabled(LogLevel level) { return level >= self.minLevel; }
+
+    void _log(LogLevel level, strView msg)
+    {
+        if (level < self.minLevel) return;
+        const char* label;
+        if (level == LogLevel::Debug) label = "DEBUG";
+        else if (level == LogLevel::Info) label = "INFO";
+        else if (level == LogLevel::Warn) label = "WARN";
+        else if (level == LogLevel::Error) label = "ERROR";
+        else label = "FATAL";
+        time.Timespec ts = time.nowRealtime();
+        if (level == LogLevel::Error || level == LogLevel::Fatal)
+            ios.neprint("[", label, "][", self.name.asView(), "] ", msg);
+        else
+            ios.nprint("[", label, "][", self.name.asView(), "] ", msg);
+    }
+
+    void debug(strView msg) { self._log(LogLevel::Debug, msg); }
+    void info(strView msg) { self._log(LogLevel::Info, msg); }
+    void warn(strView msg) { self._log(LogLevel::Warn, msg); }
+    void error(strView msg) { self._log(LogLevel::Error, msg); }
+    void fatal(strView msg) { self._log(LogLevel::Fatal, msg); }
+}

@@ -1,0 +1,206 @@
+@[no_warn_unsafe]
+
+mod vec = import("std/collections/vec.crl");
+
+pub vec.vec<U> map<T, U>(const vec.vec<T>* v, U(T) fn)
+{
+    vec.vec<U> result = vec.vec<U>::withCap(v->count());
+    for (u64 i = 0; i < v->count(); i++)
+        result.push(fn(v->at(i)));
+    return result;
+}
+
+pub vec.vec<T> filter<T>(const vec.vec<T>* v, bool(T) pred)
+{
+    vec.vec<T> result = vec.vec<T>::new();
+    for (u64 i = 0; i < v->count(); i++)
+    {
+        T val = v->at(i);
+        if (pred(val)) result.push(val);
+    }
+    return result;
+}
+
+pub T reduce<T>(const vec.vec<T>* v, T init, T(T, T) fn)
+{
+    T acc = init;
+    for (u64 i = 0; i < v->count(); i++)
+        acc = fn(acc, v->at(i));
+    return acc;
+}
+
+pub void forEach<T>(const vec.vec<T>* v, void(T) fn)
+{
+    for (u64 i = 0; i < v->count(); i++)
+        fn(v->at(i));
+}
+
+pub T find<T>(const vec.vec<T>* v, bool(T) pred)
+{
+    for (u64 i = 0; i < v->count(); i++)
+    {
+        T val = v->at(i);
+        if (pred(val)) return val;
+    }
+    return T();
+}
+
+pub i64 findIndex<T>(const vec.vec<T>* v, bool(T) pred)
+{
+    for (u64 i = 0; i < v->count(); i++)
+        if (pred(v->at(i))) return (i64)i;
+    return -1;
+}
+
+pub bool any<T>(const vec.vec<T>* v, bool(T) pred)
+{
+    for (u64 i = 0; i < v->count(); i++)
+        if (pred(v->at(i))) return true;
+    return false;
+}
+
+pub bool all<T>(const vec.vec<T>* v, bool(T) pred)
+{
+    for (u64 i = 0; i < v->count(); i++)
+        if (!pred(v->at(i))) return false;
+    return true;
+}
+
+pub vec.vec<T> take<T>(const vec.vec<T>* v, u64 n)
+{
+    u64 count = n < v->count() ? n : v->count();
+    vec.vec<T> result = vec.vec<T>::withCap(count);
+    for (u64 i = 0; i < count; i++)
+        result.push(v->at(i));
+    return result;
+}
+
+pub vec.vec<T> skip<T>(const vec.vec<T>* v, u64 n)
+{
+    if (n >= v->count()) return vec.vec<T>::new();
+    u64 remaining = v->count() - n;
+    vec.vec<T> result = vec.vec<T>::withCap(remaining);
+    for (u64 i = n; i < v->count(); i++)
+        result.push(v->at(i));
+    return result;
+}
+
+pub vec.vec<T> slice<T>(const vec.vec<T>* v, u64 start, u64 end)
+{
+    if (start >= end || start >= v->count()) return vec.vec<T>::new();
+    u64 e = end < v->count() ? end : v->count();
+    u64 n = e - start;
+    vec.vec<T> result = vec.vec<T>::withCap(n);
+    for (u64 i = start; i < e; i++)
+        result.push(v->at(i));
+    return result;
+}
+
+pub struct Pair<T, U>
+{
+    T first;
+    U second;
+}
+
+pub vec.vec<Pair<T, U>> zip<T, U>(const vec.vec<T>* a, const vec.vec<U>* b)
+{
+    u64 n = a->count() < b->count() ? a->count() : b->count();
+    vec.vec<Pair<T, U>> result = vec.vec<Pair<T, U>>::withCap(n);
+    for (u64 i = 0; i < n; i++)
+    {
+        Pair<T, U> p;
+        p.first = a->at(i);
+        p.second = b->at(i);
+        result.push(p);
+    }
+    return result;
+}
+
+pub u64 countIf<T>(const vec.vec<T>* v, bool(T) pred)
+{
+    u64 n = 0;
+    for (u64 i = 0; i < v->count(); i++)
+        if (pred(v->at(i))) n++;
+    return n;
+}
+
+pub T minBy<T>(const vec.vec<T>* v, bool(T, T) less)
+{
+    assert(v->count() > 0);
+    T best = v->at(0);
+    for (u64 i = 1; i < v->count(); i++)
+    {
+        T val = v->at(i);
+        if (less(val, best)) best = val;
+    }
+    return best;
+}
+
+pub T maxBy<T>(const vec.vec<T>* v, bool(T, T) less)
+{
+    assert(v->count() > 0);
+    T best = v->at(0);
+    for (u64 i = 1; i < v->count(); i++)
+    {
+        T val = v->at(i);
+        if (less(best, val)) best = val;
+    }
+    return best;
+}
+
+pub vec.vec<T> unique<T>(const vec.vec<T>* v, bool(T, T) eq)
+{
+    vec.vec<T> result = vec.vec<T>::new();
+    for (u64 i = 0; i < v->count(); i++)
+    {
+        T val = v->at(i);
+        bool found = false;
+        for (u64 j = 0; j < result.count(); j++)
+        {
+            if (eq(val, result.at(j))) { found = true; break; }
+        }
+        if (!found) result.push(val);
+    }
+    return result;
+}
+
+pub vec.vec<T> flatten<T>(const vec.vec<vec.vec<T>>* v)
+{
+    u64 total = 0;
+    for (u64 i = 0; i < v->count(); i++)
+        total += v->at(i).count();
+    vec.vec<T> result = vec.vec<T>::withCap(total);
+    for (u64 i = 0; i < v->count(); i++)
+    {
+        vec.vec<T> inner = v->at(i);
+        for (u64 j = 0; j < inner.count(); j++)
+            result.push(inner.at(j));
+    }
+    return result;
+}
+
+pub vec.vec<u64> enumerate<T>(const vec.vec<T>* v)
+{
+    vec.vec<u64> result = vec.vec<u64>::withCap(v->count());
+    for (u64 i = 0; i < v->count(); i++)
+        result.push(i);
+    return result;
+}
+
+pub T sum<T>(const vec.vec<T>* v)
+{
+    assert(v->count() > 0);
+    T total = v->at(0);
+    for (u64 i = 1; i < v->count(); i++)
+        total = total + v->at(i);
+    return total;
+}
+
+pub f64 average(const vec.vec<f64>* v)
+{
+    if (v->count() == 0) return 0.0;
+    f64 total = 0.0;
+    for (u64 i = 0; i < v->count(); i++)
+        total += v->at(i);
+    return total / (f64)v->count();
+}

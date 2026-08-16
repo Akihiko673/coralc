@@ -1,0 +1,2507 @@
+// Self-host statement/declaration parser: LALR(1) tables generated at
+// startup from a statement-level grammar, driven over lexer tokens to
+// build the ast.Stmt / ast.Decl tree. Expressions are embedded at ES
+// slots: each ES is an epsilon nonterminal whose reduction the driver
+// intercepts to run expr_parser.parseFrom over the token stream, with
+// stop tokens = the terminals that end the slot.
+//
+// The statement grammar is pure LALR(1) around the ES slots. One context
+// needs a two-token lookahead, the classic typedef-name ambiguity (x = 5;
+// vs Type x;): in states that both carry an ES slot and shift an IDENT
+// into a type, the driver peeks the next token; if it cannot continue a
+// type the IDENT starts an expression instead (the lexer-hack equivalent
+// for table-driven C parsers).
+
+mod mman = import("std/memory/mman.crl");
+mod str = import("std/text/string.crl");
+mod tok = import("token");
+mod ast = import("ast/ast.crl");
+mod lalr = import("lalr");
+mod exprP = import("expr_parser");
+mod libc = import("std/platform/libc.crl");
+
+// reduce actions
+const u32 AC_PASS = 0;
+const u32 AC_NONE = 1;          // push null
+const u32 AC_PROG = 2;          // PROG -> DECLS
+const u32 AC_L1 = 3;            // build 1-elem SList
+const u32 AC_APP = 4;           // append item to SList
+const u32 AC_PREF0 = 5;         // PREF -> eps (flags = 0)
+const u32 AC_PUB = 6;           // PREF -> PREF pub
+const u32 AC_STATIC = 7;        // PREF -> PREF static
+const u32 AC_INLINE = 8;        // PREF -> PREF inline
+const u32 AC_CONSTMOD = 9;      // PREF -> PREF const
+const u32 AC_TBASE = 10;        // TBASE -> TYPEKW | IDENT
+const u32 AC_TDOT = 11;         // TBASE -> TBASE . IDENT
+const u32 AC_TSTAR = 12;        // TYPE -> TYPE *
+const u32 AC_TARR = 13;         // TYPE -> TYPE [ ES ]
+const u32 AC_TGEN = 14;         // TYPE -> TBASE < TYPES >
+const u32 AC_PARAM = 15;        // PARAM -> PREF TYPE IDENT?
+const u32 AC_PARAMS1 = 16;      // PARAMS -> PARAM REST
+const u32 AC_RESTAPP = 17;      // REST -> , PARAM REST
+const u32 AC_VARARG = 18;       // REST -> , ...
+const u32 AC_BLOCK = 19;        // BLOCK -> { STMTS }
+const u32 AC_EXPR = 20;         // EXPR -> ES ;
+const u32 AC_VARDECL = 21;      // VARDECL -> TYPE IDENT VARREST ;
+const u32 AC_VRINIT = 22;       // VARREST -> = ES
+const u32 AC_VRARR = 23;        // VARREST -> [ ES ]
+const u32 AC_VRBOTH = 24;       // VARREST -> [ ES ] = ES
+const u32 AC_VRNAMES = 25;      // VARREST -> , IDENTS
+const u32 AC_CONSTD = 26;       // const decl
+const u32 AC_CONSTS = 27;       // const stmt
+const u32 AC_RETURN0 = 28;      // RETURN -> return ;
+const u32 AC_RETURN = 29;       // RETURN -> return ES ;
+const u32 AC_IF = 30;
+const u32 AC_WHILE = 31;
+const u32 AC_FOR = 32;
+const u32 AC_VARFOR = 33;       // FORINIT -> var IDENT = ES
+const u32 AC_VARFORIN = 34;     // FORINIT -> var IDENT : ES
+const u32 AC_VARFOR2 = 35;      // FORINIT -> TYPE IDENT = ES
+const u32 AC_SWITCH = 36;
+const u32 AC_SWCASE = 37;       // CASEV -> case ES : STMTS
+const u32 AC_SWDEF = 38;        // SWSECTION -> default : STMTS
+const u32 AC_FLAGSTMT = 39;
+const u32 AC_FLAGDECL = 40;
+const u32 AC_FCASEC = 41;       // FCASE -> IDENT : DECLS
+const u32 AC_FCASED = 42;       // FLAGSECTION -> default : DECLS
+const u32 AC_FUNC = 43;
+const u32 AC_EXTERN_F = 44;
+const u32 AC_EXTERN_V = 45;
+const u32 AC_BREAK = 46;
+const u32 AC_CONT = 47;
+const u32 AC_FORINIT = 48;      // FORINIT -> ES_SEMI (wraps expr in ST_EXPR)
+const u32 AC_ES_SEMI = 50;      // stops { ';' }
+const u32 AC_ES_RPAR = 51;      // stops { ')' }
+const u32 AC_ES_RBKT = 52;      // stops { ']' }
+const u32 AC_ES_COLON = 53;     // stops { ':' }
+const u32 AC_ES_BOTH = 54;      // stops { ';' ')' }
+const u32 AC_VRAW = 60;         // VARDECL -> TYPE IDENT VARREST ; (raw parts)
+const u32 AC_WRAPV = 61;        // STMT -> VARDECL (VRaw -> Stmt)
+const u32 AC_MKVD = 62;         // DECL -> VARDECL (VRaw -> DT_VAR Decl)
+const u32 AC_MKVDP = 63;        // DECL -> PREF VARDECL (flags + VRaw)
+const u32 AC_FUNCP = 64;        // FUNC -> PREF TYPE IDENT ( PARAMS ) ;
+const u32 AC_FUNC0 = 65;        // FUNC0 -> TYPE IDENT ( PARAMS ) BLOCK
+const u32 AC_FUNCP0 = 66;       // FUNC0 -> TYPE IDENT ( PARAMS ) ;
+const u32 AC_CONST0 = 67;       // CONST0 -> const IDENT = ES ;
+const u32 AC_EXTERN_V0 = 68;    // EXT0 -> extern TYPE IDENT ;
+
+// nonterminal indices
+const u32 N_PROG = 0;
+const u32 N_DECLS = 1;
+const u32 N_DECL = 2;
+const u32 N_FUNC = 3;
+const u32 N_PREF = 4;
+const u32 N_TYPE = 5;
+const u32 N_TBASE = 6;
+const u32 N_TYPES = 7;
+const u32 N_PARAMS = 8;
+const u32 N_PARAM = 9;
+const u32 N_REST = 10;
+const u32 N_BLOCK = 11;
+const u32 N_STMTS = 12;
+const u32 N_STMT = 13;
+const u32 N_EXPR = 14;
+const u32 N_RETURN = 15;
+const u32 N_IF = 16;
+const u32 N_ELSE = 17;
+const u32 N_WHILE = 18;
+const u32 N_FOR = 19;
+const u32 N_FORINIT = 20;
+const u32 N_SWITCH = 21;
+const u32 N_SWBODY = 22;
+const u32 N_SWSECTION = 23;
+const u32 N_CASEV = 24;
+const u32 N_FLAGSTMT = 25;
+const u32 N_FLAGDECL = 26;
+const u32 N_FLAGBODY = 27;
+const u32 N_FLAGSECTION = 28;
+const u32 N_FCASE = 29;
+const u32 N_CONSTD = 30;
+const u32 N_CONSTS = 31;
+const u32 N_VARDECL = 32;
+const u32 N_VARREST = 33;
+const u32 N_IDENTS = 34;
+const u32 N_ATTRS = 35;
+const u32 N_EXT = 36;
+const u32 N_BREAK = 37;
+const u32 N_CONT = 38;
+const u32 N_ES_SEMI = 39;
+const u32 N_ES_RPAR = 40;
+const u32 N_ES_RBKT = 41;
+const u32 N_ES_COLON = 42;
+const u32 N_ES_BOTH = 43;
+const u32 N_TYPEKW = 44;
+const u32 N_FUNC0 = 45;
+const u32 N_CONST0 = 46;
+const u32 N_COUNT = 47;
+
+// precedence levels (higher wins)
+const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
+const u32 PREC_PREF = 3;    // PREF epsilon: must beat type-keyword/IDENT
+                            // shifts so function/param decls always push PREF
+const u32 PREC_DECLS = 3;   // DECLS epsilon beats an IDENT shift (flag cases)
+const u32 PREC_IDENT = 2;   // shift IDENT beats epsilon reductions
+const u32 PREC_TYPEKW = 2;
+const u32 PREC_SEMI = 2;    // 'return ;' shifts (empty return)
+const u32 PREC_DEFAULT = 4; // 'default :' shifts over DECLS epsilon
+
+const u32 FLAG_PUB = 1;
+const u32 FLAG_STATIC = 2;
+const u32 FLAG_INLINE = 4;
+
+const u32 STKMAX = 256;
+
+str.strView TYPEKWS[] = {
+    "u8", "u16", "u32", "u64", "i8", "i16", "i32",
+    "i64", "f32", "f64", "bool", "char", "void",
+    "isize", "usize"
+};
+
+// semantic slot kinds (for cleanup on failed parses)
+const u32 K_NULL = 0;
+const u32 K_INT = 1;
+const u32 K_EXPR = 2;
+const u32 K_TYPE = 3;
+const u32 K_STMT = 4;
+const u32 K_DECL = 5;
+const u32 K_LIST = 6;       // SList*
+const u32 K_PLIST = 7;      // PList*
+const u32 K_CASE = 8;       // StmtCase*
+const u32 K_FCASE = 9;      // FCase*
+const u32 K_VIEW = 10;      // str.strView*
+const u32 K_PARAM = 11;     // ast.Param*
+const u32 K_VRES = 12;      // VRes*
+const u32 K_PROG = 13;      // ast.Program*
+const u32 K_VRAW = 14;      // VRaw* (raw var-decl parts)
+
+pub struct SList
+{
+    u64* a;
+    u32 n;
+    u32 cap;
+    u8 itemKind;
+}
+
+pub struct PList
+{
+    u64* a;
+    u32 n;
+    u32 cap;
+    bool variadic;
+}
+
+pub struct VRes
+{
+    u64 init;   // Expr* or 0
+    u64 arr;    // Expr* or 0
+    u64 names;  // SList* of strView* or 0
+}
+
+pub struct VRaw
+{
+    u64 type;   // TypeExpr*
+    u64 name;   // strView*
+    u64 init;   // Expr* or 0
+    u64 arr;    // Expr* or 0
+    u64 names;  // SList* of strView* or 0
+}
+
+pub struct FCase
+{
+    u64 name;   // strView*
+    u64 decls;  // SList* of Decl*
+}
+
+SList* listNew(u8 itemKind)
+{
+    SList* l = mman.alloc<SList>(1);
+    l->a = null;
+    l->n = 0;
+    l->cap = 0;
+    l->itemKind = itemKind;
+    return l;
+}
+
+void listAppend(SList* l, u64 v)
+{
+    if (l->n >= l->cap)
+    {
+        u32 nc = l->cap ? l->cap * 2 : 8;
+        u64* na = mman.alloc<u64>(nc);
+        for (u32 i = 0; i < l->n; i++) na[i] = l->a[i];
+        if (l->a) mman.dealloc<u64>(l->a);
+        l->a = na;
+        l->cap = nc;
+    }
+    l->a[l->n++] = v;
+}
+
+PList* plistNew()
+{
+    PList* l = mman.alloc<PList>(1);
+    l->a = null;
+    l->n = 0;
+    l->cap = 0;
+    l->variadic = false;
+    return l;
+}
+
+void plistAppend(PList* l, u64 v)
+{
+    if (l->n >= l->cap)
+    {
+        u32 nc = l->cap ? l->cap * 2 : 8;
+        u64* na = mman.alloc<u64>(nc);
+        for (u32 i = 0; i < l->n; i++) na[i] = l->a[i];
+        if (l->a) mman.dealloc<u64>(l->a);
+        l->a = na;
+        l->cap = nc;
+    }
+    l->a[l->n++] = v;
+}
+
+u32 esStops(u32 es, u32* st)
+{
+    if (es == AC_ES_SEMI) { st[0] = tok.terminalId(str.strView::fromCstr(";")); return 1; }
+    if (es == AC_ES_RPAR) { st[0] = tok.terminalId(str.strView::fromCstr(")")); return 1; }
+    if (es == AC_ES_RBKT) { st[0] = tok.terminalId(str.strView::fromCstr("]")); return 1; }
+    if (es == AC_ES_COLON) { st[0] = tok.terminalId(str.strView::fromCstr(":")); return 1; }
+    st[0] = tok.terminalId(str.strView::fromCstr(";"));
+    st[1] = tok.terminalId(str.strView::fromCstr(")"));
+    return 2;
+}
+
+u32 esNonterm(u32 es)
+{
+    if (es == AC_ES_SEMI) return N_ES_SEMI;
+    if (es == AC_ES_RPAR) return N_ES_RPAR;
+    if (es == AC_ES_RBKT) return N_ES_RBKT;
+    if (es == AC_ES_COLON) return N_ES_COLON;
+    return N_ES_BOTH;
+}
+
+bool inStops(u32 tid, const u32* stops, u32 nstops)
+{
+    for (u32 i = 0; i < nstops; i++)
+        if (stops[i] == tid) return true;
+    return false;
+}
+
+u32 termId(u8* s) { return tok.terminalId(str.strView::fromCstr((const char*)s)); }
+
+void addProd(lalr.Grammar* g, u32 i, u32 head, u32 n, const u32* rhs,
+             u32 prec, u32 assoc, u32 action)
+{
+    lalr.Prod* p = &g->prods[i];
+    p->head = head;
+    p->nrhs = n;
+    p->prec = prec;
+    p->assoc = assoc;
+    p->action = action;
+    p->rhs = mman.alloc<u32>(n);
+    for (u32 k = 0; k < n; k++) p->rhs[k] = rhs[k];
+}
+
+lalr.Grammar stmtGrammar()
+{
+    lalr.Grammar g;
+    g.nterms = tok.TOK_ANON_FIRST + tok.NUM_ANON;
+    g.nnonterms = N_COUNT;
+    g.nprods = 118;
+    g.prods = mman.alloc<lalr.Prod>(g.nprods);
+    g.start = lalr.NT_BASE + N_PROG;
+    g.termPrec = mman.alloc<u32>(g.nterms);
+    for (u32 i = 0; i < g.nterms; i++) g.termPrec[i] = 0;
+
+    for (u32 k = 0; k < 15; k++)
+        g.termPrec[termId((u8*)TYPEKWS[k].ptr)] = PREC_TYPEKW;
+    g.termPrec[tok.TOK_IDENT] = PREC_IDENT;
+    g.termPrec[termId((u8*)"default")] = PREC_DEFAULT;
+    g.termPrec[termId((u8*)";")] = PREC_SEMI;
+
+    u32 i = 0;
+    u32 r1[1];
+    u32 r2[2];
+    u32 r3[3];
+    u32 r4[4];
+    u32 r5[5];
+    u32 r6[6];
+    u32 r7[7];
+    u32 r8[8];
+    u32 r9[9];
+    u32 r11[11];
+
+    r1[0] = lalr.NT_BASE + N_DECLS;
+    addProd(&g, i++, lalr.NT_BASE + N_PROG, 1, r1, 0, 0, AC_PROG);
+    addProd(&g, i++, lalr.NT_BASE + N_DECLS, 0, null, PREC_DECLS, 0, AC_L1);
+    r2[0] = lalr.NT_BASE + N_DECLS; r2[1] = lalr.NT_BASE + N_DECL;
+    addProd(&g, i++, lalr.NT_BASE + N_DECLS, 2, r2, 0, 0, AC_APP);
+    r1[0] = lalr.NT_BASE + N_FUNC;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_FUNC0;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_EXT;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_CONSTD;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_CONST0;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_FLAGDECL;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_VARDECL;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_MKVD);
+    r2[0] = lalr.NT_BASE + N_PREF; r2[1] = lalr.NT_BASE + N_VARDECL;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 2, r2, 0, 0, AC_MKVDP);
+    r1[0] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_NONE);
+
+    r7[0] = lalr.NT_BASE + N_PREF;
+    r7[1] = lalr.NT_BASE + N_TYPE;
+    r7[2] = tok.TOK_IDENT;
+    r7[3] = termId((u8*)"(");
+    r7[4] = lalr.NT_BASE + N_PARAMS;
+    r7[5] = termId((u8*)")");
+    r7[6] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC, 7, r7, 0, 0, AC_FUNC);
+    r7[6] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC, 7, r7, 0, 0, AC_FUNCP);
+    r6[0] = lalr.NT_BASE + N_TYPE;
+    r6[1] = tok.TOK_IDENT;
+    r6[2] = termId((u8*)"(");
+    r6[3] = lalr.NT_BASE + N_PARAMS;
+    r6[4] = termId((u8*)")");
+    r6[5] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC0, 6, r6, 0, 0, AC_FUNC0);
+    r6[5] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC0, 6, r6, 0, 0, AC_FUNCP0);
+    addProd(&g, i++, lalr.NT_BASE + N_PREF, 0, null, PREC_PREF, lalr.ASSOC_RIGHT, AC_PREF0);
+    r2[0] = lalr.NT_BASE + N_PREF; r2[1] = termId((u8*)"pub");
+    addProd(&g, i++, lalr.NT_BASE + N_PREF, 2, r2, 0, 0, AC_PUB);
+    r2[1] = termId((u8*)"static");
+    addProd(&g, i++, lalr.NT_BASE + N_PREF, 2, r2, 0, 0, AC_STATIC);
+    r2[1] = termId((u8*)"inline");
+    addProd(&g, i++, lalr.NT_BASE + N_PREF, 2, r2, 0, 0, AC_INLINE);
+    r2[1] = termId((u8*)"const");
+    addProd(&g, i++, lalr.NT_BASE + N_PREF, 2, r2, 0, 0, AC_CONSTMOD);
+
+    r1[0] = lalr.NT_BASE + N_TBASE;
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 1, r1, 0, 0, AC_PASS);
+    r2[0] = lalr.NT_BASE + N_TYPE; r2[1] = termId((u8*)"*");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 2, r2, 0, 0, AC_TSTAR);
+    r4[0] = lalr.NT_BASE + N_TYPE;
+    r4[1] = termId((u8*)"[");
+    r4[2] = lalr.NT_BASE + N_ES_RBKT;
+    r4[3] = termId((u8*)"]");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TARR);
+    r4[0] = lalr.NT_BASE + N_TBASE;
+    r4[1] = termId((u8*)"<");
+    r4[2] = lalr.NT_BASE + N_TYPES;
+    r4[3] = termId((u8*)">");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGEN);
+    r1[0] = lalr.NT_BASE + N_TYPEKW;
+    addProd(&g, i++, lalr.NT_BASE + N_TBASE, 1, r1, 0, 0, AC_TBASE);
+    r1[0] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_TBASE, 1, r1, 0, 0, AC_TBASE);
+    r3[0] = lalr.NT_BASE + N_TBASE;
+    r3[1] = termId((u8*)".");
+    r3[2] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_TBASE, 3, r3, 0, 0, AC_TDOT);
+    for (u32 k = 0; k < 15; k++)
+    {
+        r1[0] = termId((u8*)TYPEKWS[k].ptr);
+        addProd(&g, i++, lalr.NT_BASE + N_TYPEKW, 1, r1, 0, 0, AC_PASS);
+    }
+    r1[0] = lalr.NT_BASE + N_TYPE;
+    addProd(&g, i++, lalr.NT_BASE + N_TYPES, 1, r1, 0, 0, AC_L1);
+    r3[0] = lalr.NT_BASE + N_TYPES;
+    r3[1] = termId((u8*)",");
+    r3[2] = lalr.NT_BASE + N_TYPE;
+    addProd(&g, i++, lalr.NT_BASE + N_TYPES, 3, r3, 0, 0, AC_APP);
+
+    addProd(&g, i++, lalr.NT_BASE + N_PARAMS, 0, null, 0, 0, AC_NONE);
+    r2[0] = lalr.NT_BASE + N_PARAM;
+    r2[1] = lalr.NT_BASE + N_REST;
+    addProd(&g, i++, lalr.NT_BASE + N_PARAMS, 2, r2, 0, 0, AC_PARAMS1);
+    r3[0] = lalr.NT_BASE + N_PREF;
+    r3[1] = lalr.NT_BASE + N_TYPE;
+    r3[2] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_PARAM, 3, r3, 0, 0, AC_PARAM);
+    r2[0] = lalr.NT_BASE + N_PREF;
+    r2[1] = lalr.NT_BASE + N_TYPE;
+    addProd(&g, i++, lalr.NT_BASE + N_PARAM, 2, r2, 0, 0, AC_PARAM);
+    addProd(&g, i++, lalr.NT_BASE + N_REST, 0, null, 0, 0, AC_NONE);
+    r3[0] = termId((u8*)",");
+    r3[1] = lalr.NT_BASE + N_PARAM;
+    r3[2] = lalr.NT_BASE + N_REST;
+    addProd(&g, i++, lalr.NT_BASE + N_REST, 3, r3, 0, 0, AC_RESTAPP);
+    r2[0] = termId((u8*)",");
+    r2[1] = termId((u8*)"...");
+    addProd(&g, i++, lalr.NT_BASE + N_REST, 2, r2, 0, 0, AC_VARARG);
+
+    r3[0] = termId((u8*)"{");
+    r3[1] = lalr.NT_BASE + N_STMTS;
+    r3[2] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_BLOCK, 3, r3, 0, 0, AC_BLOCK);
+    addProd(&g, i++, lalr.NT_BASE + N_STMTS, 0, null, 0, 0, AC_L1);
+    r2[0] = lalr.NT_BASE + N_STMT;
+    r2[1] = lalr.NT_BASE + N_STMTS;
+    addProd(&g, i++, lalr.NT_BASE + N_STMTS, 2, r2, 0, 0, AC_APP);
+    r1[0] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_EXPR;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_VARDECL;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_WRAPV);
+    r1[0] = lalr.NT_BASE + N_CONSTS;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_RETURN;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_IF;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_WHILE;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_FOR;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_SWITCH;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_BREAK;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_CONT;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_FLAGSTMT;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_NONE);
+
+    r2[0] = lalr.NT_BASE + N_ES_SEMI;
+    r2[1] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXPR, 2, r2, 0, 0, AC_EXPR);
+    r2[0] = termId((u8*)"return");
+    r2[1] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_RETURN, 2, r2, 0, 0, AC_RETURN0);
+    r3[0] = termId((u8*)"return");
+    r3[1] = lalr.NT_BASE + N_ES_SEMI;
+    r3[2] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_RETURN, 3, r3, 0, 0, AC_RETURN);
+    r6[0] = termId((u8*)"if");
+    r6[1] = termId((u8*)"(");
+    r6[2] = lalr.NT_BASE + N_ES_RPAR;
+    r6[3] = termId((u8*)")");
+    r6[4] = lalr.NT_BASE + N_STMT;
+    r6[5] = lalr.NT_BASE + N_ELSE;
+    addProd(&g, i++, lalr.NT_BASE + N_IF, 6, r6, 0, 0, AC_IF);
+    addProd(&g, i++, lalr.NT_BASE + N_ELSE, 0, null, 0, 0, AC_NONE);
+    r2[0] = termId((u8*)"else");
+    r2[1] = lalr.NT_BASE + N_STMT;
+    addProd(&g, i++, lalr.NT_BASE + N_ELSE, 2, r2, 0, 0, AC_PASS);
+    r5[0] = termId((u8*)"while");
+    r5[1] = termId((u8*)"(");
+    r5[2] = lalr.NT_BASE + N_ES_RPAR;
+    r5[3] = termId((u8*)")");
+    r5[4] = lalr.NT_BASE + N_STMT;
+    addProd(&g, i++, lalr.NT_BASE + N_WHILE, 5, r5, 0, 0, AC_WHILE);
+    r9[0] = termId((u8*)"for");
+    r9[1] = termId((u8*)"(");
+    r9[2] = lalr.NT_BASE + N_FORINIT;
+    r9[3] = termId((u8*)";");
+    r9[4] = lalr.NT_BASE + N_ES_BOTH;
+    r9[5] = termId((u8*)";");
+    r9[6] = lalr.NT_BASE + N_ES_BOTH;
+    r9[7] = termId((u8*)")");
+    r9[8] = lalr.NT_BASE + N_STMT;
+    addProd(&g, i++, lalr.NT_BASE + N_FOR, 9, r9, 0, 0, AC_FOR);
+    r1[0] = lalr.NT_BASE + N_ES_SEMI;
+    addProd(&g, i++, lalr.NT_BASE + N_FORINIT, 1, r1, 0, 0, AC_FORINIT);
+    r4[0] = termId((u8*)"var");
+    r4[1] = tok.TOK_IDENT;
+    r4[2] = termId((u8*)"=");
+    r4[3] = lalr.NT_BASE + N_ES_SEMI;
+    addProd(&g, i++, lalr.NT_BASE + N_FORINIT, 4, r4, 0, 0, AC_VARFOR);
+    r4[0] = termId((u8*)"var");
+    r4[1] = tok.TOK_IDENT;
+    r4[2] = termId((u8*)":");
+    r4[3] = lalr.NT_BASE + N_ES_RPAR;
+    addProd(&g, i++, lalr.NT_BASE + N_FORINIT, 4, r4, 0, 0, AC_VARFORIN);
+    r4[0] = lalr.NT_BASE + N_TYPE;
+    r4[1] = tok.TOK_IDENT;
+    r4[2] = termId((u8*)"=");
+    r4[3] = lalr.NT_BASE + N_ES_SEMI;
+    addProd(&g, i++, lalr.NT_BASE + N_FORINIT, 4, r4, 0, 0, AC_VARFOR2);
+
+    r7[0] = termId((u8*)"switch");
+    r7[1] = termId((u8*)"(");
+    r7[2] = lalr.NT_BASE + N_ES_RPAR;
+    r7[3] = termId((u8*)")");
+    r7[4] = termId((u8*)"{");
+    r7[5] = lalr.NT_BASE + N_SWBODY;
+    r7[6] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_SWITCH, 7, r7, 0, 0, AC_SWITCH);
+    addProd(&g, i++, lalr.NT_BASE + N_SWBODY, 0, null, 0, 0, AC_L1);
+    r2[0] = lalr.NT_BASE + N_SWSECTION;
+    r2[1] = lalr.NT_BASE + N_SWBODY;
+    addProd(&g, i++, lalr.NT_BASE + N_SWBODY, 2, r2, 0, 0, AC_APP);
+    r1[0] = lalr.NT_BASE + N_CASEV;
+    addProd(&g, i++, lalr.NT_BASE + N_SWSECTION, 1, r1, 0, 0, AC_PASS);
+    r3[0] = termId((u8*)"default");
+    r3[1] = termId((u8*)":");
+    r3[2] = lalr.NT_BASE + N_STMTS;
+    addProd(&g, i++, lalr.NT_BASE + N_SWSECTION, 3, r3, 0, 0, AC_SWDEF);
+    r4[0] = termId((u8*)"case");
+    r4[1] = lalr.NT_BASE + N_ES_COLON;
+    r4[2] = termId((u8*)":");
+    r4[3] = lalr.NT_BASE + N_STMTS;
+    addProd(&g, i++, lalr.NT_BASE + N_CASEV, 4, r4, 0, 0, AC_SWCASE);
+
+    r7[0] = termId((u8*)"flag");
+    r7[1] = termId((u8*)"(");
+    r7[2] = tok.TOK_IDENT;
+    r7[3] = termId((u8*)")");
+    r7[4] = termId((u8*)"{");
+    r7[5] = lalr.NT_BASE + N_FLAGBODY;
+    r7[6] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGSTMT, 7, r7, 0, 0, AC_FLAGSTMT);
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGDECL, 7, r7, 0, 0, AC_FLAGDECL);
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGBODY, 0, null, 0, 0, AC_L1);
+    r2[0] = lalr.NT_BASE + N_FLAGSECTION;
+    r2[1] = lalr.NT_BASE + N_FLAGBODY;
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGBODY, 2, r2, 0, 0, AC_APP);
+    r1[0] = lalr.NT_BASE + N_FCASE;
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGSECTION, 1, r1, 0, 0, AC_PASS);
+    r3[0] = termId((u8*)"default");
+    r3[1] = termId((u8*)":");
+    r3[2] = lalr.NT_BASE + N_DECLS;
+    addProd(&g, i++, lalr.NT_BASE + N_FLAGSECTION, 3, r3, 0, 0, AC_FCASED);
+    r3[0] = tok.TOK_IDENT;
+    r3[1] = termId((u8*)":");
+    r3[2] = lalr.NT_BASE + N_DECLS;
+    addProd(&g, i++, lalr.NT_BASE + N_FCASE, 3, r3, 0, 0, AC_FCASEC);
+
+    r6[0] = termId((u8*)"const");
+    r6[1] = lalr.NT_BASE + N_TYPE;
+    r6[2] = tok.TOK_IDENT;
+    r6[3] = termId((u8*)"=");
+    r6[4] = lalr.NT_BASE + N_ES_SEMI;
+    r6[5] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_CONSTD, 6, r6, 0, 0, AC_CONSTD);
+    addProd(&g, i++, lalr.NT_BASE + N_CONSTS, 6, r6, 0, 0, AC_CONSTS);
+    r4[0] = termId((u8*)"const");
+    r4[1] = lalr.NT_BASE + N_TYPE;
+    r4[2] = tok.TOK_IDENT;
+    r4[3] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_CONSTD, 4, r4, 0, 0, AC_CONSTD);
+    addProd(&g, i++, lalr.NT_BASE + N_CONSTS, 4, r4, 0, 0, AC_CONSTS);
+    r5[0] = termId((u8*)"const");
+    r5[1] = tok.TOK_IDENT;
+    r5[2] = termId((u8*)"=");
+    r5[3] = lalr.NT_BASE + N_ES_SEMI;
+    r5[4] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_CONST0, 5, r5, 0, 0, AC_CONST0);
+    r4[0] = lalr.NT_BASE + N_TYPE;
+    r4[1] = tok.TOK_IDENT;
+    r4[2] = lalr.NT_BASE + N_VARREST;
+    r4[3] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_VARDECL, 4, r4, 0, 0, AC_VRAW);
+    addProd(&g, i++, lalr.NT_BASE + N_VARREST, 0, null, 0, 0, AC_NONE);
+    r2[0] = termId((u8*)"=");
+    r2[1] = lalr.NT_BASE + N_ES_SEMI;
+    addProd(&g, i++, lalr.NT_BASE + N_VARREST, 2, r2, 0, 0, AC_VRINIT);
+    r3[0] = termId((u8*)"[");
+    r3[1] = lalr.NT_BASE + N_ES_RBKT;
+    r3[2] = termId((u8*)"]");
+    addProd(&g, i++, lalr.NT_BASE + N_VARREST, 3, r3, 0, 0, AC_VRARR);
+    r5[0] = termId((u8*)"[");
+    r5[1] = lalr.NT_BASE + N_ES_RBKT;
+    r5[2] = termId((u8*)"]");
+    r5[3] = termId((u8*)"=");
+    r5[4] = lalr.NT_BASE + N_ES_SEMI;
+    addProd(&g, i++, lalr.NT_BASE + N_VARREST, 5, r5, 0, 0, AC_VRBOTH);
+    r2[0] = termId((u8*)",");
+    r2[1] = lalr.NT_BASE + N_IDENTS;
+    addProd(&g, i++, lalr.NT_BASE + N_VARREST, 2, r2, 0, 0, AC_VRNAMES);
+    r1[0] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_IDENTS, 1, r1, 0, 0, AC_L1);
+    r3[0] = lalr.NT_BASE + N_IDENTS;
+    r3[1] = termId((u8*)",");
+    r3[2] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_IDENTS, 3, r3, 0, 0, AC_APP);
+
+    addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_NONE);
+    r5[0] = termId((u8*)"@");
+    r5[1] = termId((u8*)"[");
+    r5[2] = tok.TOK_IDENT;
+    r5[3] = termId((u8*)"]");
+    r5[4] = lalr.NT_BASE + N_ATTRS;
+    addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 5, r5, 0, 0, AC_NONE);
+    r3[0] = termId((u8*)"@");
+    r3[1] = tok.TOK_IDENT;
+    r3[2] = lalr.NT_BASE + N_ATTRS;
+    addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 3, r3, 0, 0, AC_NONE);
+
+    r11[0] = termId((u8*)"extern");
+    r11[1] = termId((u8*)"(");
+    r11[2] = tok.TOK_STR;
+    r11[3] = termId((u8*)")");
+    r11[4] = lalr.NT_BASE + N_ATTRS;
+    r11[5] = lalr.NT_BASE + N_TYPE;
+    r11[6] = tok.TOK_IDENT;
+    r11[7] = termId((u8*)"(");
+    r11[8] = lalr.NT_BASE + N_PARAMS;
+    r11[9] = termId((u8*)")");
+    r11[10] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXT, 11, r11, 0, 0, AC_EXTERN_F);
+    r8[0] = termId((u8*)"extern");
+    r8[1] = termId((u8*)"(");
+    r8[2] = tok.TOK_STR;
+    r8[3] = termId((u8*)")");
+    r8[4] = lalr.NT_BASE + N_ATTRS;
+    r8[5] = lalr.NT_BASE + N_TYPE;
+    r8[6] = tok.TOK_IDENT;
+    r8[7] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXT, 8, r8, 0, 0, AC_EXTERN_V);
+    r4[0] = termId((u8*)"extern");
+    r4[1] = lalr.NT_BASE + N_TYPE;
+    r4[2] = tok.TOK_IDENT;
+    r4[3] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXT, 4, r4, 0, 0, AC_EXTERN_V0);
+
+    r2[0] = termId((u8*)"break");
+    r2[1] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_BREAK, 2, r2, 0, 0, AC_BREAK);
+    r2[0] = termId((u8*)"continue");
+    r2[1] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_CONT, 2, r2, 0, 0, AC_CONT);
+
+    addProd(&g, i++, lalr.NT_BASE + N_ES_SEMI, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_SEMI);
+    addProd(&g, i++, lalr.NT_BASE + N_ES_RPAR, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_RPAR);
+    addProd(&g, i++, lalr.NT_BASE + N_ES_RBKT, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_RBKT);
+    addProd(&g, i++, lalr.NT_BASE + N_ES_COLON, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_COLON);
+    addProd(&g, i++, lalr.NT_BASE + N_ES_BOTH, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_BOTH);
+
+    return g;
+}
+
+pub struct StmtParser
+{
+    exprP.ExprParser exp;
+    lalr.Grammar g;
+    lalr.Tables t;
+    u8* esType;     // per state: ES action id or 0xFF
+    u8* src;
+    tok.LexTok* toks;
+    u32 ntoks;
+    u32 ip;
+    u32 stk[STKMAX];
+    u32 sp;
+    u64 sem[STKMAX];
+    u8 skind[STKMAX];
+    u32 sline[STKMAX];
+    u32 scol[STKMAX];
+    u32 sv;
+    u32 tTypeMinId;
+    u32 tTypeMaxId;
+    bool trace;     // debug: print each driver step
+
+    static StmtParser new()
+    {
+        StmtParser p;
+        p.exp = exprP.ExprParser::new();
+        p.g = stmtGrammar();
+        lalr.Generator gen = lalr.Generator::new(p.g);
+        gen.build(&p.t);
+        gen.free();
+        p.src = null;
+        p.toks = null;
+        p.ntoks = 0;
+        p.ip = 0;
+        p.sp = 0;
+        p.sv = 0;
+        p.tTypeMinId = tok.terminalId(str.strView::fromCstr("i8"));
+        p.tTypeMaxId = tok.terminalId(str.strView::fromCstr("usize"));
+        p.trace = false;
+        p.esType = mman.alloc<u8>(p.t.nstates);
+        for (u32 s = 0; s < p.t.nstates; s++)
+        {
+            u8 et = 0xFF;
+            for (u32 tt = 0; tt < p.t.nterms; tt++)
+            {
+                lalr.Entry* en = &p.t.act[s * p.t.nterms + tt];
+                if (en->kind == lalr.ACT_REDUCE)
+                {
+                    u32 a = p.g.prods[en->a].action;
+                    if (a >= AC_ES_SEMI && a <= AC_ES_BOTH) { et = (u8)a; break; }
+                }
+            }
+            p.esType[s] = et;
+        }
+        return p;
+    }
+
+    void free()
+    {
+        for (u32 i = 0; i < self.g.nprods; i++)
+            if (self.g.prods[i].rhs) mman.dealloc<u32>(self.g.prods[i].rhs);
+        if (self.g.prods) mman.dealloc<lalr.Prod>(self.g.prods);
+        if (self.g.termPrec) mman.dealloc<u32>(self.g.termPrec);
+        if (self.t.act) mman.dealloc<lalr.Entry>(self.t.act);
+        if (self.t.gotos) mman.dealloc<u32>(self.t.gotos);
+        if (self.t.conflicts) mman.dealloc<lalr.Conflict>(self.t.conflicts);
+        if (self.esType) mman.dealloc<u8>(self.esType);
+        self.exp.free();
+    }
+
+    void num(u8* buf, u32* bl, u32 v)
+    {
+        char tmp[12];
+        u32 p = 12;
+        if (v == 0) tmp[--p] = '0';
+        while (v) { tmp[--p] = (char)('0' + v % 10); v /= 10; }
+        while (p < 12) buf[(*bl)++] = (u8)tmp[p++];
+    }
+
+    // value pushed for a shifted token: a strView for IDENT / type
+    // keywords / string literals, else 0
+    u64 shiftVal(u32 tid)
+    {
+        if (tid == tok.TOK_IDENT || tid == tok.TOK_STR ||
+            (tid >= self.tTypeMinId && tid <= self.tTypeMaxId))
+        {
+            tok.LexTok* tt = &self.toks[self.ip];
+            str.strView* v = mman.alloc<str.strView>(1);
+            *v = str.strView::fromParts((const char*)self.src + tt->start, tt->len);
+            self.skind[self.sv] = K_VIEW;
+            return (u64)v;
+        }
+        self.skind[self.sv] = K_NULL;
+        return 0;
+    }
+
+    // two-token lookahead for the typedef ambiguity: in a state with an ES
+    // slot, an IDENT that the table would shift into a type starts an
+    // expression unless the next token continues a type name
+    bool identContinuesType(u32 at)
+    {
+        if (at + 1 >= self.ntoks) return false;
+        u32 n = self.toks[at + 1].id;
+        return n == tok.TOK_IDENT || n == termId((u8*)".");
+    }
+
+    // runs the expression sub-parser at the current token for an ES slot;
+    // empty when the next token is a stop. Sets *out and advances self.ip.
+    bool intercept(u32 action, u64* out)
+    {
+        u32 stops[2];
+        u32 nstops = esStops(action, stops);
+        u64 val = 0;
+        if (self.ip < self.ntoks && inStops(self.toks[self.ip].id, stops, nstops))
+        {
+            *out = 0;
+            return true;
+        }
+        u32 consumed = 0;
+        ast.Expr* e = self.exp.parseFrom(self.src, self.toks, self.ntoks,
+                                         self.ip, stops, nstops, &consumed);
+        if (e == null) return false;
+        val = (u64)e;
+        self.ip = consumed;
+        *out = val;
+        return true;
+    }
+
+    void freeView(u64 v)
+    {
+        if (v) mman.dealloc<str.strView>((str.strView*)(u64)v);
+    }
+
+    void freeListRec(SList* l)
+    {
+        if (l == null) return;
+        for (u32 i = 0; i < l->n; i++)
+        {
+            u64 v = l->a[i];
+            switch (l->itemKind)
+            {
+            case K_EXPR: ast.freeExpr((ast.Expr*)(u64)v); break;
+            case K_TYPE: ast.freeType((ast.TypeExpr*)(u64)v); break;
+            case K_STMT: ast.freeStmt((ast.Stmt*)(u64)v); break;
+            case K_DECL: ast.freeDecl((ast.Decl*)(u64)v); break;
+            case K_VIEW: self.freeView(v); break;
+            case K_PARAM:
+                if (v)
+                {
+                    ast.Param* pp = (ast.Param*)(u64)v;
+                    ast.freeType(pp->type);
+                    mman.dealloc<ast.Param>(pp);
+                }
+                break;
+            case K_CASE:
+            {
+                ast.StmtCase* sc = (ast.StmtCase*)(u64)v;
+                if (sc)
+                {
+                    ast.freeExpr(sc->value);
+                    if (sc->body)
+                    {
+                        for (u32 k = 0; k < sc->nbody; k++) ast.freeStmt(sc->body[k]);
+                        mman.dealloc<ast.Stmt*>(sc->body);
+                    }
+                    mman.dealloc<ast.StmtCase>(sc);
+                }
+                break;
+            }
+            case K_FCASE:
+            {
+                FCase* fc = (FCase*)(u64)v;
+                self.freeView(fc->name);
+                self.freeListRec((SList*)(u64)fc->decls);
+                mman.dealloc<FCase>(fc);
+                break;
+            }
+            case K_VRAW:
+            {
+                VRaw* vr = (VRaw*)(u64)v;
+                ast.freeType((ast.TypeExpr*)(u64)vr->type);
+                self.freeView(vr->name);
+                ast.freeExpr((ast.Expr*)(u64)vr->init);
+                ast.freeExpr((ast.Expr*)(u64)vr->arr);
+                self.freeListRec((SList*)(u64)vr->names);
+                mman.dealloc<VRaw>(vr);
+                break;
+            }
+            default:
+                break;
+            }
+        }
+        if (l->a) mman.dealloc<u64>(l->a);
+        mman.dealloc<SList>(l);
+    }
+
+    // frees every live semantic value (failed parses; the caller cannot
+    // use them afterwards)
+    void clearSem()
+    {
+        for (u32 k = 0; k < self.sv; k++)
+        {
+            u64 v = self.sem[k];
+            if (v == 0) continue;
+            switch (self.skind[k])
+            {
+            case K_EXPR: ast.freeExpr((ast.Expr*)(u64)v); break;
+            case K_TYPE: ast.freeType((ast.TypeExpr*)(u64)v); break;
+            case K_STMT: ast.freeStmt((ast.Stmt*)(u64)v); break;
+            case K_DECL: ast.freeDecl((ast.Decl*)(u64)v); break;
+            case K_LIST: self.freeListRec((SList*)(u64)v); break;
+            case K_PLIST:
+            {
+                PList* pl = (PList*)(u64)v;
+                if (pl->a)
+                {
+                    for (u32 i = 0; i < pl->n; i++)
+                    {
+                        ast.Param* pp = (ast.Param*)(u64)pl->a[i];
+                        if (pp) { ast.freeType(pp->type); mman.dealloc<ast.Param>(pp); }
+                    }
+                    mman.dealloc<u64>(pl->a);
+                }
+                mman.dealloc<PList>(pl);
+                break;
+            }
+            case K_CASE:
+            {
+                ast.StmtCase* sc = (ast.StmtCase*)(u64)v;
+                ast.freeExpr(sc->value);
+                if (sc->body)
+                {
+                    for (u32 i = 0; i < sc->nbody; i++) ast.freeStmt(sc->body[i]);
+                    mman.dealloc<ast.Stmt*>(sc->body);
+                }
+                mman.dealloc<ast.StmtCase>(sc);
+                break;
+            }
+            case K_FCASE:
+            {
+                FCase* fc = (FCase*)(u64)v;
+                self.freeView(fc->name);
+                self.freeListRec((SList*)(u64)fc->decls);
+                mman.dealloc<FCase>(fc);
+                break;
+            }
+            case K_VIEW: self.freeView(v); break;
+            case K_PARAM:
+            {
+                ast.Param* pp = (ast.Param*)(u64)v;
+                ast.freeType(pp->type);
+                mman.dealloc<ast.Param>(pp);
+                break;
+            }
+            case K_VRES:
+            {
+                VRes* vr = (VRes*)(u64)v;
+                ast.freeExpr((ast.Expr*)(u64)vr->init);
+                ast.freeExpr((ast.Expr*)(u64)vr->arr);
+                self.freeListRec((SList*)(u64)vr->names);
+                mman.dealloc<VRes>(vr);
+                break;
+            }
+            case K_VRAW:
+            {
+                VRaw* vr = (VRaw*)(u64)v;
+                ast.freeType((ast.TypeExpr*)(u64)vr->type);
+                self.freeView(vr->name);
+                ast.freeExpr((ast.Expr*)(u64)vr->init);
+                ast.freeExpr((ast.Expr*)(u64)vr->arr);
+                self.freeListRec((SList*)(u64)vr->names);
+                mman.dealloc<VRaw>(vr);
+                break;
+            }
+            case K_PROG:
+                ast.freeProgram((ast.Program*)(u64)v);
+                break;
+            default:
+                break;
+            }
+        }
+        self.sv = 0;
+    }
+
+    void push(u64 v, u8 kind)
+    {
+        self.sem[self.sv] = v;
+        self.skind[self.sv] = kind;
+        self.sline[self.sv] = 0;
+        self.scol[self.sv] = 0;
+        self.sv++;
+    }
+
+    // pops n slots from base and builds the AST value for production pr
+    void apply(lalr.Prod* pr, u32 n)
+    {
+        u32 base = self.sv - n;
+        u32 line = self.sline[base];
+        u32 col = self.scol[base];
+        self.sv = base;
+        u64 v = 0;
+        u8 kind = K_NULL;
+        switch (pr->action)
+        {
+        case AC_PASS:
+            v = self.sem[base];
+            kind = self.skind[base];
+            self.push(v, kind);
+            return;
+        case AC_NONE:
+            self.push(0, K_NULL);
+            return;
+        case AC_L1:
+        {
+            SList* l = listNew((u8)self.skind[base]);
+            listAppend(l, self.sem[base]);
+            self.push((u64)l, K_LIST);
+            return;
+        }
+        case AC_APP:
+        {
+            SList* l = (SList*)(u64)self.sem[base];
+            listAppend(l, self.sem[base + 1]);
+            self.push((u64)l, K_LIST);
+            return;
+        }
+        case AC_PREF0:
+            self.push(0, K_INT);
+            return;
+        case AC_PUB:
+            self.push((u64)((u64)self.sem[base] | FLAG_PUB), K_INT);
+            return;
+        case AC_STATIC:
+            self.push((u64)((u64)self.sem[base] | FLAG_STATIC), K_INT);
+            return;
+        case AC_INLINE:
+            self.push((u64)((u64)self.sem[base] | FLAG_INLINE), K_INT);
+            return;
+        case AC_CONSTMOD:
+            self.push(self.sem[base], K_INT);
+            return;
+        case AC_TBASE:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base];
+            ast.TypeExpr* ty = mman.alloc<ast.TypeExpr>(1);
+            ty->kind = ast.TYP_IDENT;
+            ty->name = *s;
+            ty->elem = null;
+            ty->count = null;
+            ty->args = null;
+            ty->nargs = 0;
+            ty->cargs = null;
+            ty->ncargs = 0;
+            ty->ret = null;
+            ty->isConst = false;
+            ty->line = line;
+            ty->col = col;
+            self.freeView(self.sem[base]);
+            self.push((u64)ty, K_TYPE);
+            return;
+        }
+        case AC_TDOT:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            u32 start = (u32)((u64)ty->name.ptr - (u64)self.src);
+            ty->name.ptr = (const char*)self.src + start;
+            ty->name.len = (u32)((s->ptr + s->len) - (const char*)self.src) - start;
+            self.freeView(self.sem[base + 2]);
+            self.push((u64)ty, K_TYPE);
+            return;
+        }
+        case AC_TSTAR:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_PTR;
+            p->elem = ty;
+            p->name.ptr = null;
+            p->name.len = 0;
+            p->count = null;
+            p->args = null;
+            p->nargs = 0;
+            p->cargs = null;
+            p->ncargs = 0;
+            p->ret = null;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_TARR:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_ARRAY;
+            p->elem = ty;
+            p->count = (ast.Expr*)(u64)self.sem[base + 2];
+            p->name.ptr = null;
+            p->name.len = 0;
+            p->args = null;
+            p->nargs = 0;
+            p->cargs = null;
+            p->ncargs = 0;
+            p->ret = null;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_TGEN:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            SList* l = (SList*)(u64)self.sem[base + 2];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_GENERIC;
+            p->name = ty->name;
+            p->elem = null;
+            p->count = null;
+            p->args = (ast.TypeExpr**)(u64)l->a;
+            p->nargs = l->n;
+            p->cargs = null;
+            p->ncargs = 0;
+            p->ret = null;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            ast.freeType(ty);
+            mman.dealloc<SList>(l);
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_PARAM:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            ast.Param* pp = mman.alloc<ast.Param>(1);
+            pp->type = ty;
+            if (n == 3)
+            {
+                str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+                pp->name = *s;
+                self.freeView(self.sem[base + 2]);
+            }
+            else
+                pp->name = str.strView::empty();
+            self.push((u64)pp, K_PARAM);
+            return;
+        }
+        case AC_PARAMS1:
+        {
+            ast.Param* pp = (ast.Param*)(u64)self.sem[base];
+            PList* rest = (PList*)(u64)self.sem[base + 1];
+            PList* pl = plistNew();
+            pl->variadic = rest->variadic;
+            plistAppend(pl, (u64)pp);
+            for (u32 k = 0; k < rest->n; k++) plistAppend(pl, rest->a[k]);
+            if (rest->a) mman.dealloc<u64>(rest->a);
+            mman.dealloc<PList>(rest);
+            self.push((u64)pl, K_PLIST);
+            return;
+        }
+        case AC_RESTAPP:
+        {
+            ast.Param* pp = (ast.Param*)(u64)self.sem[base + 1];
+            PList* rest = (PList*)(u64)self.sem[base + 2];
+            PList* pl = plistNew();
+            pl->variadic = rest->variadic;
+            plistAppend(pl, (u64)pp);
+            for (u32 k = 0; k < rest->n; k++) plistAppend(pl, rest->a[k]);
+            if (rest->a) mman.dealloc<u64>(rest->a);
+            mman.dealloc<PList>(rest);
+            self.push((u64)pl, K_PLIST);
+            return;
+        }
+        case AC_VARARG:
+        {
+            PList* pl = plistNew();
+            pl->variadic = true;
+            self.push((u64)pl, K_PLIST);
+            return;
+        }
+        case AC_BLOCK:
+        {
+            SList* l = (SList*)(u64)self.sem[base + 1];
+            u32 nn = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) nn++;
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_BLOCK;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = null;
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = mman.alloc<ast.Stmt*>(nn);
+            s->nstmts = nn;
+            u32 j = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) s->stmts[j++] = (ast.Stmt*)(u64)l->a[k];
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_EXPR:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_EXPR;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)self.sem[base];
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_VRAW:
+        {
+            VRaw* v = mman.alloc<VRaw>(1);
+            v->type = self.sem[base];
+            v->name = self.sem[base + 1];
+            VRes* vr = (VRes*)(u64)self.sem[base + 2];
+            v->init = vr ? vr->init : 0;
+            v->arr = vr ? vr->arr : 0;
+            v->names = vr ? vr->names : 0;
+            if (vr) mman.dealloc<VRes>(vr);
+            self.push((u64)v, K_VRAW);
+            return;
+        }
+        case AC_WRAPV:
+        {
+            VRaw* v = (VRaw*)(u64)self.sem[base];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)v->type;
+            str.strView* s = (str.strView*)(u64)v->name;
+            u64 init = v->init;
+            u64 arr = v->arr;
+            SList* names = (SList*)(u64)v->names;
+            mman.dealloc<VRaw>(v);
+            if (names)
+            {
+                ast.Stmt* blk = mman.alloc<ast.Stmt>(1);
+                blk->kind = ast.ST_BLOCK;
+                blk->text = str.strView::empty();
+                blk->type = null;
+                blk->a = null;
+                blk->b = null;
+                blk->c = null;
+                blk->body = null;
+                blk->body2 = null;
+                blk->init = null;
+                blk->stmts = mman.alloc<ast.Stmt*>(names->n + 1);
+                blk->nstmts = names->n + 1;
+                ast.Stmt* v0 = mman.alloc<ast.Stmt>(1);
+                v0->kind = ast.ST_VAR;
+                v0->text = *s;
+                v0->type = ty;
+                v0->a = null;
+                v0->b = null;
+                v0->c = null;
+                v0->body = null;
+                v0->body2 = null;
+                v0->init = null;
+                v0->stmts = null;
+                v0->nstmts = 0;
+                v0->cases = null;
+                v0->ncases = 0;
+                v0->defaultCase = null;
+                v0->line = line;
+                v0->col = col;
+                blk->stmts[0] = v0;
+                self.freeView((u64)s);
+                for (u32 k = 0; k < names->n; k++)
+                {
+                    str.strView* nv = (str.strView*)(u64)names->a[k];
+                    ast.Stmt* vv = mman.alloc<ast.Stmt>(1);
+                    vv->kind = ast.ST_VAR;
+                    vv->text = *nv;
+                    vv->type = null;
+                    vv->a = null;
+                    vv->b = null;
+                    vv->c = null;
+                    vv->body = null;
+                    vv->body2 = null;
+                    vv->init = null;
+                    vv->stmts = null;
+                    vv->nstmts = 0;
+                    vv->cases = null;
+                    vv->ncases = 0;
+                    vv->defaultCase = null;
+                    vv->line = line;
+                    vv->col = col;
+                    blk->stmts[k + 1] = vv;
+                    self.freeView(names->a[k]);
+                }
+                if (names->a) mman.dealloc<u64>(names->a);
+                mman.dealloc<SList>(names);
+                ast.freeExpr((ast.Expr*)(u64)init);
+                ast.freeExpr((ast.Expr*)(u64)arr);
+                blk->cases = null;
+                blk->ncases = 0;
+                blk->defaultCase = null;
+                blk->line = line;
+                blk->col = col;
+                self.push((u64)blk, K_STMT);
+                return;
+            }
+            ast.Stmt* vs = mman.alloc<ast.Stmt>(1);
+            vs->kind = ast.ST_VAR;
+            vs->text = *s;
+            vs->type = ty;
+            vs->a = (ast.Expr*)(u64)init;
+            vs->b = null;
+            vs->c = null;
+            vs->body = null;
+            vs->body2 = null;
+            vs->init = null;
+            vs->stmts = null;
+            vs->nstmts = 0;
+            vs->cases = null;
+            vs->ncases = 0;
+            vs->defaultCase = null;
+            vs->line = line;
+            vs->col = col;
+            self.freeView((u64)s);
+            ast.freeExpr((ast.Expr*)(u64)arr);
+            self.push((u64)vs, K_STMT);
+            return;
+        }
+        case AC_VRINIT:
+        {
+            VRes* vr = mman.alloc<VRes>(1);
+            vr->init = self.sem[base + 1];
+            vr->arr = 0;
+            vr->names = 0;
+            self.push((u64)vr, K_VRES);
+            return;
+        }
+        case AC_VRARR:
+        {
+            VRes* vr = mman.alloc<VRes>(1);
+            vr->init = 0;
+            vr->arr = self.sem[base + 1];
+            vr->names = 0;
+            self.push((u64)vr, K_VRES);
+            return;
+        }
+        case AC_VRBOTH:
+        {
+            VRes* vr = mman.alloc<VRes>(1);
+            vr->init = self.sem[base + 3];
+            vr->arr = self.sem[base + 1];
+            vr->names = 0;
+            self.push((u64)vr, K_VRES);
+            return;
+        }
+        case AC_VRNAMES:
+        {
+            VRes* vr = mman.alloc<VRes>(1);
+            vr->init = 0;
+            vr->arr = 0;
+            vr->names = self.sem[base + 1];
+            self.push((u64)vr, K_VRES);
+            return;
+        }
+        case AC_MKVD:
+        case AC_MKVDP:
+        {
+            VRaw* v = (VRaw*)(u64)self.sem[base + (n == 2 ? 1 : 0)];
+            u32 flags = n == 2 ? (u32)(u64)self.sem[base] : 0;
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)v->type;
+            str.strView* s = (str.strView*)(u64)v->name;
+            if (v->arr)
+            {
+                ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+                p->kind = ast.TYP_ARRAY;
+                p->elem = ty;
+                p->count = (ast.Expr*)(u64)v->arr;
+                p->name.ptr = null;
+                p->name.len = 0;
+                p->args = null;
+                p->nargs = 0;
+                p->cargs = null;
+                p->ncargs = 0;
+                p->ret = null;
+                p->isConst = false;
+                p->line = line;
+                p->col = col;
+                ty = p;
+            }
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_VAR;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = (ast.Expr*)(u64)v->init;
+            d->exported = (flags & FLAG_PUB) != 0;
+            d->isStatic = (flags & FLAG_STATIC) != 0;
+            d->isInline = (flags & FLAG_INLINE) != 0;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.freeListRec((SList*)(u64)v->names);
+            mman.dealloc<VRaw>(v);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_FUNCP:
+        {
+            u32 flags = (u32)(u64)self.sem[base];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            PList* pl = (PList*)(u64)self.sem[base + 4];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_FUNC;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = (flags & FLAG_PUB) != 0;
+            d->isStatic = (flags & FLAG_STATIC) != 0;
+            d->isInline = (flags & FLAG_INLINE) != 0;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            bool variadic = pl->variadic;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->variadic = variadic;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_FUNC0:
+        case AC_FUNCP0:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 1];
+            PList* pl = (PList*)(u64)self.sem[base + 3];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_FUNC;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            bool variadic = pl->variadic;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->variadic = variadic;
+            d->body = pr->action == AC_FUNC0 ? (ast.Stmt*)(u64)self.sem[base + 5] : null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_CONST0:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 1];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_CONST;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = null;
+            d->value = (ast.Expr*)(u64)self.sem[base + 3];
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_CONSTD:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_CONST;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = n == 6 ? (ast.Expr*)(u64)self.sem[base + 4] : null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_CONSTS:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            ast.Stmt* v = mman.alloc<ast.Stmt>(1);
+            v->kind = ast.ST_VAR;
+            v->text = *s;
+            v->type = ty;
+            v->a = n == 6 ? (ast.Expr*)(u64)self.sem[base + 4] : null;
+            v->b = null;
+            v->c = null;
+            v->body = null;
+            v->body2 = null;
+            v->init = null;
+            v->stmts = null;
+            v->nstmts = 0;
+            v->cases = null;
+            v->ncases = 0;
+            v->defaultCase = null;
+            v->line = line;
+            v->col = col;
+            self.freeView((u64)s);
+            self.push((u64)v, K_STMT);
+            return;
+        }
+        case AC_RETURN0:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_RETURN;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = null;
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_RETURN:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_RETURN;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)self.sem[base + 1];
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_IF:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_IF;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)self.sem[base + 2];
+            s->b = null;
+            s->c = null;
+            s->body = (ast.Stmt*)(u64)self.sem[base + 4];
+            s->body2 = (ast.Stmt*)(u64)self.sem[base + 5];
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_WHILE:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_WHILE;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)self.sem[base + 2];
+            s->b = null;
+            s->c = null;
+            s->body = (ast.Stmt*)(u64)self.sem[base + 4];
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_FOR:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_FOR;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = null;
+            s->b = (ast.Expr*)(u64)self.sem[base + 4];
+            s->c = (ast.Expr*)(u64)self.sem[base + 6];
+            s->body = (ast.Stmt*)(u64)self.sem[base + 8];
+            s->body2 = null;
+            s->init = (ast.Stmt*)(u64)self.sem[base + 2];
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_FORINIT:
+        {
+            u64 val = self.sem[base];
+            if (val == 0)
+            {
+                self.push(0, K_NULL);
+                return;
+            }
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_EXPR;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)val;
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_VARFOR:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 1];
+            ast.Stmt* v = mman.alloc<ast.Stmt>(1);
+            v->kind = ast.ST_VAR;
+            v->text = *s;
+            v->type = null;
+            v->a = (ast.Expr*)(u64)self.sem[base + 3];
+            v->b = null;
+            v->c = null;
+            v->body = null;
+            v->body2 = null;
+            v->init = null;
+            v->stmts = null;
+            v->nstmts = 0;
+            v->cases = null;
+            v->ncases = 0;
+            v->defaultCase = null;
+            v->line = line;
+            v->col = col;
+            self.freeView((u64)s);
+            self.push((u64)v, K_STMT);
+            return;
+        }
+        case AC_VARFORIN:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 1];
+            ast.Stmt* v = mman.alloc<ast.Stmt>(1);
+            v->kind = ast.ST_FORIN;
+            v->text = *s;
+            v->type = null;
+            v->a = (ast.Expr*)(u64)self.sem[base + 3];
+            v->b = null;
+            v->c = null;
+            v->body = null;
+            v->body2 = null;
+            v->init = null;
+            v->stmts = null;
+            v->nstmts = 0;
+            v->cases = null;
+            v->ncases = 0;
+            v->defaultCase = null;
+            v->line = line;
+            v->col = col;
+            self.freeView((u64)s);
+            self.push((u64)v, K_STMT);
+            return;
+        }
+        case AC_VARFOR2:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 1];
+            ast.Stmt* v = mman.alloc<ast.Stmt>(1);
+            v->kind = ast.ST_VAR;
+            v->text = *s;
+            v->type = ty;
+            v->a = (ast.Expr*)(u64)self.sem[base + 3];
+            v->b = null;
+            v->c = null;
+            v->body = null;
+            v->body2 = null;
+            v->init = null;
+            v->stmts = null;
+            v->nstmts = 0;
+            v->cases = null;
+            v->ncases = 0;
+            v->defaultCase = null;
+            v->line = line;
+            v->col = col;
+            self.freeView((u64)s);
+            self.push((u64)v, K_STMT);
+            return;
+        }
+        case AC_SWITCH:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_SWITCH;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)self.sem[base + 2];
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            SList* l = (SList*)(u64)self.sem[base + 5];
+            ast.StmtCase** cases = mman.alloc<ast.StmtCase*>(l->n);
+            s->cases = cases;
+            s->ncases = 0;
+            ast.StmtCase* def = null;
+            for (u32 k = 0; k < l->n; k++)
+            {
+                ast.StmtCase* sc = (ast.StmtCase*)(u64)l->a[k];
+                if (sc->value == null)
+                    def = sc;
+                else
+                    s->cases[s->ncases++] = sc;
+            }
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            s->defaultCase = def;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_SWCASE:
+        {
+            ast.StmtCase* sc = mman.alloc<ast.StmtCase>(1);
+            sc->value = (ast.Expr*)(u64)self.sem[base + 1];
+            SList* l = (SList*)(u64)self.sem[base + 3];
+            u32 nn = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) nn++;
+            sc->body = mman.alloc<ast.Stmt*>(nn);
+            sc->nbody = nn;
+            u32 j = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) sc->body[j++] = (ast.Stmt*)(u64)l->a[k];
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            self.push((u64)sc, K_CASE);
+            return;
+        }
+        case AC_SWDEF:
+        {
+            ast.StmtCase* sc = mman.alloc<ast.StmtCase>(1);
+            sc->value = null;
+            SList* l = (SList*)(u64)self.sem[base + 2];
+            u32 nn = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) nn++;
+            sc->body = mman.alloc<ast.Stmt*>(nn);
+            sc->nbody = nn;
+            u32 j = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) sc->body[j++] = (ast.Stmt*)(u64)l->a[k];
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            self.push((u64)sc, K_CASE);
+            return;
+        }
+        case AC_FLAGSTMT:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            ast.Stmt* st = mman.alloc<ast.Stmt>(1);
+            st->kind = ast.ST_FLAG;
+            st->text = *s;
+            st->type = null;
+            st->a = null;
+            st->b = null;
+            st->c = null;
+            st->body = null;
+            st->body2 = null;
+            st->init = null;
+            st->stmts = null;
+            st->nstmts = 0;
+            SList* l = (SList*)(u64)self.sem[base + 5];
+            ast.StmtCase** cases = mman.alloc<ast.StmtCase*>(l->n);
+            u32 nc = 0;
+            ast.StmtCase* def = null;
+            for (u32 k = 0; k < l->n; k++)
+            {
+                FCase* fc = (FCase*)(u64)l->a[k];
+                ast.StmtCase* sc = mman.alloc<ast.StmtCase>(1);
+                sc->body = null;
+                sc->nbody = 0;
+                if (fc->name)
+                {
+                    str.strView* nv = (str.strView*)(u64)fc->name;
+                    ast.Expr* e = self.exp.mk(ast.EX_IDENT, line, col);
+                    e->text = *nv;
+                    sc->value = e;
+                    cases[nc++] = sc;
+                }
+                else
+                    def = sc;
+            }
+            for (u32 k = 0; k < l->n; k++)
+            {
+                FCase* fc = (FCase*)(u64)l->a[k];
+                self.freeView(fc->name);
+                if (fc->decls)
+                {
+                    SList* dl = (SList*)(u64)fc->decls;
+                    if (dl->a) mman.dealloc<u64>(dl->a);
+                    mman.dealloc<SList>(dl);
+                }
+                mman.dealloc<FCase>(fc);
+            }
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            st->cases = cases;
+            st->ncases = nc;
+            st->defaultCase = def;
+            st->line = line;
+            st->col = col;
+            self.freeView((u64)s);
+            self.push((u64)st, K_STMT);
+            return;
+        }
+        case AC_FLAGDECL:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            SList* l = (SList*)(u64)self.sem[base + 5];
+            u32 nCases = 0;
+            u32 nDef = 0;
+            u32 total = 0;
+            for (u32 k = 0; k < l->n; k++)
+            {
+                FCase* fc = (FCase*)(u64)l->a[k];
+                u32 dn = ((SList*)(u64)fc->decls)->n;
+                if (fc->name) { nCases++; total += dn; }
+                else nDef = dn;
+            }
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_FLAG;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = null;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = mman.alloc<ast.Decl*>(total);
+            d->caseNames = mman.alloc<str.strView>(nCases);
+            d->caseLens = mman.alloc<u32>(nCases);
+            d->ncases = nCases;
+            d->defaultBody = mman.alloc<ast.Decl*>(nDef);
+            d->ndeclDefault = nDef;
+            u32 ci = 0;
+            u32 di = 0;
+            u32 idx = 0;
+            for (u32 k = 0; k < l->n; k++)
+            {
+                FCase* fc = (FCase*)(u64)l->a[k];
+                SList* dl = (SList*)(u64)fc->decls;
+                if (fc->name)
+                {
+                    str.strView* nv = (str.strView*)(u64)fc->name;
+                    d->caseNames[ci] = *nv;
+                    d->caseLens[ci] = dl->n;
+                    for (u32 j = 0; j < dl->n; j++)
+                        d->cases[idx++] = (ast.Decl*)(u64)dl->a[j];
+                    ci++;
+                }
+                else
+                {
+                    for (u32 j = 0; j < dl->n; j++)
+                        d->defaultBody[di++] = (ast.Decl*)(u64)dl->a[j];
+                }
+            }
+            for (u32 k = 0; k < l->n; k++)
+            {
+                FCase* fc = (FCase*)(u64)l->a[k];
+                self.freeView(fc->name);
+                SList* dl = (SList*)(u64)fc->decls;
+                if (dl->a) mman.dealloc<u64>(dl->a);
+                mman.dealloc<SList>(dl);
+                mman.dealloc<FCase>(fc);
+            }
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_FCASEC:
+        {
+            FCase* fc = mman.alloc<FCase>(1);
+            fc->name = self.sem[base];
+            fc->decls = self.sem[base + 2];
+            self.push((u64)fc, K_FCASE);
+            return;
+        }
+        case AC_FCASED:
+        {
+            FCase* fc = mman.alloc<FCase>(1);
+            fc->name = 0;
+            fc->decls = self.sem[base + 2];
+            self.push((u64)fc, K_FCASE);
+            return;
+        }
+        case AC_FUNC:
+        {
+            u32 flags = (u32)(u64)self.sem[base];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            PList* pl = (PList*)(u64)self.sem[base + 4];
+            ast.Stmt* body = (ast.Stmt*)(u64)self.sem[base + 6];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_FUNC;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = (flags & FLAG_PUB) != 0;
+            d->isStatic = (flags & FLAG_STATIC) != 0;
+            d->isInline = (flags & FLAG_INLINE) != 0;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            bool variadic = pl->variadic;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->variadic = variadic;
+            d->body = body;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_F:
+        {
+            str.strView* ccs = (str.strView*)(u64)self.sem[base + 2];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 5];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 6];
+            PList* pl = (PList*)(u64)self.sem[base + 8];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_EXTERN;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = *ccs;
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->variadic = pl->variadic;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.freeView((u64)ccs);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_V:
+        {
+            str.strView* ccs = (str.strView*)(u64)self.sem[base + 2];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 5];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 6];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_EXTERN;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = true;
+            d->cc = *ccs;
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.freeView((u64)ccs);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_V0:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_EXTERN;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = true;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_BREAK:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_BREAK;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = null;
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_CONT:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_CONTINUE;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = null;
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_PROG:
+        {
+            SList* l = (SList*)(u64)self.sem[base];
+            u32 nn = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) nn++;
+            ast.Program* pr = mman.alloc<ast.Program>(1);
+            pr->decls = mman.alloc<ast.Decl*>(nn);
+            pr->ndecls = nn;
+            u32 j = 0;
+            for (u32 k = 0; k < l->n; k++)
+                if (l->a[k]) pr->decls[j++] = (ast.Decl*)(u64)l->a[k];
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            pr->filename = str.strView::empty();
+            self.push((u64)pr, K_PROG);
+            return;
+        }
+        default:
+            self.push(0, K_NULL);
+            return;
+        }
+    }
+
+    ast.Program* parseProgram(u8* src, tok.LexTok* toks, u32 ntoks)
+    {
+        self.src = src;
+        self.toks = toks;
+        self.ntoks = ntoks;
+        self.sp = 0;
+        self.sv = 0;
+        self.ip = 0;
+        self.stk[0] = 0;
+        while (true)
+        {
+            u32 state = self.stk[self.sp];
+            u32 tid = self.ip < self.ntoks ? self.toks[self.ip].id : tok.TOK_EOF;
+            lalr.Entry* en = &self.t.act[state * self.t.nterms + tid];
+            u8 es = self.esType[state];
+            if (self.trace)
+            {
+                u8 b[64];
+                u32 bl = 0;
+                libc.write(1, (u8*)"[", 1);
+                self.num(b, &bl, self.ip);
+                libc.write(1, b, bl);
+                libc.write(1, (u8*)" st", 3);
+                bl = 0;
+                self.num(b, &bl, state);
+                libc.write(1, b, bl);
+                libc.write(1, (u8*)" t", 2);
+                bl = 0;
+                self.num(b, &bl, tid);
+                libc.write(1, b, bl);
+                libc.write(1, (u8*)" es", 3);
+                bl = 0;
+                self.num(b, &bl, (u32)es);
+                libc.write(1, b, bl);
+                libc.write(1, (u8*)" k", 2);
+                bl = 0;
+                self.num(b, &bl, en->kind);
+                libc.write(1, b, bl);
+                libc.write(1, (u8*)" a", 2);
+                bl = 0;
+                self.num(b, &bl, en->a);
+                libc.write(1, b, bl);
+                libc.write(1, (u8*)"\n", 1);
+            }
+            bool identOverride = en->kind == lalr.ACT_SHIFT && tid == tok.TOK_IDENT
+                                 && es != 0xFF && !self.identContinuesType(self.ip);
+            if (es != 0xFF && (en->kind == lalr.ACT_ERROR || identOverride))
+            {
+                u64 val = 0;
+                if (!self.intercept(es, &val))
+                {
+                    self.clearSem();
+                    return null;
+                }
+                if (self.sp + 1 >= STKMAX || self.sv >= STKMAX)
+                {
+                    self.clearSem();
+                    return null;
+                }
+                self.sem[self.sv] = val;
+                self.skind[self.sv] = val ? K_EXPR : K_NULL;
+                self.sline[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].row : 0;
+                self.scol[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].col : 0;
+                self.sv++;
+                u32 go = self.t.gotos[state * self.t.nnonterms + esNonterm(es)];
+                if (go == lalr.NO_STATE)
+                {
+                    self.clearSem();
+                    return null;
+                }
+                self.sp++;
+                self.stk[self.sp] = go;
+                continue;
+            }
+            if (en->kind == lalr.ACT_SHIFT)
+            {
+                if (self.sp + 1 >= STKMAX || self.sv >= STKMAX)
+                {
+                    self.clearSem();
+                    return null;
+                }
+                self.sp++;
+                self.stk[self.sp] = en->a;
+                self.sem[self.sv] = self.shiftVal(tid);
+                self.sline[self.sv] = self.toks[self.ip].row;
+                self.scol[self.sv] = self.toks[self.ip].col;
+                self.sv++;
+                self.ip++;
+            }
+            else if (en->kind == lalr.ACT_REDUCE)
+            {
+                lalr.Prod* pr = &self.g.prods[en->a];
+                if (pr->action >= AC_ES_SEMI && pr->action <= AC_ES_BOTH)
+                {
+                    u64 val = 0;
+                    if (!self.intercept(pr->action, &val))
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    if (self.sv >= STKMAX || self.sp + 1 >= STKMAX)
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    self.sem[self.sv] = val;
+                    self.skind[self.sv] = val ? K_EXPR : K_NULL;
+                    self.sline[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].row : 0;
+                    self.scol[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].col : 0;
+                    self.sv++;
+                    u32 go = self.t.gotos[state * self.t.nnonterms + (pr->head - lalr.NT_BASE)];
+                    if (go == lalr.NO_STATE)
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    self.sp++;
+                    self.stk[self.sp] = go;
+                }
+                else
+                {
+                    if (pr->nrhs > self.sp)
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    self.sp -= pr->nrhs;
+                    self.apply(pr, pr->nrhs);
+                    if (self.sv == 0)
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    u32 top = self.stk[self.sp];
+                    u32 headIdx = pr->head - lalr.NT_BASE;
+                    if (headIdx >= self.t.nnonterms)
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    u32 go = self.t.gotos[top * self.t.nnonterms + headIdx];
+                    if (go == lalr.NO_STATE)
+                    {
+                        self.clearSem();
+                        return null;
+                    }
+                    self.sp++;
+                    self.stk[self.sp] = go;
+                }
+            }
+            else if (en->kind == lalr.ACT_ACCEPT)
+            {
+                if (self.ip == self.ntoks - 1 && self.sv == 1 &&
+                    self.skind[self.sv - 1] == K_PROG)
+                    return (ast.Program*)(u64)self.sem[0];
+                self.clearSem();
+                return null;
+            }
+            else
+            {
+                self.clearSem();
+                return null;
+            }
+        }
+    }
+}

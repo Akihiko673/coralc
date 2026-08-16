@@ -1,0 +1,163 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod string = import("std/text/string.crl");
+
+const u64 TRIE_FANOUT = 256;
+
+pub struct TrieNode
+{
+    TrieNode* children[TRIE_FANOUT];
+    bool isEnd;
+}
+
+pub struct trie
+{
+    TrieNode* root;
+    u64 count;
+
+    static trie new()
+    {
+        trie t;
+        t.root = null;
+        t.count = 0;
+        return t;
+    }
+
+    void dispose()
+    {
+        self._disposeNode(self.root);
+        self.root = null;
+        self.count = 0;
+    }
+
+    void _disposeNode(TrieNode* node)
+    {
+        if (node == null) return;
+        for (u64 i = 0; i < TRIE_FANOUT; i++)
+            self._disposeNode(node->children[i]);
+        mman.dealloc<TrieNode>(node);
+    }
+
+    u64 size() { return self.count; }
+    bool isEmpty() { return self.count == 0; }
+
+    void insert(strView key)
+    {
+        if (self.root == null)
+        {
+            self.root = mman.alloc<TrieNode>(1);
+            for (u64 i = 0; i < TRIE_FANOUT; i++) self.root->children[i] = null;
+            self.root->isEnd = false;
+        }
+        TrieNode* cur = self.root;
+        for (u64 i = 0; i < key.len; i++)
+        {
+            u64 idx = (u64)(u8)key.ptr[i];
+            if (cur->children[idx] == null)
+            {
+                cur->children[idx] = mman.alloc<TrieNode>(1);
+                for (u64 j = 0; j < TRIE_FANOUT; j++) cur->children[idx]->children[j] = null;
+                cur->children[idx]->isEnd = false;
+            }
+            cur = cur->children[idx];
+        }
+        if (!cur->isEnd) { cur->isEnd = true; self.count++; }
+    }
+
+    bool contains(strView key)
+    {
+        TrieNode* cur = self.root;
+        if (cur == null) return false;
+        for (u64 i = 0; i < key.len; i++)
+        {
+            u64 idx = (u64)(u8)key.ptr[i];
+            if (cur->children[idx] == null) return false;
+            cur = cur->children[idx];
+        }
+        return cur->isEnd;
+    }
+
+    bool startsWith(strView prefix)
+    {
+        TrieNode* cur = self.root;
+        if (cur == null) return false;
+        for (u64 i = 0; i < prefix.len; i++)
+        {
+            u64 idx = (u64)(u8)prefix.ptr[i];
+            if (cur->children[idx] == null) return false;
+            cur = cur->children[idx];
+        }
+        return true;
+    }
+
+    bool remove(strView key)
+    {
+        if (self.root == null) return false;
+        return self._remove(self.root, key, 0);
+    }
+
+    bool _remove(TrieNode* node, strView key, u64 depth)
+    {
+        if (depth == key.len)
+        {
+            if (!node->isEnd) return false;
+            node->isEnd = false;
+            self.count--;
+            return true;
+        }
+        u64 idx = (u64)(u8)key.ptr[depth];
+        if (node->children[idx] == null) return false;
+        bool result = self._remove(node->children[idx], key, depth + 1);
+        if (result && !node->children[idx]->isEnd)
+        {
+            bool hasChild = false;
+            for (u64 j = 0; j < TRIE_FANOUT; j++)
+            {
+                if (node->children[idx]->children[j] != null) { hasChild = true; break; }
+            }
+            if (!hasChild)
+            {
+                mman.dealloc<TrieNode>(node->children[idx]);
+                node->children[idx] = null;
+            }
+        }
+        return result;
+    }
+
+    void each(void(strView) fn)
+    {
+        u64 maxDepth = 0;
+        self._maxDepth(self.root, 0, &maxDepth);
+        u64 cap = maxDepth > 0 ? maxDepth : 1;
+        u8* buf = mman.alloc<u8>(cap);
+        self._each(self.root, buf, cap, 0, fn);
+        mman.dealloc<u8>(buf);
+    }
+
+    void _maxDepth(TrieNode* node, u64 depth, u64* max)
+    {
+        if (node == null) return;
+        if (node->isEnd && depth > *max) *max = depth;
+        for (u64 i = 0; i < TRIE_FANOUT; i++)
+        {
+            if (node->children[i] != null)
+                self._maxDepth(node->children[i], depth + 1, max);
+        }
+    }
+
+    void _each(TrieNode* node, u8* buf, u64 cap, u64 depth, void(strView) fn)
+    {
+        if (node == null) return;
+        if (node->isEnd)
+            fn(strView::fromParts(buf, depth));
+        for (u64 i = 0; i < TRIE_FANOUT; i++)
+        {
+            if (node->children[i] != null)
+            {
+                buf[depth] = (u8)i;
+                self._each(node->children[i], buf, cap, depth + 1, fn);
+            }
+        }
+    }
+}

@@ -1,0 +1,62 @@
+mod string = import("std/text/string.crl");
+
+flag (platform) {
+LINUX:
+    pub const bool IS_LINUX = true;
+    pub const bool IS_MACOS = false;
+    pub const bool IS_WINDOWS = false;
+    pub const bool IS_FREEBSD = false;
+    pub const bool IS_OPENBSD = false;
+    pub const bool IS_WASM = false;
+    pub const bool IS_POSIX = true;
+    pub const char PATH_SEP = '/';
+    pub const bool USES_CRLF = false;
+    pub const string.strView EXE_EXT = string.strView::fromCstr("");
+    pub const string.strView DLL_EXT = string.strView::fromCstr(".so");
+    pub const string.strView NULL_DEV = string.strView::fromCstr("/dev/null");
+MACOS:
+    pub const bool IS_LINUX = false;
+    pub const bool IS_MACOS = true;
+    pub const bool IS_WINDOWS = false;
+    pub const bool IS_FREEBSD = false;
+    pub const bool IS_OPENBSD = false;
+    pub const bool IS_WASM = false;
+    pub const bool IS_POSIX = true;
+    pub const char PATH_SEP = '/';
+    pub const bool USES_CRLF = false;
+    pub const string.strView EXE_EXT = string.strView::fromCstr("");
+    pub const string.strView DLL_EXT = string.strView::fromCstr(".dylib");
+    pub const string.strView NULL_DEV = string.strView::fromCstr("/dev/null");
+WINDOWS:
+    pub const bool IS_LINUX = false;
+    pub const bool IS_MACOS = false;
+    pub const bool IS_WINDOWS = true;
+    pub const bool IS_FREEBSD = false;
+    pub const bool IS_OPENBSD = false;
+    pub const bool IS_WASM = false;
+    pub const bool IS_POSIX = false;
+    pub const char PATH_SEP = '\\';
+    pub const bool USES_CRLF = true;
+    pub const string.strView EXE_EXT = string.strView::fromCstr(".exe");
+    pub const string.strView DLL_EXT = string.strView::fromCstr(".dll");
+    pub const string.strView NULL_DEV = string.strView::fromCstr("NUL");
+default:
+    pub const bool IS_LINUX = false;
+    pub const bool IS_MACOS = false;
+    pub const bool IS_WINDOWS = false;
+    pub const bool IS_FREEBSD = false;
+    pub const bool IS_OPENBSD = false;
+    pub const bool IS_WASM = false;
+    pub const bool IS_POSIX = true;
+    pub const char PATH_SEP = '/';
+    pub const bool USES_CRLF = false;
+    pub const string.strView EXE_EXT = string.strView::fromCstr("");
+    pub const string.strView DLL_EXT = string.strView::fromCstr(".so");
+    pub const string.strView NULL_DEV = string.strView::fromCstr("/dev/null");
+}
+
+pub const u64 SYS_PAGE_SIZE = 4096;
+
+pub const i32 STDIN_FD = 0;
+pub const i32 STDOUT_FD = 1;
+pub const i32 STDERR_FD = 2;

@@ -1,0 +1,80 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+mod sha256 = import("std/crypto/sha256.crl");
+
+const u64 BLOCK_SIZE = 64;
+const u64 HASH_SIZE = 32;
+
+pub struct HmacSha256
+{
+    u8 keyBlock[BLOCK_SIZE];
+    bool initialized;
+
+    void init(const u8* key, u64 keyLen)
+    {
+        if (keyLen > BLOCK_SIZE)
+        {
+            sha256.sha256 hasher;
+            hasher.init();
+            hasher.update(key, keyLen);
+            u8 digest[HASH_SIZE];
+            hasher.final(digest);
+            mman.zero<u8>(self.keyBlock, BLOCK_SIZE);
+            mman.copy<u8>(self.keyBlock, digest, HASH_SIZE);
+        }
+        else
+        {
+            mman.zero<u8>(self.keyBlock, BLOCK_SIZE);
+            mman.copy<u8>(self.keyBlock, key, keyLen);
+        }
+        self.initialized = true;
+    }
+
+    void compute(const u8* msg, u64 msgLen, u8* outDigest)
+    {
+        if (!self.initialized) return;
+
+        u8 ipad[BLOCK_SIZE];
+        u8 opad[BLOCK_SIZE];
+        for (u64 i = 0; i < BLOCK_SIZE; i++)
+        {
+            ipad[i] = self.keyBlock[i] ^ 0x36;
+            opad[i] = self.keyBlock[i] ^ 0x5C;
+        }
+
+        sha256.sha256 inner;
+        inner.init();
+        inner.update(ipad, BLOCK_SIZE);
+        inner.update(msg, msgLen);
+        u8 innerHash[HASH_SIZE];
+        inner.final(innerHash);
+
+        sha256.sha256 outer;
+        outer.init();
+        outer.update(opad, BLOCK_SIZE);
+        outer.update(innerHash, HASH_SIZE);
+        outer.final(outDigest);
+    }
+
+    void computeWithKey(const u8* key, u64 keyLen, const u8* msg, u64 msgLen, u8* outDigest)
+    {
+        self.init(key, keyLen);
+        self.compute(msg, msgLen, outDigest);
+    }
+
+    bool verify(const u8* msg, u64 msgLen, const u8* expectedDigest)
+    {
+        u8 actual[HASH_SIZE];
+        self.compute(msg, msgLen, actual);
+        u8 diff = 0;
+        for (u64 i = 0; i < HASH_SIZE; i++)
+            diff |= actual[i] ^ expectedDigest[i];
+        return diff == 0;
+    }
+}
+
+pub void hmacSha256(const u8* key, u64 keyLen, const u8* msg, u64 msgLen, u8* outDigest)
+{
+    HmacSha256 ctx;
+    ctx.computeWithKey(key, keyLen, msg, msgLen, outDigest);
+}

@@ -1,0 +1,386 @@
+// Nodes are flat tagged structs in the
+// one struct per family (TypeExpr, Expr, Stmt, Decl) with a
+// kind tag, child pointer arrays for lists, and span info. Backtracking
+// in the parser never allocates nodes are built only after a successful
+// parse, so abandoned attempts leave no garbage.
+
+mod mman = import("std/memory/mman.crl");
+mod str = import("std/text/string.crl");
+
+pub const u32 TYP_IDENT = 0;
+pub const u32 TYP_PTR = 1;
+pub const u32 TYP_ARRAY = 2;
+pub const u32 TYP_GENERIC = 3;
+pub const u32 TYP_FUNC = 4;
+
+pub struct TypeExpr
+{
+    u32 kind;
+    str.strView name;   // TYP_IDENT: name or dotted path; TYP_GENERIC: base
+    TypeExpr* elem;     // TYP_PTR / TYP_ARRAY element
+    Expr* count;        // TYP_ARRAY size (null = unsized)
+    TypeExpr** args;    // TYP_GENERIC type args / TYP_FUNC params
+    u32 nargs;
+    Expr** cargs;       // TYP_GENERIC const-expr args (arr<u64, 3>)
+    u32 ncargs;
+    TypeExpr* ret;      // TYP_FUNC return
+    bool isConst;       // TYP_PTR: 'const' qualifier on the pointer itself
+    u32 line;
+    u32 col;
+}
+
+pub struct Param
+{
+    str.strView name;   // empty when anonymous
+    TypeExpr* type;
+}
+
+pub const u32 EX_INT = 0;
+pub const u32 EX_FLOAT = 1;
+pub const u32 EX_STR = 2;
+pub const u32 EX_CHAR = 3;
+pub const u32 EX_BOOL = 4;
+pub const u32 EX_NULL = 5;
+pub const u32 EX_IDENT = 6;
+pub const u32 EX_UNARY = 7;
+pub const u32 EX_BINARY = 8;
+pub const u32 EX_TERNARY = 9;
+pub const u32 EX_CALL = 10;
+pub const u32 EX_DOT = 11;
+pub const u32 EX_ARROW = 12;
+pub const u32 EX_INDEX = 13;
+pub const u32 EX_DEREF = 14;
+pub const u32 EX_ADDR = 15;
+pub const u32 EX_CAST = 16;
+pub const u32 EX_SIZEOF = 17;
+pub const u32 EX_GENERIC = 18;
+pub const u32 EX_INIT = 19;
+pub const u32 EX_PAREN = 20;
+pub const u32 EX_TYPELIT = 21;
+
+pub struct Expr
+{
+    u32 kind;
+    str.strView text;   // literals (raw slice), ident names, op text,
+                        // member names; EX_ASM: raw source slice
+    Expr* a;            // unary operand / binary left / ternary cond /
+                        // call callee / dot object / index object /
+                        // initializer target type literal
+    Expr* b;            // binary right / ternary if-true / index expr
+    Expr* c;            // ternary if-false / call args array (Expr**)
+    Expr** args;        // EX_CALL args, EX_INIT values
+    u32 nargs;
+    str.strView* names; // EX_INIT field names (parallel to args)
+    TypeExpr* type;     // EX_CAST / EX_SIZEOF / EX_TYPELIT / EX_GENERIC args
+    TypeExpr** targs;
+    u32 ntargs;
+    bool post;          // EX_UNARY postfix ++/--
+    u32 line;
+    u32 col;
+}
+
+pub const u32 ST_BLOCK = 0;
+pub const u32 ST_VAR = 1;
+pub const u32 ST_RETURN = 2;
+pub const u32 ST_IF = 3;
+pub const u32 ST_FOR = 4;
+pub const u32 ST_FORIN = 5;
+pub const u32 ST_WHILE = 6;
+pub const u32 ST_LOOP = 7;
+pub const u32 ST_EXPR = 8;
+pub const u32 ST_ASSERT = 9;
+pub const u32 ST_SWITCH = 10;
+pub const u32 ST_BREAK = 11;
+pub const u32 ST_CONTINUE = 12;
+pub const u32 ST_ASM = 13;
+pub const u32 ST_DEFER = 14;
+pub const u32 ST_FLAG = 15;
+
+pub struct StmtCase
+{
+    Expr* value;        // null for default
+    Stmt** body;
+    u32 nbody;
+}
+
+pub struct Stmt
+{
+    u32 kind;
+    str.strView text;   // ST_VAR/ST_FORIN name; ST_ASM raw slice;
+                        // ST_RETURN "noreturn" marker
+    TypeExpr* type;     // ST_VAR type annotation
+    Expr* a;            // ST_RETURN value / ST_IF cond / ST_FOR init /
+                        // ST_FORIN iterable / ST_WHILE cond / ST_ASSERT
+                        // cond / ST_SWITCH subject / ST_DEFER body is Stmt*
+                        // packed in `body` instead
+    Expr* b;            // ST_IF then is Stmt* in `body`; ST_FOR cond /
+                        // ST_ASM unused
+    Expr* c;            // ST_FOR post / ST_IF else is Stmt* in `body2`
+    Stmt* body;         // ST_IF then / ST_FOR body / ST_FORIN body /
+                        // ST_WHILE body / ST_LOOP body / ST_DEFER sub
+    Stmt* body2;        // ST_IF else
+    Stmt* init;         // ST_FOR init statement (ST_VAR or ST_EXPR)
+    Stmt** stmts;       // ST_BLOCK / ST_VAR multi-decl block
+    u32 nstmts;
+    StmtCase** cases;   // ST_SWITCH / ST_FLAG
+    u32 ncases;
+    StmtCase* defaultCase;
+    u32 line;
+    u32 col;
+}
+
+// Decl kinds
+pub const u32 DT_MODULE = 0;
+pub const u32 DT_IMPORT = 1;
+pub const u32 DT_CONST = 2;
+pub const u32 DT_VAR = 3;
+pub const u32 DT_STRUCT = 4;
+pub const u32 DT_ENUM = 5;
+pub const u32 DT_TRAIT = 6;
+pub const u32 DT_TYPEDEF = 7;
+pub const u32 DT_DISTINCT = 8;
+pub const u32 DT_FUNC = 9;
+pub const u32 DT_EXTERN = 10;
+pub const u32 DT_METHODBLOCK = 11;
+pub const u32 DT_NAMESPACE = 12;
+pub const u32 DT_FLAG = 13;
+
+pub struct StructField
+{
+    str.strView name;
+    TypeExpr* type;
+}
+
+pub struct EnumVariant
+{
+    str.strView name;
+    Expr* value;
+}
+
+pub struct Decl
+{
+    u32 kind;
+    str.strView name;   // DT_MODULE/DT_IMPORT: alias; DT_METHODBLOCK: struct
+    str.strView text;   // DT_MODULE/DT_IMPORT: path
+    TypeExpr* type;     // const/var/typedef/distinct/extern/func return
+    Expr* value;        // const/var initializer
+    bool exported;
+    bool isStatic;      // DT_FUNC static
+    bool isInline;
+    bool isExtern;      // DT_FUNC declared extern (trait methods, compiler_fn)
+    bool noreturn;      // DT_FUNC / DT_EXTERN !return
+    bool isVar;         // DT_EXTERN without parens (global var)
+    str.strView cc;     // DT_EXTERN calling convention
+    str.strView structName; // DT_FUNC method owner / DT_METHODBLOCK struct
+    str.strView traitName;  // DT_FUNC trait / DT_METHODBLOCK trait
+    str.strView* generics;  // struct/func generic params
+    u32 ngenerics;
+    StructField* fields;    // DT_STRUCT
+    u32 nfields;
+    EnumVariant* variants;  // DT_ENUM
+    u32 nvariants;
+    Param* params;          // DT_FUNC / DT_EXTERN
+    u32 nparams;
+    bool variadic;
+    Stmt* body;             // DT_FUNC body (ST_BLOCK)
+    Decl** decls;           // DT_NAMESPACE / DT_METHODBLOCK methods / DT_TRAIT
+    u32 ndecls;
+    Decl** cases;           // DT_FLAG: case decls, flat (see caseLens)
+    str.strView* caseNames; // DT_FLAG
+    u32* caseLens;          // DT_FLAG: length of each case body
+    u32 ncases;
+    Decl** defaultBody;     // DT_FLAG: default case decls
+    u32 ndeclDefault;
+    u32 line;
+    u32 col;
+}
+
+pub struct Program
+{
+    Decl** decls;
+    u32 ndecls;
+    str.strView filename;
+}
+
+// Recursive destructors used by the parsers when backtracking abandons a
+// partially-built tree and by the harness to release a parsed program.
+// Nodes own their child arrays and any `names` arrays; strViews are slices
+// into the source (or a parser-owned scratch buffer) and are not freed.
+
+pub void freeExpr(Expr* e)
+{
+    if (e == null) return;
+    switch (e->kind)
+    {
+    case EX_BINARY:
+        freeExpr(e->a);
+        freeExpr(e->b);
+        break;
+    case EX_UNARY:
+    case EX_DEREF:
+    case EX_ADDR:
+        freeExpr(e->a);
+        break;
+    case EX_TERNARY:
+        freeExpr(e->a);
+        freeExpr(e->b);
+        freeExpr(e->c);
+        break;
+    case EX_CALL:
+    case EX_INIT:
+        freeExpr(e->a);
+        if (e->args)
+        {
+            for (u32 k = 0; k < e->nargs; k++) freeExpr(e->args[k]);
+            mman.dealloc<Expr*>(e->args);
+        }
+        if (e->names) mman.dealloc<str.strView>(e->names);
+        break;
+    case EX_DOT:
+    case EX_ARROW:
+        freeExpr(e->a);
+        break;
+    case EX_INDEX:
+        freeExpr(e->a);
+        freeExpr(e->b);
+        break;
+    case EX_PAREN:
+        freeExpr(e->a);
+        break;
+    case EX_GENERIC:
+        freeExpr(e->a);
+        if (e->args)
+        {
+            for (u32 k = 0; k < e->nargs; k++) freeExpr(e->args[k]);
+            mman.dealloc<Expr*>(e->args);
+        }
+        freeType(e->type);
+        break;
+    case EX_CAST:
+        freeExpr(e->a);
+        freeType(e->type);
+        break;
+    case EX_SIZEOF:
+    case EX_TYPELIT:
+        freeType(e->type);
+        break;
+    default:
+        break;
+    }
+    mman.dealloc<Expr>(e);
+}
+
+pub void freeType(TypeExpr* t)
+{
+    if (t == null) return;
+    if (t->args)
+    {
+        for (u32 k = 0; k < t->nargs; k++) freeType(t->args[k]);
+        mman.dealloc<TypeExpr*>(t->args);
+    }
+    if (t->cargs)
+    {
+        for (u32 k = 0; k < t->ncargs; k++) freeExpr(t->cargs[k]);
+        mman.dealloc<Expr*>(t->cargs);
+    }
+    freeType(t->elem);
+    freeType(t->ret);
+    freeExpr(t->count);
+    mman.dealloc<TypeExpr>(t);
+}
+
+pub void freeStmt(Stmt* s)
+{
+    if (s == null) return;
+    freeStmt(s->init);
+    freeStmt(s->body);
+    freeStmt(s->body2);
+    freeExpr(s->a);
+    freeExpr(s->b);
+    freeExpr(s->c);
+    if (s->stmts)
+    {
+        for (u32 k = 0; k < s->nstmts; k++) freeStmt(s->stmts[k]);
+        mman.dealloc<Stmt*>(s->stmts);
+    }
+    if (s->cases)
+    {
+        for (u32 k = 0; k < s->ncases; k++)
+        {
+            StmtCase* sc = s->cases[k];
+            if (sc)
+            {
+                if (sc->body)
+                {
+                    for (u32 j = 0; j < sc->nbody; j++) freeStmt(sc->body[j]);
+                    mman.dealloc<Stmt*>(sc->body);
+                }
+                freeExpr(sc->value);
+                mman.dealloc<StmtCase>(sc);
+            }
+        }
+        mman.dealloc<StmtCase*>(s->cases);
+    }
+    if (s->defaultCase)
+    {
+        StmtCase* sc = s->defaultCase;
+        if (sc->body)
+        {
+            for (u32 j = 0; j < sc->nbody; j++) freeStmt(sc->body[j]);
+            mman.dealloc<Stmt*>(sc->body);
+        }
+        freeExpr(sc->value);
+        mman.dealloc<StmtCase>(sc);
+    }
+    freeType(s->type);
+    mman.dealloc<Stmt>(s);
+}
+
+pub void freeDecl(Decl* d)
+{
+    if (d == null) return;
+    freeType(d->type);
+    freeExpr(d->value);
+    if (d->generics) mman.dealloc<str.strView>(d->generics);
+    if (d->params) mman.dealloc<Param>(d->params);
+    if (d->fields)
+    {
+        for (u32 k = 0; k < d->nfields; k++) freeType(d->fields[k].type);
+        mman.dealloc<StructField>(d->fields);
+    }
+    if (d->variants)
+    {
+        for (u32 k = 0; k < d->nvariants; k++) freeExpr(d->variants[k].value);
+        mman.dealloc<EnumVariant>(d->variants);
+    }
+    if (d->decls)
+    {
+        for (u32 k = 0; k < d->ndecls; k++) freeDecl(d->decls[k]);
+        mman.dealloc<Decl*>(d->decls);
+    }
+    if (d->cases)
+    {
+        for (u32 k = 0; k < d->ncases; k++) freeDecl(d->cases[k]);
+        mman.dealloc<Decl*>(d->cases);
+    }
+    if (d->caseNames) mman.dealloc<str.strView>(d->caseNames);
+    if (d->caseLens) mman.dealloc<u32>(d->caseLens);
+    if (d->defaultBody)
+    {
+        for (u32 k = 0; k < d->ndeclDefault; k++) freeDecl(d->defaultBody[k]);
+        mman.dealloc<Decl*>(d->defaultBody);
+    }
+    freeStmt(d->body);
+    mman.dealloc<Decl>(d);
+}
+
+pub void freeProgram(Program* p)
+{
+    if (p == null) return;
+    if (p->decls)
+    {
+        for (u32 k = 0; k < p->ndecls; k++) freeDecl(p->decls[k]);
+        mman.dealloc<Decl*>(p->decls);
+    }
+    mman.dealloc<Program>(p);
+}

@@ -1,0 +1,198 @@
+@[no_warn_unsafe]
+
+mod libc = import("std/platform/libc.crl");
+mod string = import("std/text/string.crl");
+
+extern i32 socket(i32 domain, i32 type, i32 protocol);
+extern i32 connect(i32 fd, const void* addr, i32 addrLen);
+extern i32 bind(i32 fd, const void* addr, i32 addrLen);
+extern i32 listen(i32 fd, i32 backlog);
+extern i32 accept(i32 fd, void* addr, i32* addrLen);
+extern i64 send(i32 fd, const u8* buf, u64 len, i32 flags);
+extern i64 recv(i32 fd, u8* buf, u64 len, i32 flags);
+extern i64 sendto(i32 fd, const u8* buf, u64 len, i32 flags, const void* dstAddr, i32 addrLen);
+extern i64 recvfrom(i32 fd, u8* buf, u64 len, i32 flags, void* srcAddr, i32* addrLen);
+extern i32 setsockopt(i32 fd, i32 level, i32 optname, const void* optval, i32 optlen);
+extern u64 htonl(u32 val);
+extern u16 htons(u16 val);
+extern u32 ntohl(u32 val);
+extern u16 ntohs(u16 val);
+
+const i32 AF_INET = 2;
+const i32 SOCK_STREAM = 1;
+const i32 SOCK_DGRAM = 2;
+const i32 IPPROTO_TCP = 6;
+const i32 IPPROTO_UDP = 17;
+const i32 SOL_SOCKET = 1;
+const i32 SO_REUSEADDR = 2;
+
+pub struct sockaddr_in
+{
+    u16 sinFamily;
+    u16 sinPort;
+    u32 sinAddr;
+    u8 sinZero[8];
+}
+
+bool _parseIp(string.strView ip, u32* out)
+{
+    u32 octet = 0;
+    u32 addrVal = 0;
+    u32 shift = 24;
+    u32 octets = 0;
+    bool octetHasDigit = false;
+    for (u64 i = 0; i <= ip.len; i++)
+    {
+        if (i == ip.len || ip.ptr[i] == '.')
+        {
+            if (!octetHasDigit || octet > 255) return false;
+            addrVal |= (octet << shift);
+            octet = 0;
+            octetHasDigit = false;
+            octets++;
+            if (shift > 0) shift -= 8;
+        }
+        else
+        {
+            if (ip.ptr[i] < '0' || ip.ptr[i] > '9') return false;
+            octet = octet * 10 + (u32)(ip.ptr[i] - '0');
+            if (octet > 255) return false;
+            octetHasDigit = true;
+        }
+    }
+    if (octets != 4) return false;
+    *out = htonl(addrVal);
+    return true;
+}
+
+void _zeroSockaddr(sockaddr_in* a)
+{
+    for (u64 i = 0; i < 8; i++) a->sinZero[i] = 0;
+}
+
+pub distinct TcpSocket = i32;
+
+pub TcpSocket tcpConnect(string.strView ip, u16 port)
+{
+    i32 fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return (TcpSocket)(-1);
+
+    u32 ipAddr;
+    if (!_parseIp(ip, &ipAddr)) { libc.close(fd); return (TcpSocket)(-1); }
+
+    sockaddr_in addr;
+    _zeroSockaddr(&addr);
+    addr.sinFamily = AF_INET;
+    addr.sinPort = htons(port);
+    addr.sinAddr = ipAddr;
+
+    if (connect(fd, &addr, 16) < 0)
+    {
+        libc.close(fd);
+        return (TcpSocket)(-1);
+    }
+    return (TcpSocket)fd;
+}
+
+pub TcpSocket tcpListen(u16 port)
+{
+    i32 fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd < 0) return (TcpSocket)(-1);
+
+    i32 optval = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, 4);
+
+    sockaddr_in addr;
+    _zeroSockaddr(&addr);
+    addr.sinFamily = AF_INET;
+    addr.sinPort = htons(port);
+    addr.sinAddr = htonl(0u);
+    if (bind(fd, &addr, 16) < 0) { libc.close(fd); return (TcpSocket)(-1); }
+    if (listen(fd, 128) < 0) { libc.close(fd); return (TcpSocket)(-1); }
+    return (TcpSocket)fd;
+}
+
+pub TcpSocket tcpAccept(TcpSocket server)
+{
+    sockaddr_in addr;
+    i32 addrLen = 16;
+    i32 fd = accept((i32)server, &addr, &addrLen);
+    return (TcpSocket)fd;
+}
+
+pub i64 tcpSend(TcpSocket sock, const u8* buf, u64 len)
+{
+    u64 sent = 0;
+    while (sent < len)
+    {
+        i64 n = send((i32)sock, buf + sent, len - sent, 0);
+        if (n <= 0) return n < 0 ? n : (i64)sent;
+        sent += (u64)n;
+    }
+    return (i64)sent;
+}
+
+pub i64 tcpRecv(TcpSocket sock, u8* buf, u64 len)
+{
+    u64 got = 0;
+    while (got < len)
+    {
+        i64 n = recv((i32)sock, buf + got, len - got, 0);
+        if (n <= 0) return n < 0 ? n : (i64)got;
+        got += (u64)n;
+    }
+    return (i64)got;
+}
+
+pub void tcpClose(TcpSocket sock)
+{
+    libc.close((i32)sock);
+}
+
+pub struct UdpSocket
+{
+    i32 fd;
+}
+
+pub UdpSocket udpSocket()
+{
+    UdpSocket s;
+    s.fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    return s;
+}
+
+pub bool udpBind(UdpSocket* s, u16 port)
+{
+    if (s->fd < 0) return false;
+    sockaddr_in addr;
+    _zeroSockaddr(&addr);
+    addr.sinFamily = AF_INET;
+    addr.sinPort = htons(port);
+    addr.sinAddr = htonl(0u);
+    return bind(s->fd, &addr, 16) == 0;
+}
+
+pub i64 udpSendTo(UdpSocket* s, const u8* buf, u64 len, string.strView ip, u16 port)
+{
+    if (s->fd < 0) return -1;
+    u32 ipAddr;
+    if (!_parseIp(ip, &ipAddr)) return -1;
+    sockaddr_in addr;
+    _zeroSockaddr(&addr);
+    addr.sinFamily = AF_INET;
+    addr.sinPort = htons(port);
+    addr.sinAddr = ipAddr;
+    return sendto(s->fd, buf, len, 0, &addr, 16);
+}
+
+pub i64 udpRecvFrom(UdpSocket* s, u8* buf, u64 len)
+{
+    if (s->fd < 0) return -1;
+    return recvfrom(s->fd, buf, len, 0, null, null);
+}
+
+pub void udpClose(UdpSocket* s)
+{
+    if (s->fd >= 0) libc.close(s->fd);
+    s->fd = -1;
+}

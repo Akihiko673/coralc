@@ -1,0 +1,73 @@
+// char is a built-in UTF-8 / ASCII byte type
+pub bool isDigit(char c)
+{
+    u8 v = (u8)c;
+    return v >= '0' && v <= '9';
+}
+
+pub bool isAlpha(char c)
+{
+    u8 v = (u8)c;
+    return (v >= 'a' && v <= 'z') || (v >= 'A' && v <= 'Z');
+}
+
+pub bool isAlnum(char c) { return isDigit(c) || isAlpha(c); }
+
+pub bool isLower(char c)
+{
+    u8 v = (u8)c;
+    return v >= 'a' && v <= 'z';
+}
+
+pub bool isUpper(char c)
+{
+    u8 v = (u8)c;
+    return v >= 'A' && v <= 'Z';
+}
+
+pub char toLower(char c)
+{
+    u8 v = (u8)c;
+    if (v >= 'A' && v <= 'Z') return (char)(v + 0x20);
+    return c;
+}
+
+pub char toUpper(char c)
+{
+    u8 v = (u8)c;
+    if (v >= 'a' && v <= 'z') return (char)(v - 0x20);
+    return c;
+}
+
+pub bool isSpace(char c)
+{
+    u8 v = (u8)c;
+    return v == ' ' || v == '\t' || v == '\n' || v == '\r' || v == '\f' || v == '\v';
+}
+
+pub bool isPrint(char c)
+{
+    u8 v = (u8)c;
+    return v >= 0x20 && v <= 0x7E;
+}
+
+pub bool isControl(char c)
+{
+    u8 v = (u8)c;
+    return v < 0x20 || v == 0x7F;
+}
+
+pub bool isHexDigit(char c)
+{
+    u8 v = (u8)c;
+    return (v >= '0' && v <= '9') || (v >= 'a' && v <= 'f') || (v >= 'A' && v <= 'F');
+}
+
+pub u8 digitValue(char c)
+{
+    u8 v = (u8)c;
+    if (v >= '0' && v <= '9') return (u8)(v - '0');
+    if (v >= 'a' && v <= 'f') return (u8)(v - 'a' + 10);
+    if (v >= 'A' && v <= 'F') return (u8)(v - 'A' + 10);
+    return (u8)0;
+}

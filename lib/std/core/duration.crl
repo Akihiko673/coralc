@@ -1,0 +1,191 @@
+mod time = import("std/core/time.crl");
+
+pub struct Duration
+{
+    i64 sec;
+    i64 nsec;
+
+    static Duration fromSecs(i64 s)
+    {
+        Duration d;
+        d.sec = s;
+        d.nsec = 0;
+        return d;
+    }
+
+    static Duration fromMillis(i64 ms)
+    {
+        Duration d;
+        d.sec = ms / 1000;
+        d.nsec = (ms % 1000) * 1000000;
+        d._normalize();
+        return d;
+    }
+
+    static Duration fromMicros(i64 us)
+    {
+        Duration d;
+        d.sec = us / 1000000;
+        d.nsec = (us % 1000000) * 1000;
+        d._normalize();
+        return d;
+    }
+
+    static Duration fromNanos(i64 ns)
+    {
+        Duration d;
+        d.sec = ns / 1000000000;
+        d.nsec = ns % 1000000000;
+        d._normalize();
+        return d;
+    }
+
+    static Duration fromF64(f64 seconds)
+    {
+        Duration d;
+        if (seconds != seconds || seconds > 9.2233720368547758e18 || seconds < -9.2233720368547758e18)
+            return Duration::fromSecs(0);
+        d.sec = (i64)seconds;
+        d.nsec = (i64)((seconds - (f64)d.sec) * 1e9);
+        if (d.nsec < 0) { d.sec--; d.nsec += 1000000000; }
+        if (d.nsec >= 1000000000) { d.sec++; d.nsec -= 1000000000; }
+        return d;
+    }
+
+    i64 asSecs() { return self.sec; }
+    i64 asMillis() { return self._asScaled(1000, 1000000); }
+    i64 asMicros() { return self._asScaled(1000000, 1000); }
+    i64 asNanos() { return self._asScaled(1000000000, 1); }
+    f64 asF64() { return (f64)self.sec + (f64)self.nsec * 1e-9; }
+
+    bool isZero() { return self.sec == 0 && self.nsec == 0; }
+
+    void _normalize()
+    {
+        if (self.nsec >= 1000000000)
+        {
+            self.sec += self.nsec / 1000000000;
+            self.nsec = self.nsec % 1000000000;
+        }
+        else if (self.nsec < 0)
+        {
+            i64 borrow = (-self.nsec + 999999999) / 1000000000;
+            self.sec -= borrow;
+            self.nsec += borrow * 1000000000;
+        }
+    }
+
+    i64 _asScaled(i64 secMul, i64 nsecDiv)
+    {
+        i64 s;
+        if (!_safeMulI64(self.sec, secMul, &s)) return self.sec > 0 ? 0x7FFFFFFFFFFFFFFF : -0x7FFFFFFFFFFFFFFF - 1;
+        i64 t = self.nsec / nsecDiv;
+        if (t > 0 && s > 0x7FFFFFFFFFFFFFFF - t) return 0x7FFFFFFFFFFFFFFF;
+        if (t < 0 && s < -0x7FFFFFFFFFFFFFFF - 1 - t) return -0x7FFFFFFFFFFFFFFF - 1;
+        return s + t;
+    }
+
+    Duration add(Duration other)
+    {
+        Duration r;
+        r.sec = self.sec + other.sec;
+        r.nsec = self.nsec + other.nsec;
+        r._normalize();
+        return r;
+    }
+
+    Duration sub(Duration other)
+    {
+        Duration r;
+        r.sec = self.sec - other.sec;
+        r.nsec = self.nsec - other.nsec;
+        r._normalize();
+        return r;
+    }
+
+    Duration mul(i64 factor)
+    {
+        Duration r;
+        i64 nsecPart;
+        if (!_safeMulI64(self.nsec, factor, &nsecPart))
+            return self._saturated((self.nsec > 0) != (factor > 0));
+        i64 secPart;
+        if (!_safeMulI64(self.sec, factor, &secPart))
+            return self._saturated((self.sec > 0) != (factor > 0));
+        i64 carry = nsecPart / 1000000000;
+        i64 rem = nsecPart % 1000000000;
+        i64 sec = secPart + carry;
+        if ((carry > 0 && secPart > 0x7FFFFFFFFFFFFFFF - carry) ||
+            (carry < 0 && secPart < -0x7FFFFFFFFFFFFFFF - 1 - carry))
+            return self._saturated(carry > 0);
+        r.sec = sec;
+        r.nsec = rem;
+        r._normalize();
+        return r;
+    }
+
+    Duration div(i64 factor)
+    {
+        assert(factor != 0);
+        Duration r;
+        i64 totalNs = self.asNanos() / factor;
+        r.sec = totalNs / 1000000000;
+        r.nsec = totalNs % 1000000000;
+        r._normalize();
+        return r;
+    }
+
+    Duration _saturated(bool positive)
+    {
+        Duration r;
+        r.sec = positive ? 0x7FFFFFFFFFFFFFFF : -0x7FFFFFFFFFFFFFFF - 1;
+        r.nsec = positive ? 999999999 : 0;
+        return r;
+    }
+
+    i32 compare(Duration other)
+    {
+        if (self.sec < other.sec) return -1;
+        if (self.sec > other.sec) return 1;
+        if (self.nsec < other.nsec) return -1;
+        if (self.nsec > other.nsec) return 1;
+        return 0;
+    }
+
+    bool eq(Duration other) { return self.compare(other) == 0; }
+    bool lt(Duration other) { return self.compare(other) < 0; }
+    bool gt(Duration other) { return self.compare(other) > 0; }
+    bool le(Duration other) { return self.compare(other) <= 0; }
+    bool ge(Duration other) { return self.compare(other) >= 0; }
+
+    time.Timespec toTimespec()
+    {
+        time.Timespec ts;
+        ts.sec = self.sec;
+        ts.nsec = self.nsec;
+        return ts;
+    }
+
+    void sleep()
+    {
+        time.Timespec ts = self.toTimespec();
+        time.nanosleep(&ts, null);
+    }
+}
+
+pub Duration seconds(i64 s) { return Duration::fromSecs(s); }
+pub Duration millis(i64 ms) { return Duration::fromMillis(ms); }
+pub Duration micros(i64 us) { return Duration::fromMicros(us); }
+pub Duration nanos(i64 ns) { return Duration::fromNanos(ns); }
+
+bool _safeMulI64(i64 a, i64 b, i64* out)
+{
+    if (a == 0 || b == 0) { *out = 0; return true; }
+    bool neg = (a < 0) != (b < 0);
+    u64 ma = a < 0 ? (u64)(-(a + 1)) + 1u : (u64)a;
+    u64 mb = b < 0 ? (u64)(-(b + 1)) + 1u : (u64)b;
+    u64 limit = neg ? 0x8000000000000000u : 0x7FFFFFFFFFFFFFFFu;
+    if (ma > limit / mb) return false;
+    *out = a * b;
+    return true;
+}

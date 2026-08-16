@@ -1,0 +1,18 @@
+inline u64 doubleIt(u64 x)
+{
+    return x * 2;
+}
+
+inline u64 tripleIt(u64 x)
+{
+    return x * 3;
+}
+
+i32 main()
+{
+    u64 a = doubleIt(21);
+    if (a != 42) return 1;
+    u64 b = tripleIt(14);
+    if (b != 42) return 2;
+    return 0;
+}

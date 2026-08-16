@@ -1,0 +1,93 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+
+pub struct pool<T>
+{
+    void* freeList;
+    u8* blocks;
+    u64 blockSize;
+    u64 blockCount;
+    u64 totalBlocks;
+    u64 usedBlocks;
+
+    pool<T> new()
+    {
+        pool<T> p;
+        p.freeList = null;
+        p.blocks = null;
+        p.blockSize = sizeof(T) < sizeof(void*) ? sizeof(void*) : sizeof(T);
+        p.blockCount = 0;
+        p.totalBlocks = 0;
+        p.usedBlocks = 0;
+        return p;
+    }
+
+    void dispose()
+    {
+        mman.dealloc<u8>(self.blocks);
+        self.blocks = null;
+        self.freeList = null;
+        self.blockCount = 0;
+        self.totalBlocks = 0;
+    }
+
+    bool _grow()
+    {
+        u64 newCount = self.blockCount > 0 ? self.blockCount : 64;
+        u64 allocSize = self.blockSize * newCount;
+        u8* newBlocks = mman.alloc<u8>(allocSize);
+        if (newBlocks == null) return false;
+        u8* oldBase = self.blocks;
+        if (self.blocks != null)
+        {
+            mman.copy<u8>(newBlocks, self.blocks, self.blockSize * self.blockCount);
+            mman.dealloc<u8>(self.blocks);
+        }
+        self.blocks = newBlocks;
+        void* oldFree = self.freeList;
+        self.freeList = null;
+        while (oldFree != null)
+        {
+            void* next = *(void**)oldFree;
+            u64 idx = ((u8*)oldFree - oldBase) / self.blockSize;
+            void* block = (void*)(self.blocks + idx * self.blockSize);
+            *(void**)block = self.freeList;
+            self.freeList = block;
+            oldFree = next;
+        }
+        for (u64 i = self.blockCount; i < self.blockCount + newCount; i++)
+        {
+            void* block = (void*)(self.blocks + i * self.blockSize);
+            *(void**)block = self.freeList;
+            self.freeList = block;
+        }
+        self.blockCount += newCount;
+        self.totalBlocks = self.blockCount;
+        return true;
+    }
+
+    T* acquire()
+    {
+        if (self.freeList == null)
+        {
+            if (!self._grow()) return null;
+        }
+        void* block = self.freeList;
+        self.freeList = *(void**)block;
+        self.usedBlocks++;
+        return (T*)block;
+    }
+
+    void release(T* obj)
+    {
+        if (obj == null) return;
+        *(void**)obj = self.freeList;
+        self.freeList = (void*)obj;
+        self.usedBlocks--;
+    }
+
+    u64 available() { return self.totalBlocks - self.usedBlocks; }
+    u64 used() { return self.usedBlocks; }
+    u64 capacity() { return self.totalBlocks; }
+}

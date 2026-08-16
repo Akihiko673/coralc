@@ -1,0 +1,109 @@
+mod libc = import("std/platform/libc.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub const f64 pi = 3.14159265358979323846;
+pub const f64 e = 2.71828182845904523536;
+pub const f64 srt2 = 1.41421356237309504880;
+
+pub f64 pi() { return 3.14159265358979323846; }
+pub f64 e() { return 2.71828182845904523536; }
+pub f64 sqrt2() { return 1.41421356237309504880; }
+
+pub f64 degToRad(f64 deg) { return deg * pi() / 180.0; }
+pub f64 radToDeg(f64 rad) { return rad * 180.0 / pi(); }
+
+pub i64 clampI64(i64 v, i64 lo, i64 hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+pub u64 clampU64(u64 v, u64 lo, u64 hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+pub f64 clampF64(f64 v, f64 lo, f64 hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+pub f64 lerp(f64 a, f64 b, f64 t)
+{
+    return a + (b - a) * t;
+}
+
+pub f64 invLerp(f64 a, f64 b, f64 v)
+{
+    return (v - a) / (b - a);
+}
+
+pub f64 mapRange(f64 v, f64 a1, f64 b1, f64 a2, f64 b2)
+{
+    return lerp(a2, b2, invLerp(a1, b1, v));
+}
+
+pub i64 minI64(i64 a, i64 b) { return a < b ? a : b; }
+pub i64 maxI64(i64 a, i64 b) { return a > b ? a : b; }
+pub u64 minU64(u64 a, u64 b) { return a < b ? a : b; }
+pub u64 maxU64(u64 a, u64 b) { return a > b ? a : b; }
+pub f64 minF64(f64 a, f64 b) { return a < b ? a : b; }
+pub f64 maxF64(f64 a, f64 b) { return a > b ? a : b; }
+
+pub u64 absI64(i64 x)
+{
+    if (x < 0) return (u64)(-(x + 1)) + 1u;
+    return (u64)x;
+}
+pub f64 absF64(f64 x) { return libc.fabs(x); }
+
+pub i64 signI64(i64 x) { return x < 0 ? -1 : (x > 0 ? 1 : 0); }
+pub f64 signF64(f64 x) { return x < 0.0 ? -1.0 : (x > 0.0 ? 1.0 : 0.0); }
+
+pub bool isFinite(f64 x)
+{
+    u64 bits;
+    mman.copy<u64>(&bits, &x, 1u);
+    return (bits & 0x7FF0000000000000u) != 0x7FF0000000000000u;
+}
+
+pub bool isNan(f64 x)
+{
+    u64 bits;
+    mman.copy<u64>(&bits, &x, 1u);
+    return ((bits & 0x7FF0000000000000u) == 0x7FF0000000000000u) && ((bits & 0x000FFFFFFFFFFFFFu) != 0u);
+}
+
+pub inline f64 sin(f64 x) { return libc.sin(x); }
+pub inline f64 cos(f64 x) { return libc.cos(x); }
+pub inline f64 tan(f64 x) { return libc.tan(x); }
+pub inline f64 sqrt(f64 x) { return libc.sqrt(x); }
+pub inline f64 pow(f64 x, f64 y) { return libc.pow(x, y); }
+pub inline f64 floor(f64 x) { return libc.floor(x); }
+pub inline f64 ceil(f64 x) { return libc.ceil(x); }
+pub inline f64 fabs(f64 x) { return libc.fabs(x); }
+pub inline f64 asin(f64 x) { return libc.asin(x); }
+pub inline f64 acos(f64 x) { return libc.acos(x); }
+pub inline f64 atan(f64 x) { return libc.atan(x); }
+pub inline f64 atan2(f64 y, f64 x) { return libc.atan2(y, x); }
+pub inline f64 sinh(f64 x) { return libc.sinh(x); }
+pub inline f64 cosh(f64 x) { return libc.cosh(x); }
+pub inline f64 tanh(f64 x) { return libc.tanh(x); }
+pub inline f64 cbrt(f64 x) { return libc.cbrt(x); }
+pub inline f64 exp(f64 x) { return libc.exp(x); }
+pub inline f64 log(f64 x) { return libc.log(x); }
+pub inline f64 log2(f64 x) { return libc.log2(x); }
+pub inline f64 log10(f64 x) { return libc.log10(x); }
+pub inline f64 round(f64 x) { return libc.round(x); }
+pub inline f64 fmod(f64 x, f64 y) { return libc.fmod(x, y); }
+pub inline f64 hypot(f64 x, f64 y) { return libc.hypot(x, y); }
+pub inline f64 erf(f64 x) { return libc.erf(x); }
+pub inline f64 erfc(f64 x) { return libc.erfc(x); }
+pub inline f64 tgamma(f64 x) { return libc.tgamma(x); }
+pub inline f64 lgamma(f64 x) { return libc.lgamma(x); }
+pub inline f64 strtod(const char* s, char** end) { return libc.strtod(s, end); }

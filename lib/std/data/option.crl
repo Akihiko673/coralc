@@ -1,0 +1,78 @@
+@[no_warn_unsafe]
+
+pub struct option<T>
+{
+    bool some;
+    T value;
+
+    option<T> some(T value)
+    {
+        option<T> o;
+        o.some = true;
+        o.value = value;
+        return o;
+    }
+
+    option<T> none()
+    {
+        option<T> o;
+        o.some = false;
+        return o;
+    }
+
+    bool isSome(const option<T>* this)
+    {
+        return this->some;
+    }
+
+    bool isNone(const option<T>* this)
+    {
+        return !this->some;
+    }
+
+    T unwrap(const option<T>* this)
+    {
+        assert(this->some);
+        return this->value;
+    }
+
+    T unwrapOr(const option<T>* this, T defaultVal)
+    {
+        if (this->some) return this->value;
+        return defaultVal;
+    }
+
+    T* ptr(option<T>* this)
+    {
+        if (this->some) return &this->value;
+        return null;
+    }
+
+    const T* constPtr(const option<T>* this)
+    {
+        if (this->some) return &this->value;
+        return null;
+    }
+
+    void map(option<T>* this, T(T) fn)
+    {
+        if (this->some) this->value = fn(this->value);
+    }
+
+    void andThen(option<T>* this, option<T>(T) fn)
+    {
+        if (this->some) *this = fn(this->value);
+    }
+
+    void orElse(option<T>* this, option<T>() fn)
+    {
+        if (!this->some) *this = fn();
+    }
+
+    T take(option<T>* this)
+    {
+        assert(this->some);
+        this->some = false;
+        return this->value;
+    }
+}

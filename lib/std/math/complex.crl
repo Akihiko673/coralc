@@ -1,0 +1,131 @@
+mod math = import("std/math/math.crl");
+
+pub struct Complex
+{
+    f64 re;
+    f64 im;
+
+    static Complex new(f64 real, f64 imag)
+    {
+        Complex c;
+        c.re = real;
+        c.im = imag;
+        return c;
+    }
+
+    static Complex fromRe(f64 real)
+    {
+        Complex c;
+        c.re = real;
+        c.im = 0.0;
+        return c;
+    }
+
+    static Complex fromIm(f64 imag)
+    {
+        Complex c;
+        c.re = 0.0;
+        c.im = imag;
+        return c;
+    }
+
+    Complex add(Complex other)
+    {
+        return Complex::new(self.re + other.re, self.im + other.im);
+    }
+
+    Complex sub(Complex other)
+    {
+        return Complex::new(self.re - other.re, self.im - other.im);
+    }
+
+    Complex mul(Complex other)
+    {
+        return Complex::new(
+            self.re * other.re - self.im * other.im,
+            self.re * other.im + self.im * other.re
+        );
+    }
+
+    Complex div(Complex other)
+    {
+        f64 denom = other.re * other.re + other.im * other.im;
+        if (denom == 0.0) return Complex::new(0.0, 0.0);
+        return Complex::new(
+            (self.re * other.re + self.im * other.im) / denom,
+            (self.im * other.re - self.re * other.im) / denom
+        );
+    }
+
+    Complex conj()
+    {
+        return Complex::new(self.re, -self.im);
+    }
+
+    f64 abs()
+    {
+        return math.hypot(self.re, self.im);
+    }
+
+    f64 arg()
+    {
+        return math.atan2(self.im, self.re);
+    }
+
+    f64 absSq()
+    {
+        return self.re * self.re + self.im * self.im;
+    }
+
+    Complex neg()
+    {
+        return Complex::new(-self.re, -self.im);
+    }
+
+    Complex scale(f64 s)
+    {
+        return Complex::new(self.re * s, self.im * s);
+    }
+
+    Complex exp()
+    {
+        f64 e = math.exp(self.re);
+        return Complex::new(e * math.cos(self.im), e * math.sin(self.im));
+    }
+
+    Complex log()
+    {
+        return Complex::new(math.log(self.abs()), self.arg());
+    }
+
+    Complex pow(Complex other)
+    {
+        if (self.re == 0.0 && self.im == 0.0) return Complex::new(0.0, 0.0);
+        return other.mul(self.log()).exp();
+    }
+
+    Complex sin()
+    {
+        return Complex::new(
+            math.sin(self.re) * math.cosh(self.im),
+            math.cos(self.re) * math.sinh(self.im)
+        );
+    }
+
+    Complex cos()
+    {
+        return Complex::new(
+            math.cos(self.re) * math.cosh(self.im),
+            -math.sin(self.re) * math.sinh(self.im)
+        );
+    }
+
+    Complex sqrt()
+    {
+        f64 r = self.abs();
+        f64 a = math.sqrt((r + self.re) / 2.0);
+        f64 b = math.sqrt((r - self.re) / 2.0);
+        if (self.im < 0.0) b = -b;
+        return Complex::new(a, b);
+    }
+}

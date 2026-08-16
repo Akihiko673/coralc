@@ -1,0 +1,136 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod mman = import("std/memory/mman.crl");
+
+// Local dead store elimination.
+//
+// Within a single basic block, a store to an address that is overwritten by a
+// later store to the same address — before any load, call, fence or atomic
+// touches it — never contributes to the program state and is removed. Address
+// identity is tracked by value pointer, so two stores to the same alloca,
+// global or computed pointer fold when the pointer operand is the same IR
+// value.
+//
+// Conservative by design, any instruction that can read or write memory
+// (call, atomic, fence, inline asm, landing pad) flushes the tracked stores,
+// and stores with aliasable-but-different pointer values are never folded.
+pub struct DsePass
+{
+    ir_types.IrContext* ctx;
+    u64 removed;
+
+    DsePass new(ir_types.IrContext* ctx)
+    {
+        DsePass p;
+        p.ctx = ctx;
+        p.removed = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.removed = 0;
+        bool changed = false;
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            if (self.sweepBlock(bb)) changed = true;
+        }
+
+        return changed;
+    }
+
+    bool isBarrier(ir_opcodes.IrOpcode op)
+    {
+        switch (op)
+        {
+        case ir_opcodes.IrOpcode::Load:
+        case ir_opcodes.IrOpcode::AtomicLoad:
+        case ir_opcodes.IrOpcode::AtomicStore:
+        case ir_opcodes.IrOpcode::AtomicRmw:
+        case ir_opcodes.IrOpcode::AtomicCmpXchg:
+        case ir_opcodes.IrOpcode::Fence:
+        case ir_opcodes.IrOpcode::Call:
+        case ir_opcodes.IrOpcode::InlineAsm:
+        case ir_opcodes.IrOpcode::GcRoot:
+        case ir_opcodes.IrOpcode::GcWriteBarrier:
+        case ir_opcodes.IrOpcode::GcSafepoint:
+        case ir_opcodes.IrOpcode::LandingPad:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool sweepBlock(ir_types.IrBlock* bb)
+    {
+        const u32 MAX_TRACKED = 128;
+        ir_types.IrValue** addrs = mman.alloc<ir_types.IrValue*>(MAX_TRACKED);
+        ir_types.IrInst** stores = mman.alloc<ir_types.IrInst*>(MAX_TRACKED);
+        u32 tracked = 0;
+        bool changed = false;
+
+        u32 ii = 0;
+        while (ii < bb.ninsts)
+        {
+            ir_types.IrInst* inst = bb.insts[ii];
+
+            if (inst.opcode == ir_opcodes.IrOpcode::Store && inst.nops >= 2)
+            {
+                ir_types.IrValue* addr = inst.ops[1];
+                // Look for a pending store to the identical address value.
+                i32 hit = -1;
+                for (u32 k = 0; k < tracked; k++)
+                {
+                    if (addrs[k] == addr)
+                    {
+                        hit = (i32)k;
+                        break;
+                    }
+                }
+
+                if (hit >= 0)
+                {
+                    stores[hit].erase();
+                    stores[hit] = inst;
+                    self.removed++;
+                    changed = true;
+                    continue;
+                }
+
+                if (tracked < MAX_TRACKED)
+                {
+                    addrs[tracked] = addr;
+                    stores[tracked] = inst;
+                    tracked++;
+                }
+            }
+            else if (self.isBarrier(inst.opcode))
+            {
+                tracked = 0;
+            }
+
+            ii++;
+        }
+
+        mman.dealloc<ir_types.IrValue*>(addrs);
+        mman.dealloc<ir_types.IrInst*>(stores);
+        return changed;
+    }
+
+    u64 removedCount()
+    {
+        return self.removed;
+    }
+}
+
+pub bool irPassDse(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    DsePass pass = DsePass::new(ctx);
+    return pass.run(func);
+}

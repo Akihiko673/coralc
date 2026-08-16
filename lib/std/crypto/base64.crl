@@ -1,0 +1,89 @@
+@[no_warn_unsafe]
+
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+
+const u8 _TABLE[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub u64 encode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+{
+    u64 pos = 0;
+    u64 i = 0;
+    while (i < srcLen && pos + 4 <= dstCap)
+    {
+        u32 b = (u32)src[i] << 16;
+        if (i + 1 < srcLen) b |= (u32)src[i + 1] << 8;
+        if (i + 2 < srcLen) b |= (u32)src[i + 2];
+        u64 remaining = srcLen - i;
+        i += 3;
+        u8 c0 = _TABLE[(b >> 18) & 0x3F];
+        u8 c1 = _TABLE[(b >> 12) & 0x3F];
+        u8 c2 = remaining >= 2 ? _TABLE[(b >> 6) & 0x3F] : (u8)'=';
+        u8 c3 = remaining >= 3 ? _TABLE[b & 0x3F] : (u8)'=';
+        dst[pos++] = c0; dst[pos++] = c1; dst[pos++] = c2; dst[pos++] = c3;
+    }
+    return pos;
+}
+
+pub string.String encodeToString(const u8* src, u64 srcLen)
+{
+    u64 cap = ((srcLen + 2) / 3) * 4;
+    u8* buf = mman.alloc<u8>(cap);
+    u64 n = encode(src, srcLen, buf, cap);
+    string.String s = string.String::fromView(string.strView::fromParts((const char*)buf, n));
+    mman.dealloc<u8>(buf);
+    return s;
+}
+
+i32 _b64Val(u8 c)
+{
+    if (c >= 'A' && c <= 'Z') return (i32)(c - 'A');
+    if (c >= 'a' && c <= 'z') return (i32)(c - 'a' + 26);
+    if (c >= '0' && c <= '9') return (i32)(c - '0' + 52);
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+pub u64 decode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+{
+    u64 pos = 0;
+    u64 i = 0;
+    while (i < srcLen)
+    {
+        u32 b = 0;
+        u64 n = 0;
+        while (n < 4 && i < srcLen)
+        {
+            u8 c = src[i];
+            if (c == '=') break;
+            i32 val = _b64Val(c);
+            if (val < 0) return 0;
+            b = (b << 6) | (u32)val;
+            i++;
+            n++;
+        }
+        if (n == 0) break;
+        if (n == 1) return 0;
+        if (n == 2)
+        {
+            if (pos + 1 > dstCap) break;
+            dst[pos++] = (u8)(b >> 4);
+        }
+        else if (n == 3)
+        {
+            if (pos + 2 > dstCap) break;
+            dst[pos++] = (u8)(b >> 10);
+            dst[pos++] = (u8)(b >> 2);
+        }
+        else
+        {
+            if (pos + 3 > dstCap) break;
+            dst[pos++] = (u8)(b >> 16);
+            dst[pos++] = (u8)(b >> 8);
+            dst[pos++] = (u8)b;
+        }
+        if (i < srcLen && src[i] == '=') break;
+    }
+    return pos;
+}

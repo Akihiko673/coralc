@@ -1,0 +1,464 @@
+Chapter 2
+
+Core Syntax and Semantics
+
+The "Hello World" Trap
+
+Almost every programming book ever written opens with a triumphant "Hello World" example and then plunges straight into variables, strings, and output, as if the reader has learned something by typing five characters and seeing ten come back. That approach teaches you nothing about why the language is shaped the way it is. It teaches you a ritual, not a mental model. You walk away able to echo text to a terminal and unable to explain a single design decision, with no idea why the language's authors chose the seams they chose.
+
+This chapter deliberately does not start with Hello World. It starts beneath the surface, with the raw material of the language: the characters a source file is made of, the comments that annotate it, the identifiers that name things, the primitive types that every program is ultimately built from, and the rules for declaring and assigning variables. By the time you finish this chapter you will understand the substrate on which every Coral program is written, and more importantly you will understand why that substrate was chosen. The Hello World program will appear when it can be understood in full, in the chapter that covers functions and I/O, and by then it will be trivial. That is the point: by the time you write your first complete program, nothing in it will be a surprise.
+
+This is a chapter of foundations, and foundations deserve patience. Skin over it and every later chapter will feel like it is building on sand. Read it properly, try the examples, and the rest of the book will feel like it is building on bedrock.
+
+2.1 The Source File
+
+A Coral source file is a text file. The language is designed around UTF-8 from the ground up: source files are expected to be UTF-8 encoded, and the language's character handling is built around that fact. UTF-8 is the encoding that the modern computing world has converged on, to the point that almost no one under fifty remembers when anything else was the default. It is ASCII-compatible, so the entire ASCII range of characters occupies the same byte values as plain ASCII text, and it can represent every character in the Unicode standard through variable-length byte sequences of one to four bytes.
+
+The consequence of choosing UTF-8 for source files is that Coral code, comments, and string literals can contain the full range of human writing systems. A comment can be written in Arabic, a string literal can hold an emoji, an identifier can contain accented Latin characters. There is no special configuration file, no magic comment at the top of the file declaring the encoding, no BOM dance. A UTF-8 source file is valid Coral, and it is valid without any ceremony. You open an editor, you type, it works.
+
+Why does this matter to a systems programmer, of all people? Because text is data, and data is bytes, and a language that fumbles its bytes will cost you border-crossing bugs. If the source file encoding were ambiguous, two machines with different default encodings would compile the same file into different programs. By pinning the encoding to UTF-8, Coral removes an entire category of heisenbugs from the toolchain itself. The language practices what its pedagogy preaches: decide the byte-level truth up front, then every other layer becomes predictable.
+
+The file extension for Coral source is .crl. A build file, which is itself Coral source, is named build.coral by convention and lives at the root of a project. These are the only filename conventions the language requires. Everything else is up to you, and the standard library shows a sensible layout: related modules gathered in a directory, each file small and single-minded, names that say what the file contains.
+
+2.2 Comments
+
+Coral has two comment forms, both inherited from C because they are simple, obvious, and universally understood. There was no reason to invent a third way to mark a region of text as not-code, so Coral did not.
+
+A line comment begins with two forward slashes and extends to the end of the line. Everything from the two slashes onward is ignored by the compiler.
+
+    // This entire line is a comment.
+    u64 x = 42; // Everything after the slashes is a comment too.
+
+A block comment begins with a forward slash and asterisk, and ends with an asterisk and forward slash. Block comments can span multiple lines.
+
+    /* This comment
+       spans multiple
+       lines. */
+
+Block comments do not nest in the traditional sense; the first closing sequence ends the comment. If that bites you, it bites you in exactly one situation: trying to comment out a region of code that already contains block comments. The first closing sequence ends the outer comment early, and the rest of what you thought was commented out comes back to life, probably at the worst possible moment. The practical rule is: use line comments for single-line annotations and block comments for multi-line explanations, and avoid trying to comment out code that itself contains block comments. If you must disable a chunk of code, delete it. Version control remembers it.
+
+    // pub i32 add(i32 a, i32 b) { // Error, the code on this line is invalid
+        return a + b;
+    }
+
+Comments are not part of the program. They carry no meaning to the compiler. They exist for the reader, and Coral's design expects them to be used honestly: a comment that explains why something is done a particular way is valuable; a comment that restates what the code plainly says is noise. The standard library is written in the style this book teaches, and it uses comments sparingly, to explain intent rather than to narrate mechanics. Read a file of it and you will notice the comments are almost always the "why," rarely the "what." Say what the code is doing and you have written the code again, in worse English. Say why, and you have saved the next reader a half hour of archaeology.
+
+    // No alignment here: the allocator returns max-aligned blocks already.
+    // Reusing this buffer would over-align and waste bytes on every call.
+
+2.3 Identifiers
+
+An identifier is a name: the name of a variable, a function, a struct, an enum, a module, a type parameter, a field. Coral's rules for what makes a valid identifier are the conventional ones. An identifier begins with a letter or an underscore, and can be followed by letters, underscores, and digits. Names are case sensitive, so value, Value, and VALUE are three distinct identifiers, and the compiler will happily let all three live in the same scope, which means you must be careful that you have not done that by accident. Because source files are UTF-8, letters include Unicode letters, so identifiers can contain characters beyond the ASCII alphabet. A type cannot start with a number or other special character other than underscore.
+
+Coral's naming conventions are C-style and type-first, and the standard library demonstrates the conventions clearly enough that internalizing them is just a matter of reading a little of it.
+
+Types, including structs and enums, use PascalCase: String, Duration, Timespec, LogLevel, IrOpcode, ByteView. A type name is a noun or a noun phrase. You can feel a type coming before you reach the identifier, simply because its capitalization is different, which matters when a function takes four arguments and you want to know at a glance which are which.
+
+Functions and variables use camelCase, with the first letter lowercased: push, reserve, countCodepoints, formatInt, nowMonotonic. A function name is a verb or a verb phrase describing what it does. A variable name is a short, meaningful noun: len, cap, count, sec, nsec. Notice the economy: the standard library's variable names are almost aggressively short, because a variable's meaning is usually clear from its type and its few lines of use, and a paragraph of a name would add nothing.
+
+Constants use UPPER_CASE with underscores: INT64_MIN, INT64_MAX, U64_MAX, CLOCK_MONOTONIC, IS_LITTLE_ENDIAN. This makes constants visually distinct from variables at a glance, so a reader scanning code can immediately separate things that may change from things that cannot. It also makes the constants loud, and that is on purpose: they are the magic-looking numbers the standard library chose to name so you do not have to guess at their provenance.
+
+Type parameters in generics use a single uppercase letter by convention: T, U, N. The letter T conventionally stands for the element or primary type, U for a secondary type, and N for a compile-time value such as a length or capacity. This is not enforced by the compiler; it is a choice of convention, and the compiler will not scold you for naming a type parameter AnythingGoes. But conventions exist so that code from different authors composes into one readable whole, and this one is observed throughout the standard library.
+
+The receiver of a method is always named self. This is not merely a convention; self is a keyword in Coral, recognized by the compiler, and it is the one name that has special meaning inside methods. No other name enjoys that status. In particular, this is not a keyword. The C-style habit of naming the receiver this is not Coral; the language uses self, and textbook examples throughout this book follow that rule. If you come from a language where this is the magic word, retrain the reflex once, here, and never think about it again.
+
+2.4 Reserved Words
+
+A reserved word is an identifier that the language has claimed for itself. You cannot use it to name a variable, a function, or a type, and the compiler will reject the attempt with a message that is easy to read as "no, that word is taken." The reserved words of Coral are the words that carry the language's structure. They appear throughout this book, and each one is explained where it becomes relevant. Grouped by role:
+
+Declarations: struct, enum, trait, const, var, mod, import, namespace, typedef, distinct, pub, extern, flag.
+
+Control flow: if, else, while, for, loop, switch, case, default, break, continue, return, defer, assert.
+
+Types and values: self, null, true, false, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bool, char (for C compatibility).
+
+Compile-time: comptime, asm.
+
+The exact list is less important than the principle: the set of reserved words is small, and each reserved word names a concept that the language treats as fundamental. There is no sprawling list of context-sensitive keywords, no words that mean different things depending on where they appear. What a reserved word means is fixed, and that stability is part of what makes Coral predictable. A language with thirty context-sensitive keywords expects its users to hold a lookup table in their heads; Coral expects you to learn a compact set of concepts, once, and then read any program fluently.
+
+2.5 Whitespace and Semicolons
+
+Whitespace is insignificant in Coral. Spaces, tabs, and newlines are all interchangeable separators between tokens. Indentation is a matter of style, not syntax. The compiler does not care whether a block is indented with two spaces, four spaces, or tabs, and it does not use indentation to determine structure. Structure comes from explicit delimiters: braces for blocks, parentheses for grouping, and semicolons to terminate statements.
+
+This is a deliberate design decision, and it is worth understanding because it is one of the places where Coral distinguishes itself from modern languages that rely on indentation. Indentation-sensitive languages like Python make the visual layout of code meaningful, which has a real cost: a file that was reformatted with the wrong indent level, a line that lost a leading space, a comment that breaks a block, all silently change the meaning of the program. The terrifying property of a whitespace bug is that the code still looks right. The eyes see the shape that was intended; the compiler sees the shape that was written. Coral rejects that fragility entirely. The block structure of a Coral program is explicit, so reformatting code, moving blocks, and merging files can never change behavior. You can blind-join two files with a pasted brace and the compiler will tell you exactly where the structure broke.
+
+The semicolon terminates statements. In a C-like language the semicolon is what tells the compiler where a statement ends, and it is the punctuation that makes statements unambiguous even when they span multiple lines. Coral follows this model without apology. A statement that is not terminated with a semicolon is a syntax error, and the compiler will say so, pointing at the very spot where the semicolon is missing.
+
+The cost of explicit semicolons is that you must write them. The benefit is that a statement is a statement regardless of how it is wrapped across lines. A long expression can be split across lines anywhere a token boundary allows, and the compiler will not misread it, because it is not guessing where the statement ends; it is waiting for the semicolon. That is the whole trade, laid bare: a keystroke here, correctness everywhere else.
+
+2.6 Line Continuation
+
+Because whitespace is insignificant and statements end only at a semicolon, there is no need for an explicit line continuation character. A long expression is simply written across multiple lines, and it is the semicolon that ends it. This is different from languages that treat a newline as the end of a statement, where a long line must be explicitly continued with a trailing backslash or a parenthesis rule. In Coral, lines are formatting; the semicolon is grammar.
+
+The standard library makes use of this constantly. Arithmetic expressions, function calls with many arguments, and struct initializations are written across several lines purely for readability, with the semicolon appearing only at the true end of the statement. A multi-argument call reads better broken across lines, one argument per line, and nothing in the language forbids it:
+
+    _fprintFloat(fd, value, 10u, true, "%.15g", 4u, 0);
+
+    _fprintFloat(fd,
+                 value,
+                 10u,
+                 true,
+                 buf,
+                 64u);
+
+The rule to remember is simple: you may break a line anywhere between two tokens, and the statement continues until its semicolon. Indent the continuation however you like; the compiler neither knows nor cares, though your future self, and your reviewers, will care very much that you indented it honestly.
+
+2.7 The Primitive Types
+
+The primitive types are the atoms from which every Coral program is built. There are no hidden types, no platform-dependent widths, no "int is 32 bits on one machine and 64 bits on another" surprises. Every primitive type has a fixed, explicit width, and its name is its width.
+
+Integers, signed: i8, i16, i32, i64.
+
+Integers, unsigned: u8, u16, u32, u64.
+
+Floating point: f32, f64.
+
+Booleans: bool.
+
+Characters: char.
+
+And the special type that is not a value: void.
+
+There is no arbitrary-precision integer in the standard language. Fixed-width integers are the whole story, and this is a deliberate choice for a systems language. The width of an integer is part of the contract between the program and the machine. When a data structure is serialized to a file, or a value is passed to an operating system call, or a register is loaded, the exact width matters. Coral makes the width explicit in the type, so there is never ambiguity about how many bytes a value occupies or what range of values it can hold. If you need arithmetic beyond 64 bits, you compose it from 64-bit pieces; the language gives you the exact tools to do that correctly, and the standard library demonstrates the pattern where it matters, for example in the duration and timestamp types keeping nanoseconds without overflow.
+
+The signed integer range is -2^(width-1) through 2^(width-1)-1. The unsigned integer range is 0 through 2^width-1. The standard library declares these limits as named constants, and they are worth knowing because they are the boundaries of what each type can represent:
+
+    INT8_MIN = -128
+    INT8_MAX = 127
+    INT16_MIN = -32768
+    INT16_MAX = 32767
+    INT32_MIN = -2147483648
+    INT32_MAX = 2147483647
+    INT64_MIN = -9223372036854775808
+    INT64_MAX = 9223372036854775807
+    U8_MAX = 255
+    U16_MAX = 65535
+    U32_MAX = 4294967295
+    U64_MAX = 18446744073709551615
+
+These constants live in the core module of the standard library, and they are the canonical way to refer to the limits of a type. Writing U32_MAX instead of 4294967295 makes the intent of the code visible and makes the value unmissable. It also rescues you from a genuinely embarrassing class of bug, the off-by-one-in-the-mantissa typo, because the constant is checked once, at its declaration, and everywhere else it is a name.
+
+2.8 Integer Semantics
+
+Integer arithmetic in Coral is modular. Operations on a fixed-width integer wrap around at the width of the type, in the two's complement representation that all modern hardware uses. This is the same behavior as C and the same behavior as the hardware itself. There is no hidden promotion to arbitrary precision, no automatic bignum, no exception thrown on overflow. Adding one to the maximum unsigned value of a type produces zero. Subtracting one from zero produces the maximum value. Signed overflow follows the same modular rules.
+
+This behavior is not a weakness; it is the honest expression of what the hardware does, and it is exactly what a systems programmer needs when working with counters, hashes, addresses, and bit patterns. The alternative, an implementation that silently inserted arbitrary-precision arithmetic or raised errors on overflow, would change the meaning of systems code and destroy performance. Consider an address counter: wraps are a fact of memory layout, and code that handles them has to be able to rely on the wrap being a wrap, not an intervention. Coral chooses the hardware's semantics because Coral programs frequently are the hardware's behavior, written down.
+
+    u8 v = 255;
+    v = v + 1;   // v is now 0; the byte wrapped around
+    u8 w = 0;
+    w = w - 1;   // w is now 255
+
+The practical consequence is that you must think about range when you write arithmetic. If a value can exceed the width of its type, you must either choose a wider type or handle the wrap explicitly. The standard library does this constantly. When a duration type stores time in two 64-bit fields rather than in one, it is because a single 64-bit value would overflow for spans it needs to represent. When a vector computes a new capacity as double the old capacity, it does so knowing that doubling stops being valid when the size approaches the maximum, and it checks before it doubles for exactly that reason.
+
+The signedness of a type is part of its meaning. Signed types are used for values that can be negative: counts that go below zero, differences, offsets. Unsigned types are used for values that are naturally non-negative: lengths, capacities, sizes, indices, byte values. Mixing signed and unsigned values in an expression is legal and common, but the width of the result is determined by the types involved, and the compiler is careful about conversions. When a value crosses between signed and unsigned, the code makes the conversion explicit. This explicitness is what prevents the classic C bugs where a negative value silently becomes a huge unsigned value and comparisons behave in surprising ways. Coral does not invent a rule that bans the mix; it demands that the crossing be visible, so the reviewer's eye lands on the cast, and the thought is already half-formed: is this the right conversion?
+
+Bitwise operations treat integers as bit patterns, and they are a first-class part of the language: AND, OR, exclusive OR, and complement for the boolean bit operations, and left shift, arithmetic right shift, and logical right shift for shifting. A right shift of a signed value is an arithmetic shift, preserving the sign bit; a right shift of an unsigned value is a logical shift, filling with zeros. These are the same semantics as the hardware, and the standard library uses them pervasively. The endian and byte-order helpers, for example, swap the byte order of values using nothing but shifts and masks, which is the purest possible demonstration of integers as bit patterns. Follow one of those functions and you will see the entire story: shift, mask, or, done. No loops, no drama.
+
+2.9 Endianness
+
+Endianness is the order in which the bytes of a multi-byte value are stored in memory. A machine is little endian if the least significant byte of a value is stored at the lowest address, and big endian if the most significant byte is stored first. The x86 and ARM architectures, and therefore virtually all consumer hardware, are little endian. PowerPC and some embedded and networking hardware are big endian.
+
+Endianness matters because data written on one machine may be read on another, and because network protocols define a byte order for the integers they transmit. If a little-endian machine writes the 32-bit value 0x01020304 to a file, the bytes on disk are 04 03 02 01. A big-endian machine reading that file naively will reconstruct 0x04030201, which is a different number entirely, and if that number happens to be a length, a checksum, or a network address, the result is a subtle, intermittent corruption that defies debugging from the client side.
+
+Coral's standard library provides the tools to handle this correctly. The core platform module declares constants for the current machine's endianness, and it provides byte-swap functions for 16, 32, and 64-bit values, plus the conventional conversion helpers htons, ntohs, htonl, ntohl, htonll, and ntohll that convert between host byte order and network byte order. A program that writes an integer to a socket converts it to network byte order before sending and back to host byte order after receiving, and the names of these functions make the conversion impossible to misunderstand.
+
+    // Reading a 16-bit port number the network sent us, big-endian:
+    u16 wirePort = readBE16(stream);
+    u16 hostPort = htons(wirePort); // htons: host order from network order
+
+The byte-swap functions are themselves a lovely demonstration of the bitwise operators from the previous section — a value is reversed by shifting its bytes into place, no conditionals, no memory. Read one of them and the whole mental model of integers-as-byte-sequences snaps into focus.
+
+2.10 Floating-Point Semantics
+
+Coral's floating-point types, f32 and f64, follow the IEEE 754 standard, which is the floating-point standard implemented by every modern CPU. An f32 is a single-precision float, 32 bits wide, with approximately 7 significant decimal digits of precision. An f64 is a double-precision float, 64 bits wide, with approximately 15 to 17 significant decimal digits of precision. When a program needs to be exact, it does not reach for floating point; when a program needs range and speed across orders of magnitude, floating point is what the hardware offers, and Coral's f32 and f64 are exactly the hardware.
+
+The first thing every programmer must understand about IEEE 754 floating point is that it cannot represent most decimal fractions exactly. The fraction one tenth, written in decimal as 0.1, cannot be written exactly in the binary fraction representation that floating point uses, just as the fraction one third cannot be written exactly in decimal. This is not a bug in the language or the hardware; it is an inherent property of representing real numbers with a finite number of bits. The consequence is the famous hazard: adding 0.1 to 0.2 does not produce exactly 0.3. It produces the nearest representable value to 0.3, which differs from 0.3 in the last bit. A direct equality comparison of the result against 0.3 fails.
+
+    f64 sum = 0.1 + 0.2;
+    if (sum == 0.3) { /* does not run */ }
+    if ((sum - 0.3) < 1e-9) { /* runs: they are close enough */ }
+
+This is not a defect to be papered over; it is a fact to be respected. The rules of floating-point work are these. Never compare two floating-point values for exact equality unless you have proven they are exactly representable. Compare with a tolerance instead, checking that the absolute difference is small. Never accumulate money in floating point; use integer counts of the smallest unit — a whole category of accounting software bugs is born precisely here, and none of them needed to be. Understand that repeated floating-point operations accumulate rounding error, and that algorithms differ in how much error they accumulate; two mathematically identical formulas can diverge wildly once evaluated in finite precision, and numerical analysis exists precisely to tell you which form to write. The standard library provides the elementary transcendental and math functions, sine, cosine, square root, logarithm, and the rest, and those functions return correctly rounded or near-correctly rounded results, but no function can make a finite representation of an infinite real number line exact.
+
+IEEE 754 also defines the special values that arithmetic on a finite representation produces. Positive infinity and negative infinity arise when a result is too large to represent. The not-a-number value, NaN, arises from operations that have no mathematically defined result, such as zero divided by zero. NaN has the property that it is not equal to anything, including itself, and a comparison against NaN always yields false. The standard library defines the limits of the floating-point types, the largest finite values and the smallest positive normal values, and the constants are there for the same reason the integer limits are: to name the boundaries explicitly.
+
+Floating-point literals and constants in Coral follow the conventional forms. A decimal number with a fractional part is a float literal. An exponent form, a mantissa followed by e and a power of ten, expresses very large and very small magnitudes compactly. The extreme values are written exactly this way in the limits module, and the constants make the boundary values readable.
+
+    3.14     // a float literal
+    1.0e6    // one million, in exponent form
+    1.0e-9   // one billionth, convenient for tolerances like the one above
+
+2.11 Characters
+
+The char type in Coral is a byte in the UTF-8 universe: a single 8-bit value holding one byte of UTF-8 encoded text. The relationship between a char and a Unicode character is therefore a matter of encoding, and this is one of the most important distinctions a Coral programmer must internalize. Get this one straight and a dozen later confusions simply never arise.
+
+A Unicode code point is a number that identifies a character in the Unicode standard. An ASCII character, a letter of the Latin alphabet, a digit, a punctuation mark, is a code point in the range 0 to 127, and in UTF-8 each of those code points occupies exactly one byte. A char holding one of those bytes is exactly the character. This is why plain ASCII text in Coral works exactly as it does in C, byte for byte.
+
+A code point beyond the ASCII range occupies two, three, or four bytes in UTF-8. A char holds one of those bytes, and no single char can represent the whole character. Text in a human writing system that uses such characters, which is to say almost every writing system outside the original ASCII set, is therefore a sequence of bytes that the program must decode to understand as characters. This is not a limitation to be hidden; it is the reality of how text is stored, and a systems language must face it directly. A string is not an array of characters; it is an array of bytes, some of which, when taken together, spell a character, and software that pretends otherwise will corrupt text the moment it leaves the ASCII range.
+
+The standard library provides the UTF-8 machinery to handle this correctly, and it is implemented exactly the way such machinery should be: as straightforward, explicit code that you can read. Functions encode a code point into one to four bytes, decode a byte sequence back into a code point, count the code points in a byte sequence, and validate whether a byte sequence is well-formed UTF-8. When decoding encounters a byte sequence that is not valid UTF-8, the decoder substitutes the Unicode replacement character, and the substitution is explicit and documented. The library's lowercase and uppercase conversions operate on code points, decoding and re-encoding, because the mapping between a lowercase and an uppercase letter is defined on characters, not on bytes. Lowercase a whole string by guessing at bytes and you will miss exactly the multibyte letters — the accented ones, the Cyrillic ones — that the conversion exists to handle.
+
+The distinction that matters is between a byte and a character, and between a code point and a grapheme cluster. A code point is one Unicode scalar value, which may occupy one to four bytes. A grapheme cluster is what a human perceives as a single character, and a grapheme cluster may be composed of multiple code points. An accented letter may be a single precomposed code point or a base letter followed by a combining accent, and both forms are valid Unicode that displays identically. The char type is a byte; a code point is a decoded unit of up to four bytes; a grapheme cluster is a sequence of code points. Programs that manipulate text correctly keep these three levels distinct, and every such program in the standard library is little more than an exercise in keeping the levels straight.
+
+2.12 Character Literals
+
+A character literal is a single character or escape sequence between single quotes, and its type is char. The character is a byte in the UTF-8 encoding, so a character literal for an ASCII character is exactly that byte.
+
+    'A'    // the byte for the uppercase letter A
+    '0'    // the byte for the digit zero
+    '\n'   // newline
+    '\t'   // tab
+    '\0'   // null byte
+    ' '    // space
+
+The escape sequences are the conventional ones: \n for newline, \t for tab, \r for carriage return, \0 for the null byte, and backslash escapes for characters that cannot be written literally, such as the backslash itself and the single quote. A hex escape, \x20, writes a byte by its hexadecimal value. These escapes let a program express control characters and byte values that have no visible glyph, which is essential when you are assembling output that carries framing, like a newline at the end of every log line or a null terminator on a C-facing buffer.
+
+The standard library's character classification functions operate on char values and make the byte-level reality of characters explicit. The functions isDigit, isAlpha, isAlnum, isLower, isUpper, isSpace, isPrint, isControl, and isHexDigit classify a single byte, and toLower and toUpper convert between cases. These functions compare byte values directly: a digit is a byte in the range of the digit characters, an uppercase letter is a byte in the range of the uppercase letters, and so on. The simplicity is the point. Character classification in the ASCII range is a range check on a byte, and the library writes it as exactly that. When you need a parser's hot loop to fly, remembering that isDigit is a couple of comparisons, not a table walk and a culture consultation, tells you exactly how to structure the code around it.
+
+2.13 Booleans
+
+The bool type has exactly two values, true and false. There is no third value, no null, no undefined, no notion of truthiness. A bool is a genuine two-valued type, and an expression that produces a condition, a comparison, a logical combination, always produces a bool.
+
+Coral has no truthiness coercion. The condition of an if statement must be a bool. An integer is not a condition; a pointer is not a condition; only a bool is a condition. If you write a condition that is an integer comparison, the comparison produces a bool and the if statement consumes it. If you want to test whether a pointer is null, you compare it against null and the comparison produces a bool. This is a small but important difference from C, where any non-zero value is true and a slipped assignment instead of a comparison compiles without complaint. In Coral, the type checker requires a real bool, and the class of bugs where a value is mistaken for a condition is eliminated at compile time. That one rule kills more real-world bugs than it has any right to, because the bug it kills is silent and frequent: the comparison that never got written, the assignment that stole its place.
+
+    u8* p = lookup(key);
+    if (p) { /* error in C, correct-intending but wrong-shaped here */ }
+    if (p != null) { /* the Coral way: a comparison that is a bool */ }
+
+The logical operators are the conventional ones: AND, written as two ampersands, OR, written as two vertical bars, and NOT, written as an exclamation point. The two binary operators are short-circuiting, and this is a guarantee of the language, not an implementation detail. In an expression a AND b, the left operand is evaluated first, and the right operand is evaluated only if the left operand is true. In a OR b, the right operand is evaluated only if the left operand is false. This is how a test like pointer-not-null AND pointer-field is safe to write: the pointer check runs first, and the dereference is skipped when the pointer is null. Short-circuit evaluation makes such combined conditions the natural way to write them.
+
+    if (node != null && node->value == target) { proceed(); }
+
+Read that line the way the machine does: first the pointer is checked, and only if it survived does anything touch it. The ordering is a promise, written into the language, that lets you combine checks and dereferences in one breath.
+
+2.14 Void
+
+The void type is the type of nothing. It exists because a function that performs work and returns no value must have a return type, and that return type is void. A function declared to return void returns no value, and a return statement in a void function carries no expression.
+
+    void greet()
+    {
+        std.print("Hello.\n");
+    }
+
+Void is not null, and it is not undefined. The distinction is fundamental and is a recurring theme in this book. Null is a value that a pointer of some type can hold, meaning "no object." Void is not a value at all; there is no object of type void, and no variable of type void can exist. A function that returns void returns nothing; a function that returns a pointer may return null, meaning the pointer names no object. The difference is between the absence of a value as the result of a computation, which is void, and the presence of a null reference in a value of pointer type, which is null. Mix these two up in conversation and you will eventually mix them up in code.
+
+Coral follows modern practice in making the absence of a value a first-class concept rather than a hidden special value. The Option type explicitly represents the presence or absence of a value, and the Result type explicitly represents success or failure. Null exists only for pointers, where it means "no object," and the language's safety machinery is built to keep null pointers from being dereferenced. There is no null that applies to non-pointer types, and there is no implicit null lurking in every type. A definition file may declare a struct, and that struct has no hidden flag, no secret sentinel state; if a value may be absent, the type says so, out loud.
+
+2.15 Literals
+
+Literals are the syntax for writing constant values directly in code. Coral's literal forms are C-style and explicit.
+
+Integer literals. A plain sequence of digits is a decimal integer literal: 0, 42, 1000000. A literal can be written in another base with a prefix: 0x for hexadecimal, 0b for binary, 0o for octal. Hexadecimal is the most common non-decimal base in systems code, because it writes byte values and bit patterns legibly: 0xFF is a byte with all bits set, 0x0A is the byte value ten. A trailing u marks an unsigned literal: 18446744073709551615u is the maximum value of a 64-bit unsigned integer. The type of an integer literal is inferred from its context, or from its magnitude and suffix.
+
+    42        // decimal
+    0x2A      // hexadecimal: also forty-two
+    0b101010  // binary: also forty-two
+    0o52      // octal: also forty-two
+    0xFF      // a byte with every bit set
+    10u       // unsigned ten
+
+Float literals. A literal with a fractional part, or with an exponent, is a float literal: 3.14, 0.5, 1.0e10. The type is inferred from context: a literal stored in an f64 variable is an f64, in an f32 variable an f32.
+
+Character literals, as covered above, are single characters or escapes between single quotes.
+
+String literals. A sequence of characters between double quotes is a string literal: "hello". A string literal is text; in the type system it is a sequence of bytes in UTF-8 encoding, and the standard library provides the string type that owns such sequences and the string view type that borrows them. Adjacent string literals can be concatenated, so a long string can be split across source lines as several adjacent literals.
+
+    "hello"
+    "a long message that continues "
+    "across two adjacent literals"
+
+Boolean literals. The values true and false are literals.
+
+Null literal. The value null is the literal meaning "no object" for pointer types. A pointer variable initialized to null is a pointer to nothing.
+
+2.16 Declarations and Definitions
+
+A declaration introduces a name and gives it a type. A definition additionally provides the entity that the name refers to: storage for a variable, a body for a function. In Coral, as in C, the same text usually does both: a variable declaration with an initializer is both a declaration and a definition, and a function with a body is both a declaration and a definition.
+
+For a variable, the type-first declaration syntax is fundamental to Coral, and it is one of the features that makes Coral immediately readable to a C programmer. The type comes first, then the name, then optionally an initializer.
+
+    u64 length = 0;
+    i32 error = -1;
+    bool ready = false;
+    f64 ratio = 0.5;
+
+The type is on the left, where the eye reads it first, so the range and behavior of the value are known before the name. This is the opposite of the trailing type annotations of some newer languages, and it is deliberate: Coral is type-first because the type is the primary fact about a value. When you read u64 length, your brain registers capacity and kind before it registers the label; when you read name: string, the label wins, and the type is an afterthought. Coral wants the afterthought to be impossible.
+
+A variable can also be declared without an initializer. Such a variable is uninitialized, and it is the programmer's responsibility to assign it before it is read. The standard library does this constantly, declaring a result variable, filling its fields, and returning it:
+
+    Duration d;
+    d.sec = seconds;
+    d.nsec = 0;
+    return d;
+
+Declaring without initializing is the normal pattern for building a struct value field by field, and the type-first syntax makes such declarations natural. The fields get their values in a visible, ordered sequence, and the compiler's checks can see that every field was assigned before the value escapes.
+
+2.17 var and Type Inference
+
+Coral provides type inference for local variables through the var keyword. A declaration written with var instead of an explicit type lets the compiler deduce the type from the initializer.
+
+    var x = 42;      // x has the integer type that fits 42
+    var ratio = 0.5; // ratio is a float
+    var ok = true;   // ok is a bool
+
+The inference is a convenience, not a loss of information. The type is still determined at compile time, statically, and the compiler knows exactly what x is; the var keyword simply lets the initializer speak for the type. This reduces ceremony in cases where spelling out the type would be redundant, such as a variable initialized directly from a function call, where the type is written at the function's declaration anyway. Writing the same type twice, once at the call site and once at the declaration, is not rigor; it is friction, and var removes exactly that friction and no more.
+
+Coral's inference is local and modest by design. It infers the type of a variable from its initializer; it does not infer function parameter types, does not infer return types, and does not run a global inference engine over the whole program. The philosophy is that types should be explicit where they matter, which is at every boundary: every function's parameters, every function's return type, every struct's fields, every global constant. Inference is applied only where the type is immediately obvious and redundant to write, and the result is a language that is expressive without ever hiding its types. You will always be able to find a type by looking at the declaration that owns it; inference never sends you on a chase across the program.
+
+The ranged for loop makes particular use of var. When iterating over a container, the loop variable can be declared with var, letting the compiler determine the element type from the container:
+
+    for (var arg : args) print(arg);
+
+The element type comes from the container, the loop variable's type follows, and nothing redundant is written. The body does not care what the element type is called; it only needs to agree with the container. (With the book's usual `mod std = import("std*")` in effect, print is `std.print`.)
+
+2.18 Mutability
+
+Mutability in Coral is explicit. A value that can be changed is declared as a variable, and a value that cannot be changed is declared as a constant. The distinction is visible at the point of declaration, and the compiler enforces it.
+
+A const declaration introduces a name bound to a value that cannot be reassigned. The value is fixed for the entire program or the entire scope. The standard library's constants are the purest form of this: the integer limits, the clock constant, the endianness flags. They are named values that cannot change, and the compiler will refuse any attempt to assign to them.
+
+    const i32 CLOCK_MONOTONIC = 1;
+    pub const INT32_MAX = 2147483647;
+
+A variable, declared with an explicit type or with var, can be reassigned freely, and assignment is written with the single equals sign, as in C.
+
+    u64 pos = 0;
+    pos = pos + 1;
+
+The distinction between const and var is a distinction of names, not of syntax style. There is no separate syntax for a "let" versus a "var"; the declaration keyword states mutability directly. A reader looking at a declaration knows immediately whether the name is fixed or changeable, and the compiler holds both sides of that promise. One keyword, one meaning, no exceptions, and therefore no surprises.
+
+Coral also uses const in pointer and parameter types, where it means something related but distinct: the data referred to is treated as read-only through that reference. A parameter declared as const u8* is a pointer to read-only bytes. The function can read through the pointer but cannot modify the bytes it points to, and the compiler enforces this within the function body. This is the const-correctness model inherited from C, and it is how Coral expresses read-only access to shared data without copying it. Throughout the standard library, functions that do not modify their inputs declare those inputs const, so a function's contract about what it reads and what it modifies is written in its signature, where a caller can see it without reading the body.
+
+2.19 Scope
+
+Scope is the region of the program in which a name is visible. Coral's scoping rules are the block-scoping rules of C-like languages, and they are simple and predictable.
+
+A block is a group of statements between braces. Names declared inside a block are visible from their declaration to the end of that block, and they are not visible outside it. A block can be nested inside another block, and the inner block can see the names of the outer block, while the outer block cannot see the names of the inner block. A function body is a block, so a local variable is visible from its declaration to the end of the function, or to the end of the inner block in which it was declared, whichever comes first.
+
+    {
+        u64 inner = 1;     // visible only inside this block
+        {
+            u64 x = inner; // an inner block can see outer names
+        }
+    }
+    // inner is not visible here
+
+The loop bodies, the branches of an if statement, and every nested structure create their own blocks, and the same rules apply: what is declared inside stays inside.
+
+Scope is what makes local variables safe to use. A variable that cannot be seen cannot be accidentally modified, and the block boundaries define precisely how long a value lives. When a block ends, its local variables cease to exist, and their stack storage is reclaimed. Scope and lifetime are nearly the same thing for stack values, and that correspondence is what makes stack allocation both fast and safe: the compiler knows exactly when a value can die, because the block tells it.
+
+2.20 Shadowing
+
+Shadowing is the situation where a name declared in an inner scope has the same name as a name in an outer scope. The inner declaration takes precedence within its block, and the outer name is hidden, or shadowed, for the duration of the inner block.
+
+Shadowing is legal in Coral, and it behaves the way C programmers expect. When a block declares a variable with a name that already exists in an outer scope, the inner variable is a separate entity, with its own storage, and it is the one used within the block. Assignments inside the block refer to the inner variable, not the outer one. When the block ends, the inner variable disappears, and the outer variable is visible again, unchanged by whatever happened to the shadowing variable.
+
+    u64 count = 0;
+    {
+        u64 count = total; // a fresh variable, unrelated to the outer one
+        process(count);    // uses the inner one
+    }
+    // the outer count is still 0 here
+
+The classic use of shadowing is a loop counter or an intermediate value inside a loop or condition. Each iteration of a loop can declare a fresh variable with the same name, and the code inside the loop is written without inventing names that vary per iteration.
+
+Shadowing is a tool, and like every tool it has a discipline. Shadowing a name to create a fresh, more specific meaning in a small scope is idiomatic. Shadowing a name simply to reuse a convenient identifier, hiding the outer meaning for a large region, makes code confusing. The standard library shadows freely where the shadow is tight and local, and avoids it where the shadow would hide meaning. The rule of thumb: a shadow that lives three lines is a convenience; a shadow that lives three hundred lines is a lie, and the reader it lies to is mainly you, six months from now.
+
+2.21 Assignment
+
+Assignment is the operation that gives a variable a new value. It is written with the single equals sign, with the target on the left and the new value on the right.
+
+    x = 42;
+    name = "coral";
+
+The assignment operator requires that the target be assignable: a variable, a field of a struct, an element of an array, a location through a pointer. It also requires that the value's type match the target's type. A type mismatch is an error caught by the compiler, not a runtime surprise. Where C would shrug and let a double spill into an int, Coral insists; if the conversion is truly wanted, write it as an explicit cast, and the reader sees the intent in the cast.
+
+Coral provides the compound assignment operators as shorthand for assigning the result of an operation back to the left operand: +=, -=, *=, /=, %=, and the bitwise compounds &=, |=, ^=, <<=, >>=. The statement x += 1 is exactly x = x + 1, written more compactly, and the shorthand is used throughout the standard library. The compound form is not a new operation; it is the same operation with the repetition taken out, and it keeps the eye from having to match the two sides of an assignment.
+
+    len += 1;   // same as len = len + 1
+    mask |= 0x80;   // same as mask = mask | 0x80
+    pos <<= 3;  // same as pos = pos << 3
+
+Increment and decrement are available in both prefix and postfix forms. The prefix form, ++x, increments the variable and evaluates to the new value. The postfix form, x++, increments the variable and evaluates to the old value. The distinction matters when the expression's value is used, and it does not matter when the statement is a bare increment. The standard library uses postfix increment, len++, pervasively for advancing counters, and prefix and postfix forms are both available wherever the semantics require one or the other.
+
+    u64 i = 0;
+    u64 a = ++i; // a is 1, i is 1
+    u64 b = i++; // b is 1, i is 2
+
+2.22 Initialization Requirements
+
+The one rule Coral enforces about initialization is that a variable must not be read before it has a defined value. Reading an uninitialized variable is undefined behavior, the same class of error that plagues C, and the defense is the discipline of the language and its standard library: the fill-every-field pattern below, the `var` declaration that defines a value at birth, and the assignment that is written before any read can happen. The compiler's analysis can see the every-field-assigned walk, and the tools can find what the analysis cannot prove.
+
+Two idioms are safe and common. The first is to declare a variable with an initializer, so the value is defined at the moment of declaration. The second is to declare an uninitialized struct variable and then fill every field before the struct is used, which is how the standard library builds its values — the functions chapter (section 5.22) gives this pattern its full name, the constructor. The key requirement in the second idiom is that no field is read before it is assigned. The typical pattern declares the value, assigns each field in order, and returns, and the compiler's analysis can see that every field was assigned on every path before the value is used.
+
+    Duration d;
+    d.sec = s;
+    d.nsec = 0;
+    return d;
+
+This pattern is safe because the assignments complete before the value is consumed. A struct that escapes with unassigned fields, or a variable that is read along a path where it was never assigned, is a bug, and the safety machinery exists to catch it. The mental model to keep is simple: a value is a promise, and the promise does not exist until the value's construction finishes. Between the declaration and the completed construction, the value is noise, and reading noise is the bug the machinery hunts.
+
+2.23 Swapping and Multiple Assignment
+
+Coral does not provide a syntax for multiple simultaneous assignment or destructuring assignment. The swap of two values is written the explicit way, with a temporary:
+
+    u64 tmp = a;
+    a = b;
+    b = tmp;
+
+The lack of destructuring syntax is consistent with the language's philosophy. Coral keeps its assignment model minimal and transparent, and it provides the library functions that make such operations safe and ergonomic where they are needed. The collections library offers swap and exchange operations that handle the details, and the pattern of assigning through a temporary is idiomatic where a bare swap is needed.
+
+The standard library provides an atomic exchange operation in its concurrency module, which swaps a value in one step under the memory model, and it provides the sequence of moves that implements a swap of owned data. As with everything in Coral, the simple explicit form is always available, and the library layers convenience on top when the convenience is worth the abstraction. The reason Coral lets a library, rather than the grammar, provide the ergonomic swap is that the grammar-stamped version would have to guess about ownership and aliasing, while the library version can be written with the exact semantics each data type needs.
+
+2.24 Where Variables Live
+
+The type and scope of a variable determine where its storage lives, and Coral makes the choices explicit so that the performance and lifetime of every value are predictable. When you read code, you should hear where each value lives: with a little practice, the stack, the heap, and the register all begin to whisper their addresses to you.
+
+Stack storage. Local variables declared inside a function live on the stack. The stack is the region of memory that grows and shrinks with function calls. When a function is called, its local variables occupy a frame of stack memory; when the function returns, that frame is reclaimed. Stack allocation is nearly free, because it is just adjusting a pointer, and stack memory is automatically reclaimed in exactly the right order. Locals that are small, short-lived, and scoped to a function are stored on the stack, and this is the default and the common case. The stack is also where temporary values, intermediate results, and the arguments of calls live during a function's execution. Stack storage has a hard limit, and deep recursion can exhaust it; a recursive function that recurses too deeply will overflow the stack, and the standard library's recursive algorithms are written with this limit in mind.
+
+Static storage. Constants and file-scope values live in static storage, a region allocated for the whole lifetime of the program. A constant such as an integer limit or a byte table is placed in static storage, where it is initialized before the program runs and lives until the program exits. Static storage is the natural home for values that are fixed for the entire program. It is the one region you do not have to think about freeing, precisely because nothing about it ever changes.
+
+Heap storage. Values whose lifetime must outlive a function call, or whose size is not known until runtime, live on the heap. The heap is allocated explicitly, and Coral provides an allocator interface through which all heap allocation flows. The standard library's dynamic collections, the vector, the string, the map, all allocate their storage on the heap through the allocator, and free it when the collection is destroyed. Heap allocation is more expensive than stack allocation, because it requires a search for a suitable block of memory, and heap memory is reclaimed only when the program explicitly frees it or when an owning object is destroyed. The discipline of heap memory, who allocates it, who owns it, and who frees it, is covered in depth in the memory management chapter, and it is the heart of Coral's safety story.
+
+Register storage. Values that the compiler determines are short-lived and confined to an expression or a tight loop may be kept in processor registers rather than in memory at all. This is not something the programmer requests; it is the compiler's choice, and it is invisible. A value kept in a register has no address, so taking its address forces it into memory. The compiler makes these decisions from the structure of the code, and the programmer's job is to write code whose values are clearly scoped, which gives the compiler the freedom to keep them in registers. The lazy benefit is real: a hot loop whose counters live in registers instead of cache runs several times faster, and the only cost is that you declared your variables the way you always should have.
+
+2.25 The Type-First Principle
+
+The thread that runs through this entire chapter is the type-first principle. Coral is a language where the type of a thing is stated at the point of declaration, on the left, before the name, and where the compiler treats the type as a contract it enforces.
+
+The type-first principle is what makes Coral readable to a C programmer on sight, and it is what makes Coral's safety machinery possible. Because every value has a type, and the type is written down, the compiler can check every use, every assignment, every conversion, every access. Because the widths of integers are explicit, the layout of every struct and the behavior of every operation are known exactly. Because mutability is declared at the point of declaration, the compiler can enforce which values may change. Because types are stated, inference can be modest and local, applied only where it removes ceremony without hiding meaning.
+
+The chapters that follow build on this foundation. Operators and expressions are defined in terms of the types this chapter introduced. Control flow consumes the bool this chapter described. Functions compose the values this chapter named. And the safety machinery that runs throughout the language is the enforcement of the type contracts this chapter established. Master the type-first principle and the rest of the language follows from it, because every feature of Coral is ultimately an expression of that principle.
+
+Chapter 2 Summary
+
+Coral source is UTF-8 text in .crl files, with no encoding ceremony and no configuration required for Unicode.
+
+Comments come in two forms: line comments with two slashes, and block comments between slash-asterisk and asterisk-slash. Comments explain why, not what.
+
+Identifiers begin with a letter or underscore, are case sensitive, and follow C-style naming conventions: PascalCase for types, camelCase for functions and variables, UPPER_CASE for constants. The method receiver is always named self.
+
+Whitespace is insignificant, statements end at semicolons, and there is no need for line continuation characters. Indentation is style, not syntax, and cannot change a program's meaning.
+
+The primitive types are fixed-width and explicit: i8 through i64 signed integers, u8 through u64 unsigned integers, f32 and f64 floating point, bool, char, and void.
+
+Integer arithmetic is modular and wraps at the width of the type, matching the hardware. Signed and unsigned are distinct, and bitwise operations are first-class. Endianness is handled with explicit byte-swap and host-to-network order functions.
+
+Floating point follows IEEE 754, cannot represent most decimal fractions exactly, and requires tolerance-based comparison and careful accumulation. NaN compares equal to nothing, not even itself.
+
+A char is a UTF-8 byte. Code points occupy one to four bytes, and grapheme clusters may span multiple code points. The standard library provides explicit encoding, decoding, and validation.
+
+Booleans have exactly two values, no truthiness, and short-circuiting AND and OR.
+
+Void is the absence of a value; null is a value of pointer type meaning no object. They are different concepts.
+
+Variables are declared type-first, or with var for local type inference. Constants are immutable, variables are mutable, and const pointers express read-only access.
+
+Scope is block-scoped, shadowing is legal and local, and assignment uses the single equals sign with compound and increment operators available.
+
+Local variables live on the stack, constants live in static storage, dynamic collections live on the heap through the allocator interface, and short-lived values may live in registers at the compiler's choice.
+
+The type-first principle, types written before names and enforced by the compiler, is the foundation of Coral's readability and its safety.
+
+

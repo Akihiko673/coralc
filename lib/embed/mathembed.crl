@@ -1,0 +1,145 @@
+@[no_warn_unsafe]
+
+pub f64 absF64(f64 x)
+{
+    u64 bits;
+    bits = *((u64*)&x);
+    bits &= 0x7FFFFFFFFFFFFFFFu;
+    return *((f64*)&bits);
+}
+
+pub u64 _absI64(i64 x)
+{
+    return x < 0 ? (u64)(-x) : (u64)x;
+}
+
+pub i64 signI64(i64 x)
+{
+    return x < 0 ? -1 : (x > 0 ? 1 : 0);
+}
+
+pub f64 signF64(f64 x)
+{
+    return x < 0.0 ? -1.0 : (x > 0.0 ? 1.0 : 0.0);
+}
+
+pub i64 minI64(i64 a, i64 b) { return a < b ? a : b; }
+pub i64 maxI64(i64 a, i64 b) { return a > b ? a : b; }
+pub u64 minU64(u64 a, u64 b) { return a < b ? a : b; }
+pub u64 maxU64(u64 a, u64 b) { return a > b ? a : b; }
+pub f64 minF64(f64 a, f64 b) { return a < b ? a : b; }
+pub f64 maxF64(f64 a, f64 b) { return a > b ? a : b; }
+
+pub i64 clampI64(i64 v, i64 lo, i64 hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+pub u64 clampU64(u64 v, u64 lo, u64 hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+pub f64 clampF64(f64 v, f64 lo, f64 hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+pub f64 lerp(f64 a, f64 b, f64 t)
+{
+    return a + (b - a) * t;
+}
+
+pub f64 invLerp(f64 a, f64 b, f64 v)
+{
+    return (v - a) / (b - a);
+}
+
+pub f64 mapRange(f64 v, f64 a1, f64 b1, f64 a2, f64 b2)
+{
+    return lerp(a2, b2, invLerp(a1, b1, v));
+}
+
+pub f64 sqrtF64(f64 x)
+{
+    if (x <= 0.0) return 0.0;
+    f64 guess = x;
+    for (u64 i = 0u; i < 50u; ++i)
+    {
+        f64 next = 0.5 * (guess + x / guess);
+        f64 diff = guess - next;
+        if (diff < 0.0) diff = -diff;
+        if (diff < 1e-15) return next;
+        guess = next;
+    }
+    return guess;
+}
+
+pub f64 floorF64(f64 x)
+{
+    i64 trunc = (i64)x;
+    if (x < 0.0 && (f64)trunc != x) trunc -= 1;
+    return (f64)trunc;
+}
+
+pub f64 ceilF64(f64 x)
+{
+    i64 trunc = (i64)x;
+    if (x > 0.0 && (f64)trunc != x) trunc += 1;
+    return (f64)trunc;
+}
+
+pub f64 roundF64(f64 x)
+{
+    if (x >= 0.0)
+    {
+        f64 frac = x - floorF64(x);
+        if (frac >= 0.5) return ceilF64(x);
+        return floorF64(x);
+    }
+    f64 abs = -x;
+    f64 frac = abs - floorF64(abs);
+    if (frac >= 0.5) return -ceilF64(abs);
+    return -floorF64(abs);
+}
+
+pub f64 powF64(f64 base, i64 exp)
+{
+    if (exp == 0) return 1.0;
+    f64 result = 1.0;
+    f64 b = base;
+    u64 e = exp < 0 ? (u64)(-exp) : (u64)exp;
+    while (e > 0u)
+    {
+        if (e & 1u) result *= b;
+        b *= b;
+        e >>= 1u;
+    }
+    return exp < 0 ? 1.0 / result : result;
+}
+
+pub f64 pi() { return 3.14159265358979323846; }
+pub f64 e() { return 2.71828182845904523536; }
+
+pub f64 degToRad(f64 deg) { return deg * pi() / 180.0; }
+pub f64 radToDeg(f64 rad) { return rad * 180.0 / pi(); }
+
+pub bool isNan(f64 x)
+{
+    u64 bits;
+    bits = *((u64*)&x);
+    return ((bits & 0x7FF0000000000000u) == 0x7FF0000000000000u) && ((bits & 0x000FFFFFFFFFFFFFu) != 0u);
+}
+
+pub bool isFinite(f64 x)
+{
+    u64 bits;
+    bits = *((u64*)&x);
+    return (bits & 0x7FF0000000000000u) != 0x7FF0000000000000u;
+}

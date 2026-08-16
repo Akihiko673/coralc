@@ -1,0 +1,84 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+
+pub struct ringbuf<T>
+{
+    T* data;
+    u64 cap;
+    u64 head;
+    u64 tail;
+    bool full;
+
+    static ringbuf<T> new(u64 capacity)
+    {
+        ringbuf<T> r;
+        r.data = mman.alloc<T>(capacity);
+        r.cap = capacity;
+        r.head = 0;
+        r.tail = 0;
+        r.full = false;
+        return r;
+    }
+
+    void dispose()
+    {
+        if (self.data != null) { mman.dealloc<T>(self.data); self.data = null; }
+        self.cap = 0;
+    }
+
+    u64 count()
+    {
+        if (self.full) return self.cap;
+        if (self.tail >= self.head) return self.tail - self.head;
+        return self.cap - self.head + self.tail;
+    }
+
+    bool isEmpty() { return !self.full && self.head == self.tail; }
+    bool isFull() { return self.full; }
+    u64 capacity() { return self.cap; }
+
+    void push(T val)
+    {
+        self.data[self.tail] = val;
+        self.tail = (self.tail + 1) % self.cap;
+        if (self.full) self.head = (self.head + 1) % self.cap;
+        self.full = self.tail == self.head;
+    }
+
+    T pop()
+    {
+        assert(!self.isEmpty());
+        T val = self.data[self.head];
+        self.head = (self.head + 1) % self.cap;
+        self.full = false;
+        return val;
+    }
+
+    T front()
+    {
+        assert(!self.isEmpty());
+        return self.data[self.head];
+    }
+
+    T back()
+    {
+        assert(!self.isEmpty());
+        u64 idx = self.tail;
+        if (idx == 0) idx = self.cap - 1;
+        else idx--;
+        return self.data[idx];
+    }
+
+    T at(u64 i)
+    {
+        assert(i < self.count());
+        return self.data[(self.head + i) % self.cap];
+    }
+
+    void clear()
+    {
+        self.head = 0;
+        self.tail = 0;
+        self.full = false;
+    }
+}

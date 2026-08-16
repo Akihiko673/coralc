@@ -1,0 +1,474 @@
+@[no_warn_unsafe]
+
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod strutil = import("std/text/strutil.crl");
+mod libc = import("std/platform/libc.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub enum JsonType
+{
+    Null,
+    Bool,
+    I64,
+    F64,
+    String,
+    Array,
+    Object
+}
+
+pub struct JsonValue
+{
+    JsonType type;
+    bool boolVal;
+    i64 i64Val;
+    f64 f64Val;
+    string strVal;
+    vec<JsonValue> arrVal;
+    vec<JsonPair> objVal;
+
+    JsonValue nullVal()
+    {
+        JsonValue v;
+        v.type = JsonType.Null;
+        return v;
+    }
+
+    JsonValue boolVal(bool b)
+    {
+        JsonValue v;
+        v.type = JsonType.Bool;
+        v.boolVal = b;
+        return v;
+    }
+
+    JsonValue i64Val(i64 n)
+    {
+        JsonValue v;
+        v.type = JsonType.I64;
+        v.i64Val = n;
+        return v;
+    }
+
+    JsonValue f64Val(f64 n)
+    {
+        JsonValue v;
+        v.type = JsonType.F64;
+        v.f64Val = n;
+        return v;
+    }
+
+    JsonValue stringVal(string s)
+    {
+        JsonValue v;
+        v.type = JsonType.String;
+        v.strVal = s;
+        return v;
+    }
+
+    JsonValue arrayVal()
+    {
+        JsonValue v;
+        v.type = JsonType.Array;
+        v.arrVal = vec<JsonValue>::new();
+        return v;
+    }
+
+    JsonValue objectVal()
+    {
+        JsonValue v;
+        v.type = JsonType.Object;
+        v.objVal = vec<JsonPair>::new();
+        return v;
+    }
+
+    void dispose()
+    {
+        if (self.type == JsonType.String) self.strVal.free();
+        if (self.type == JsonType.Array)
+        {
+            for (u64 i = 0; i < self.arrVal.count(); i++)
+                self.arrVal.atPtr(i)->dispose();
+            self.arrVal.dispose();
+        }
+        if (self.type == JsonType.Object)
+        {
+            for (u64 i = 0; i < self.objVal.count(); i++)
+            {
+                self.objVal.atPtr(i)->key.free();
+                self.objVal.atPtr(i)->value.dispose();
+            }
+            self.objVal.dispose();
+        }
+    }
+}
+
+pub struct JsonPair
+{
+    string key;
+    JsonValue value;
+}
+
+struct _ParseCtx
+{
+    const char* ptr;
+    u64 len;
+    u64 pos;
+    bool error;
+    string errMsg;
+
+    void skipSpace()
+    {
+        while (self.pos < self.len)
+        {
+            char c = self.ptr[self.pos];
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
+            self.pos++;
+        }
+    }
+
+    char peek()
+    {
+        self.skipSpace();
+        if (self.pos >= self.len) return 0;
+        return self.ptr[self.pos];
+    }
+
+    char next()
+    {
+        self.skipSpace();
+        if (self.pos >= self.len) return 0;
+        return self.ptr[self.pos++];
+    }
+
+    bool expect(char ch)
+    {
+        u8 c = self.next();
+        if (c != ch) { self.error = true; return false; }
+        return true;
+    }
+
+    string parseString()
+    {
+        string s = string.new();
+        if (self.next() != '"') { self.error = true; return s; }
+        while (self.pos < self.len)
+        {
+            char c = self.ptr[self.pos++];
+            if (c == '"') return s;
+            if (c == '\\')
+            {
+                if (self.pos >= self.len) break;
+                char esc = self.ptr[self.pos++];
+                if (esc == 'n') s.pushChar('\n');
+                else if (esc == 't') s.pushChar('\t');
+                else if (esc == 'r') s.pushChar('\r');
+                else if (esc == '"') s.pushChar('"');
+                else if (esc == '\\') s.pushChar('\\');
+                else if (esc == '/') s.pushChar('/');
+                else if (esc == 'b') s.pushChar('\b');
+                else if (esc == 'f') s.pushChar('\f');
+                else if (esc == 'u')
+                {
+                    u32 code = 0;
+                    bool bad = false;
+                    for (i32 i = 0; i < 4; i++)
+                    {
+                        if (self.pos >= self.len) { bad = true; break; }
+                        char h = self.ptr[self.pos++];
+                        u32 hv;
+                        if (h >= '0' && h <= '9') hv = (u32)(h - '0');
+                        else if (h >= 'a' && h <= 'f') hv = (u32)(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') hv = (u32)(h - 'A' + 10);
+                        else { bad = true; break; }
+                        code = (code << 4) | hv;
+                    }
+                    if (bad) { self.error = true; return s; }
+                    if (code >= 0xD800 && code <= 0xDBFF)
+                    {
+                        bool combined = false;
+                        if (self.pos + 6 <= self.len && self.ptr[self.pos] == '\\' && self.ptr[self.pos + 1] == 'u')
+                        {
+                            u32 lo = 0;
+                            bool lobad = false;
+                            for (i32 i = 0; i < 4; i++)
+                            {
+                                char h = self.ptr[self.pos + 2 + i];
+                                u32 hv;
+                                if (h >= '0' && h <= '9') hv = (u32)(h - '0');
+                                else if (h >= 'a' && h <= 'f') hv = (u32)(h - 'a' + 10);
+                                else if (h >= 'A' && h <= 'F') hv = (u32)(h - 'A' + 10);
+                                else { lobad = true; break; }
+                                lo = (lo << 4) | hv;
+                            }
+                            if (!lobad && lo >= 0xDC00 && lo <= 0xDFFF)
+                            {
+                                self.pos += 6;
+                                code = 0x10000 + ((code - 0xD800) << 10) + (lo - 0xDC00);
+                                combined = true;
+                            }
+                        }
+                        if (!combined) code = 0xFFFD;
+                    }
+                    else if (code >= 0xDC00 && code <= 0xDFFF)
+                    {
+                        code = 0xFFFD;
+                    }
+                    if (code < 0x80) s.pushChar((char)code);
+                    else if (code < 0x800) { s.pushChar((char)(0xC0 | (code >> 6))); s.pushChar((char)(0x80 | (code & 0x3F))); }
+                    else if (code < 0x10000) { s.pushChar((char)(0xE0 | (code >> 12))); s.pushChar((char)(0x80 | ((code >> 6) & 0x3F))); s.pushChar((char)(0x80 | (code & 0x3F))); }
+                    else { s.pushChar((char)(0xF0 | (code >> 18))); s.pushChar((char)(0x80 | ((code >> 12) & 0x3F))); s.pushChar((char)(0x80 | ((code >> 6) & 0x3F))); s.pushChar((char)(0x80 | (code & 0x3F))); }
+                }
+                else s.pushChar(esc);
+            }
+            else s.pushChar(c);
+        }
+        self.error = true;
+        return s;
+    }
+
+    JsonValue parseValue()
+    {
+        char c = self.peek();
+        if (c == '"')
+        {
+            JsonValue v = JsonValue::stringVal(self.parseString());
+            return v;
+        }
+        if (c == 't')
+        {
+            if (self.pos + 4 <= self.len && self.ptr[self.pos] == 't' && self.ptr[self.pos+1] == 'r' && self.ptr[self.pos+2] == 'u' && self.ptr[self.pos+3] == 'e')
+            {
+                self.pos += 4;
+                return JsonValue::boolVal(true);
+            }
+            self.error = true;
+            return JsonValue::nullVal();
+        }
+        if (c == 'f')
+        {
+            if (self.pos + 4 < self.len && self.ptr[self.pos] == 'f' && self.ptr[self.pos+1] == 'a' && self.ptr[self.pos+2] == 'l' && self.ptr[self.pos+3] == 's' && self.ptr[self.pos+4] == 'e')
+            {
+                self.pos += 5;
+                return JsonValue::boolVal(false);
+            }
+            self.error = true;
+            return JsonValue::nullVal();
+        }
+        if (c == 'n')
+        {
+            if (self.pos + 3 < self.len && self.ptr[self.pos] == 'n' && self.ptr[self.pos+1] == 'u' && self.ptr[self.pos+2] == 'l' && self.ptr[self.pos+3] == 'l')
+            {
+                self.pos += 4;
+                return JsonValue::nullVal();
+            }
+            self.error = true;
+            return JsonValue::nullVal();
+        }
+        if (c == '[') return self.parseArray();
+        if (c == '{') return self.parseObject();
+        if (c == '-' || (c >= '0' && c <= '9'))
+        {
+            bool neg = false;
+            u64 start = self.pos;
+            if (c == '-') { neg = true; self.next(); }
+            u64 limit = neg ? 0x8000000000000000u : 0x7FFFFFFFFFFFFFFFu;
+            u64 intVal = 0;
+            while (self.pos < self.len && self.ptr[self.pos] >= '0' && self.ptr[self.pos] <= '9')
+            {
+                u64 d = (u64)(self.ptr[self.pos] - '0');
+                if (intVal > (limit - d) / 10u)
+                {
+                    self.error = true;
+                    return JsonValue::nullVal();
+                }
+                intVal = intVal * 10 + d;
+                self.pos++;
+            }
+            if (neg && self.pos == start + 1)
+            {
+                self.error = true;
+                return JsonValue::nullVal();
+            }
+            if (self.pos < self.len && (self.ptr[self.pos] == '.' || self.ptr[self.pos] == 'e' || self.ptr[self.pos] == 'E'))
+            {
+                u8 tmp[64];
+                u64 tpos = 0;
+                while (self.pos < self.len && tpos < 63)
+                {
+                    u8 ch = self.ptr[self.pos];
+                    if ((ch < '0' || ch > '9') && ch != '.' && ch != 'e' && ch != 'E' && ch != '+' && ch != '-') break;
+                    tmp[tpos++] = ch;
+                    self.pos++;
+                }
+                tmp[tpos] = 0;
+                f64 fv;
+                i32 n;
+                u8* end;
+                fv = libc.strtod(tmp, &end);
+                if (end != tmp + tpos)
+                {
+                    self.error = true;
+                    return JsonValue::nullVal();
+                }
+                return JsonValue::f64Val(neg ? -fv : fv);
+            }
+            if (neg) return JsonValue::i64Val(-(i64)intVal);
+            return JsonValue::i64Val((i64)intVal);
+        }
+        self.error = true;
+        return JsonValue::nullVal();
+    }
+
+    JsonValue parseArray()
+    {
+        JsonValue arr = JsonValue::arrayVal();
+        if (!self.expect('[')) { arr.dispose(); return JsonValue::nullVal(); }
+        if (self.peek() == ']') { self.next(); return arr; }
+        for (;;)
+        {
+            JsonValue elem = self.parseValue();
+            if (self.error) { elem.dispose(); arr.dispose(); return JsonValue::nullVal(); }
+            arr.arrVal.push(elem);
+            char c = self.next();
+            if (c == ']') break;
+            if (c != ',') { self.error = true; arr.dispose(); return JsonValue::nullVal(); }
+        }
+        return arr;
+    }
+
+    JsonValue parseObject()
+    {
+        JsonValue obj = JsonValue::objectVal();
+        if (!self.expect('{')) { obj.dispose(); return JsonValue::nullVal(); }
+        if (self.peek() == '}') { self.next(); return obj; }
+        for (;;)
+        {
+            JsonPair pair;
+            pair.key = self.parseString();
+            if (self.error) { pair.key.free(); obj.dispose(); return JsonValue::nullVal(); }
+            if (!self.expect(':')) { pair.key.free(); obj.dispose(); return JsonValue::nullVal(); }
+            pair.value = self.parseValue();
+            if (self.error) { pair.key.free(); pair.value.dispose(); obj.dispose(); return JsonValue::nullVal(); }
+            obj.objVal.push(pair);
+            char c = self.next();
+            if (c == '}') break;
+            if (c != ',') { self.error = true; obj.dispose(); return JsonValue::nullVal(); }
+        }
+        return obj;
+    }
+}
+
+string _escapeString(strView s)
+{
+    string out = string.new();
+    out.pushByte('"');
+    for (u64 i = 0; i < s.len; i++)
+    {
+        u8 c = s.ptr[i];
+        if (c == '"') { out.pushByte('\\'); out.pushByte('"'); }
+        else if (c == '\\') { out.pushByte('\\'); out.pushByte('\\'); }
+        else if (c == '\n') { out.pushByte('\\'); out.pushByte('n'); }
+        else if (c == '\t') { out.pushByte('\\'); out.pushByte('t'); }
+        else if (c == '\r') { out.pushByte('\\'); out.pushByte('r'); }
+        else if (c == '\b') { out.pushByte('\\'); out.pushByte('b'); }
+        else if (c == '\f') { out.pushByte('\\'); out.pushByte('f'); }
+        else if (c < 0x20)
+        {
+            out.pushByte('\\');
+            out.pushByte('u');
+            out.pushByte((u8)'0');
+            out.pushByte((u8)'0');
+            u8 hi = (u8)(c >> 4);
+            u8 lo = (u8)(c & 0x0F);
+            out.pushByte((u8)(hi < 10 ? '0' + hi : 'a' + hi - 10));
+            out.pushByte((u8)(lo < 10 ? '0' + lo : 'a' + lo - 10));
+        }
+        else out.pushByte(c);
+    }
+    out.pushByte('"');
+    return out;
+}
+
+void _serialize(JsonValue* v, string* out)
+{
+    if (v->type == JsonType::Null) { out->pushView(strView::fromCstr("null")); return; }
+    if (v->type == JsonType::Bool) { out->pushView(v->boolVal ? strView::fromCstr("true") : strView::fromCstr("false")); return; }
+    if (v->type == JsonType::I64)
+    {
+        u8 buf[32];
+        i32 n = libc.snprintf(buf, 32u, "%lld", v->i64Val);
+        out->pushView(strView::fromParts(buf, (u64)n));
+        return;
+    }
+    if (v->type == JsonType::F64)
+    {
+        if (v->f64Val != v->f64Val || v->f64Val > 1.7976931348623157e308 || v->f64Val < -1.7976931348623157e308)
+        {
+            out->pushView(strView::fromCstr("null"));
+            return;
+        }
+        u8 buf[64];
+        i32 n = libc.snprintf(buf, 64u, "%.17g", v->f64Val);
+        out->pushView(strView::fromParts(buf, (u64)n));
+        return;
+    }
+    if (v->type == JsonType::String)
+    {
+        string escaped = _escapeString(v->strVal.asView());
+        out->pushView(escaped.asView());
+        escaped.free();
+        return;
+    }
+    if (v->type == JsonType::Array)
+    {
+        out->pushByte('[');
+        for (u64 i = 0; i < v->arrVal.count(); i++)
+        {
+            if (i > 0) out->pushByte(',');
+            _serialize(v->arrVal.atPtr(i), out);
+        }
+        out->pushByte(']');
+        return;
+    }
+    if (v->type == JsonType::Object)
+    {
+        out->pushByte('{');
+        for (u64 i = 0; i < v->objVal.count(); i++)
+        {
+            if (i > 0) out->pushByte(',');
+            JsonPair* p = v->objVal.atPtr(i);
+            string kesc = _escapeString(p->key.asView());
+            out->pushView(kesc.asView());
+            kesc.free();
+            out->pushByte(':');
+            _serialize(&p->value, out);
+        }
+        out->pushByte('}');
+    }
+}
+
+pub bool parse(strView input, JsonValue* out)
+{
+    _ParseCtx ctx;
+    ctx.ptr = input.ptr;
+    ctx.len = input.len;
+    ctx.pos = 0;
+    ctx.error = false;
+    ctx.errMsg = string.new();
+
+    JsonValue v = ctx.parseValue();
+    if (ctx.error) { v.dispose(); ctx.errMsg.free(); *out = JsonValue::nullVal(); return false; }
+    ctx.skipSpace();
+    if (ctx.pos != ctx.len) { v.dispose(); ctx.errMsg.free(); *out = JsonValue::nullVal(); return false; }
+    ctx.errMsg.free();
+    *out = v;
+    return true;
+}
+
+pub string serialize(JsonValue* v)
+{
+    string out = string.new();
+    _serialize(v, &out);
+    return out;
+}

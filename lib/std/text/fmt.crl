@@ -1,0 +1,151 @@
+mod string = import("std/text/string.crl");
+mod libc = import("std/platform/libc.crl");
+mod mman = import("std/memory/mman.crl");
+
+u64 _clampRadix(u64 radix)
+{
+    if (radix < 2u) return 10u;
+    if (radix > 36u) return 36u;
+    return radix;
+}
+
+pub string.String format(string.strView f, ...)
+{
+    string.String out = string.String::new();
+    u64 i = 0;
+    while (i < f.len)
+    {
+        if (f.ptr[i] == '{' && i + 1 < f.len && f.ptr[i + 1] == '}')
+        {
+            i += 2;
+            continue;
+        }
+        out.pushChar(f.ptr[i]);
+        i++;
+    }
+    return out;
+}
+
+pub string.String formatInt(i64 val, u64 radix, bool upper)
+{
+    radix = _clampRadix(radix);
+    if (val == 0) return string.String::fromView(string.strView::fromCstr("0"));
+    bool neg = val < 0;
+    u64 mag = neg ? (u64)(-(val + 1)) + 1u : (u64)val;
+    char buf[65];
+    u64 pos = 64;
+    buf[pos] = 0;
+    while (mag != 0)
+    {
+        u64 digit = mag % radix;
+        mag /= radix;
+        pos--;
+        if (digit < 10u) buf[pos] = (char)('0' + digit);
+        else buf[pos] = upper ? (char)('A' + digit - 10u) : (char)('a' + digit - 10u);
+    }
+    if (neg) { pos--; buf[pos] = '-'; }
+    return string.String::fromView(string.strView::fromParts(buf + pos, 64 - pos));
+}
+
+pub string.String formatUint(u64 val, u64 radix, bool upper)
+{
+    radix = _clampRadix(radix);
+    if (val == 0) return string.String::fromView(string.strView::fromCstr("0"));
+    char buf[65];
+    u64 pos = 64;
+    buf[pos] = 0;
+    while (val != 0)
+    {
+        u64 digit = val % radix;
+        val /= radix;
+        pos--;
+        if (digit < 10) buf[pos] = (char)('0' + digit);
+        else buf[pos] = upper ? (char)('A' + digit - 10) : (char)('a' + digit - 10);
+    }
+    return string.String::fromView(string.strView::fromParts(buf + pos, 64 - pos));
+}
+
+pub string.String formatFloat(f64 val, u64 precision)
+{
+    if (precision > 1000u) precision = 1000u;
+    i32 n = libc.snprintf(null, 0u, "%.*f", (i32)precision, val);
+    if (n < 0) return string.String::new();
+    u64 size = (u64)n;
+    u8* buf = mman.alloc<u8>(size + 1u);
+    if (buf == null) return string.String::new();
+    i32 m = libc.snprintf(buf, size + 1u, "%.*f", (i32)precision, val);
+    string.String out;
+    if (m < 0 || (u64)m > size) out = string.String::new();
+    else out = string.String::fromView(string.strView::fromParts((const char*)buf, (u64)m));
+    mman.dealloc<u8>(buf);
+    return out;
+}
+
+pub string.String formatHex(u64 val, bool prefix)
+{
+    string.String s = formatUint(val, 16, false);
+    if (prefix) { string.String p = string.String::fromView(string.strView::fromCstr("0x")); p.appendView(s.asView()); s.free(); return p; }
+    return s;
+}
+
+pub string.String formatHexUpper(u64 val, bool prefix)
+{
+    string.String s = formatUint(val, 16, true);
+    if (prefix) { string.String p = string.String::fromView(string.strView::fromCstr("0x")); p.appendView(s.asView()); s.free(); return p; }
+    return s;
+}
+
+pub string.String formatBin(u64 val, bool prefix)
+{
+    string.String s = formatUint(val, 2, false);
+    if (prefix) { string.String p = string.String::fromView(string.strView::fromCstr("0b")); p.appendView(s.asView()); s.free(); return p; }
+    return s;
+}
+
+pub string.String padLeft(string.strView sv, u64 width, char pad)
+{
+    if (sv.len >= width) return string.String::fromView(sv);
+    string.String out = string.String::new();
+    u64 n = width - sv.len;
+    for (u64 i = 0; i < n; i++) out.pushChar(pad);
+    out.appendView(sv);
+    return out;
+}
+
+pub string.String padRight(string.strView sv, u64 width, char pad)
+{
+    if (sv.len >= width) return string.String::fromView(sv);
+    string.String out = string.String::fromView(sv);
+    u64 n = width - sv.len;
+    for (u64 i = 0; i < n; i++) out.pushChar(pad);
+    return out;
+}
+
+pub string.String repeat(string.strView sv, u64 count)
+{
+    string.String out = string.String::new();
+    for (u64 i = 0; i < count; i++) out.appendView(sv);
+    return out;
+}
+
+pub string.String join(const string.strView* parts, u64 count, string.strView sep)
+{
+    string.String out = string.String::new();
+    for (u64 i = 0; i < count; i++)
+    {
+        if (i > 0) out.appendView(sep);
+        out.appendView(parts[i]);
+    }
+    return out;
+}
+
+pub string.String joinVec(const vec<string.String>* parts, string.strView sep)
+{
+    string.String out = string.String::new();
+    for (u64 i = 0; i < parts->count(parts); i++)
+    {
+        if (i > 0) out.appendView(sep);
+        out.appendView(parts->at(parts, i).asView());
+    }
+    return out;
+}

@@ -1,0 +1,912 @@
+Chapter 4
+
+Control Flow
+
+More Than Just if and for
+
+Control flow is the skeleton of a program. It is the set of mechanisms that decide what runs, how many times, and in what order. Most books treat control flow as trivial, a few keywords to memorize on the way to more interesting topics. That is a mistake. Control flow is where the shape of a program is decided, and it is where the difference between a language that is pleasant to write and a language that fights you is most visible. Spend your whole career in a language whose loops are awkward and you will never quite name what is rubbing against you, only that something is.
+
+Coral's control flow is C's control flow, with the same fundamental constructs, and the previous chapters' philosophy holds: a C programmer should be able to predict what Coral code does. But Coral adds structure on top of the C core. It has a ranged for loop that iterates over containers directly. It has a defer statement that makes resource cleanup a local, guaranteed operation. It has a match-style switch that pattern-matches with the language's explicit type system. And it has the discipline, carried from the earlier chapters, that every condition is a real bool, that every loop has a defined shape, and that control flow is always explicit.
+
+This chapter covers conditionals, loops, the iterator protocol, break and continue, and the defer mechanism that Coral uses for guaranteed cleanup. Error handling, the Result and Option machinery that Coral uses instead of exceptions, is the subject of its own chapter, because it is control flow of a different kind, built on types rather than keywords.
+
+4.1 The if Statement
+
+The if statement is the simplest conditional. It evaluates a bool condition and runs a block if the condition is true.
+
+    if (condition)
+    {
+        // runs when condition is true
+    }
+
+The condition is a bool expression, and it must be a bool. This is Coral's rule, enforced by the type checker, and it was established in the previous chapters. There is no truthiness, no conversion of integers or pointers into conditions. If you want to test an integer you compare it, and if you want to test a pointer you compare it against null. The if statement consumes a bool, and the compiler guarantees that what it consumes is a bool.
+
+The else clause runs when the condition is false.
+
+    if (condition)
+    {
+        // runs when condition is true
+    }
+    else
+    {
+        // runs when condition is false
+    }
+
+The else if chain tests a sequence of conditions, running the first block whose condition is true. Each condition is evaluated only if all the preceding conditions were false, so the chain is an ordered decision:
+
+    if (a)
+    {
+        // a
+    }
+    else if (b)
+    {
+        // b
+    }
+    else if (c)
+    {
+        // c
+    }
+    else
+    {
+        // none
+    }
+
+The standard library is built from such chains. The character classification functions are chains of range tests. The UTF-8 encoder is a chain that decides how many bytes a code point needs. The parsers are chains that decide how to interpret each character. The if chain is the workhorse of decision-making in Coral, and it is written exactly as C programmers write it.
+
+A worked example shows the shape. Clamping a value into a range is a three-way decision, and the if chain states it directly:
+
+    u64 clamp(u64 v, u64 lo, u64 hi)
+    {
+        if (v < lo) return lo;
+        if (v > hi) return hi;
+        return v;
+    }
+
+Each test is one condition, each return is one outcome, and the three outcomes are visible at a glance. The if chain is the right form because the tests are independent ranges, not a fixed set of equal values; the choice between the if chain and the switch, which the coming sections describe, is the choice between testing ranges and testing a set of exact values.
+
+Here is the same shape doing real work, a function that maps a score to its letter grade. The boundaries are ranges, so if chains, not switches:
+
+    char gradeFor(u64 score)
+    {
+        if (score >= 90) return 'A';
+        if (score >= 80) return 'B';
+        if (score >= 70) return 'C';
+        if (score >= 60) return 'D';
+        return 'F';
+    }
+
+Notice what the chain has that a switch could not: each test clips a range off the top, and the thresholds are naturally ordered. A switch over scores would need every possible value as a case, which is absurd. The if chain is for ranges; keep that and the choice makes itself.
+
+4.2 The Shape of Conditions
+
+The condition of an if statement can be any expression that produces a bool, and Coral's short-circuit operators make compound conditions safe and idiomatic. The pattern of testing a bound before using an index, or testing a pointer before dereferencing, is written directly in the condition:
+
+    if (self->ptr != null && self->ptr[0] == 'x') ...
+
+    if (i < self->len && self->ptr[i] == c) ...
+
+The first example tests the pointer before reading through it; the short-circuit AND guarantees the read only happens if the pointer is valid. The second tests the bound before the subscript. Both patterns are pervasive in the standard library, and both are made correct by the short-circuit guarantee from the previous chapter.
+
+Conditions can also be inverted for early exits. Many standard library functions begin by disposing of the special cases and then proceeding on the main path, a style called guard clauses:
+
+    u64 lengthOf(std.strView s)
+    {
+        if (s.ptr == null) return 0;   // the empty case, disposed immediately
+        return s.len;
+    }
+
+A guard clause can also dispose of a whole class of failures in one condition each, and a validator built from them reads as its own list of requirements — three checks, three exits, and the honest bool the caller can branch on:
+
+    bool validConfig(Config* c)
+    {
+        if (c->port == 0) return false;              // no port: nothing to serve
+        if (c->backlog > MAX_BACKLOG) return false;  // an unreasonable backlog
+        return c->workers > 0 && c->workers <= MAX_WORKERS;
+    }
+
+The last line combines two bounds in one short-circuited condition, and the function reads top to bottom as the config's contract, each requirement stated where it fails and nothing left for the body to discover.
+
+Conditions that test a value against several possibilities are written either as if chains or as switches, depending on the situation. The rule of thumb is this: if the decision is a chain of independent tests, or the tests are complex, use if chains; if the decision is choosing among a fixed set of values of one expression, use a switch. The switch is the subject of the next sections.
+
+4.3 The Classic Switch
+
+Coral's switch statement dispatches on the value of one expression. It is the C switch, familiar to every C programmer, and it is the right tool when one value must be compared against a fixed set of cases.
+
+    switch (value)
+    {
+        case 0:
+            // value is 0
+            break;
+        case 1:
+            // value is 1
+            break;
+        default:
+            // value is something else
+            break;
+    }
+
+The expression in parentheses is evaluated once, and its value is compared against each case. The first case that matches runs, and execution continues until a break. The default clause runs when no case matches, and it is optional. A switch with no matching case and no default does nothing.
+
+The case labels are constants, compared against the switch value. They are typically integer constants, character constants, or enum values, and the compiler checks that they are compatible with the switch expression's type. Using enum values as case labels is a common and powerful pattern: a switch over an enum handles every possible value of that enum, and the cases are named by their meanings rather than by raw numbers. Consider mapping a log level to its one-letter label:
+
+    enum LogLevel { Debug, Info, Warn, Error, Fatal }
+
+    char levelChar(LogLevel level)
+    {
+        switch (level)
+        {
+            case LogLevel.Debug: return 'D';
+            case LogLevel.Info:  return 'I';
+            case LogLevel.Warn:  return 'W';
+            case LogLevel.Error: return 'E';
+            case LogLevel.Fatal: return 'F';
+        }
+        return '?';
+    }
+
+The break at the end of each case is what makes the switch behave as a decision rather than as a fallthrough sequence. Coral's switch does not allow the accidental fallthrough of C's switch, where a missing break silently runs the next case. In Coral, each case is a self-contained branch, and falling through into the next case requires writing it explicitly. This removes one of C's most persistent sources of bugs, the forgotten break, and it makes a switch read as a clean table of decisions.
+
+The cases are also blocks of several statements, and the block form is where the statement switch earns its keep: several actions per case, run in order under one heading. The same log-handler decision, with two actions per case, shows the shape and the absence of fallthrough:
+
+    void handle(LogLevel level, std.strView msg)
+    {
+        switch (level)
+        {
+            case LogLevel.Error:
+                logToStderr(msg);
+                raiseAlert();          // both lines run, then the case ends
+                break;
+            case LogLevel.Fatal:
+                logToStderr(msg);
+                halt(1);
+                break;
+            default:
+                logToStdout(msg);
+                break;
+        }
+    }
+
+Each case is a small sequence of statements that ends where its block ends — the alert and the halt both belong to their case, and neither runs for the other cases. There is no missing-break accident to design around, because the case's statements are its own block: the branch is a visible unit, and a reader can see where each one starts and ends.
+
+4.4 The Match-Style Switch
+
+Alongside the classic switch, Coral provides a match-style switch that expresses the same decision more compactly and with the language's explicit types. It uses a fat arrow to bind each pattern to its result, and an underscore as the wildcard that matches anything.
+
+    switch (value)
+    {
+        pattern1 => result1,
+        pattern2 => result2,
+        _ => fallback
+    }
+
+Each line pairs a pattern with a result. The expression is matched against the patterns in order, and the first pattern that matches determines the result. The underscore pattern matches any value, and it plays the role of the default clause. The last comma is optional, and the whole switch is an expression: it produces a value, which is one of the listed results.
+
+This form is how Coral expresses the modern match idea, selecting a value by pattern, and it is an expression-oriented conditional: the switch as a whole can be assigned, returned, or passed as an argument. The classic switch is a statement, running blocks of actions; the match-style switch is an expression, producing a value. The two forms complement each other, and choosing between them is the same choice as choosing between if and the ternary operator: statements for actions, expressions for values.
+
+The same level-character decision from the last section, in match style, shows how much shorter the expression form can be:
+
+    char levelChar(LogLevel level)
+    {
+        return switch (level)
+        {
+            Debug => 'D',
+            Info => 'I',
+            Warn => 'W',
+            Error => 'E',
+            Fatal => 'F'
+        };
+    }
+
+The match-style switch supports the kind of pattern matching that the language's types make meaningful. It can match enum values, with a case for each variant and an underscore for the rest. It can match against literal constants. And because the compiler understands the types, it can check the coverage of the match: when a switch matches over an enum, the compiler can verify that every variant is handled or that an underscore is present to handle the remainder. This is exhaustiveness checking, the guarantee that a match over a complete set of values is total. The compiler refuses to silently leave a case unhandled when it can prove a value would fall through, and it accepts an explicit underscore when the programmer intends the remainder to be handled generically.
+
+The match-style switch is where Coral's modern type system meets its C-shaped syntax. The patterns are built from the language's types, the underscore names the wildcard, and the result is an expression that composes with everything else in the language.
+
+4.5 Pattern Matching
+
+The match-style switch supports patterns that go beyond a single constant, and the patterns are built from the type system's building blocks.
+
+A literal pattern matches exactly one value. A constant or enum pattern matches a named value. The underscore pattern matches anything. A list of patterns, separated by bars, matches any one of them. And the patterns can be combined to express a decision over ranges or sets of values.
+
+The purpose of patterns is to say, in one line, what an if chain would take several lines to say. Consider a switch that must handle several specific values and then fall through to a general case. The specific values are listed as their own patterns, and the underscore handles everything else. The decision is a table, read top to bottom, and the intent is visible at a glance.
+
+    u64 byteCount(u64 x)
+    {
+        return switch (x)
+        {
+            0 => 0,          // 0 bytes: representable in zero
+            1 | 2 => 1,      // one byte can hold 0..255
+            3 | 4 => 2,      // two bytes hold up to 65535
+            _ => 8           // anything larger: use the full width
+        };
+    }
+
+The barred list matches either of the listed values, and the underscore catches everything else. A decision that would take an if chain of comparisons, or a switch with hundreds of cases, is a handful of lines.
+
+Pattern matching is most powerful with enums. An enum defines a fixed set of variants, and a switch over an enum with a case per variant, plus an underscore for the unhandled remainder, is the canonical way to turn an enum value into a decision. The compiler's coverage checking makes this safe: when you handle every variant, the compiler confirms the match is total; when you use an underscore, you state in one character that the rest is intended to be handled together.
+
+The patterns of Coral are the type system made executable. The language does not have a separate pattern-matching language grafted on; the patterns are the types, and the switch is where the type of a value selects its behavior.
+
+4.6 Expression-Oriented Conditionals
+
+Coral's conditionals come in both statement form and expression form, and the distinction is worth making explicit because it determines how the conditional is used.
+
+The statement forms, if and the classic switch, run blocks of actions. They are used when the decision controls what the program does: which function to call, which value to modify, which path to execute.
+
+The expression forms, the ternary operator from the previous chapter and the match-style switch, produce values. They are used when the decision controls what value an expression has: which number to assign, which result to return, which argument to pass.
+
+    u64 size = switch (kind)
+    {
+        Small => 16,
+        Large => 1024,
+        _ => 0
+    };
+
+This is the essence of the expression-oriented style: a decision that produces a value, written inline, without a separate statement. The classic switch and the match-style switch are the same decision; the form you choose depends on whether you are choosing actions or choosing values. Coral provides both, and the standard library uses both, with statements for work and expressions for values.
+
+4.7 The while Loop
+
+The while loop is the simplest loop. It evaluates a bool condition, runs a block if the condition is true, and repeats until the condition is false.
+
+    while (condition)
+    {
+        // body
+    }
+
+The condition is checked before each iteration, so a while loop with a false condition never runs its body at all. This is the defining property of the while loop: the body may execute zero times.
+
+The while loop is the loop of search and traversal in the standard library. Searching loops scan until a value is found or the data is exhausted. Pointer-walking loops traverse a chain of nodes until they reach the end. The linked list's traversal is a while loop over nodes, the cache eviction is a while loop, the bitset's bit counting is a while loop that clears one bit per iteration. The while loop is used whenever the number of iterations is not known in advance and the loop must continue while a condition holds.
+
+The while loop with a compound condition is the standard pattern for scanning with a bound. The string trimming functions run while there is input remaining and the current character is a space, both conditions in one test:
+
+    while (i < self->len && (self->ptr[i] == ' ' || self->ptr[i] == '\t')) i++;
+
+The short-circuit AND from the previous chapter makes this safe: the character test only runs while the index is still in bounds. The loop stops when either the input is exhausted or a non-space character is found, and the two stopping reasons are exactly the two clauses of the condition.
+
+The while loop is also the loop of repeated division, the workhorse of digit extraction. Converting a number to its decimal digits divides until nothing remains, and the loop's condition is precisely "there is more number":
+
+    u64 digits = 0;
+    u64 n = value;
+    while (n > 0)
+    {
+        n /= 10;
+        digits++;
+    }
+
+The loop runs once per decimal digit, the counter accumulates the divisions, and the loop naturally terminates because every division moves n toward zero. It is also very easy to prove it terminates, which is exactly what you want from a loop: the condition moves a value strictly toward a bound. Reading the loop as a search, scan, or repeated-division pattern, the while form says what the loop is for: it continues while a condition holds, and the condition is the loop's whole contract.
+
+The while loop is also the pointer-walk, the traversal of a chain of nodes, and the linked list is its home. The walk is the whole list iteration in three lines, and the loop's condition says exactly when the chain ends:
+
+    Node* cur = head;
+    while (cur != null)
+    {
+        process(cur->value);
+        cur = cur->next;
+    }
+
+The loop's condition is the chain's termination: cur is null exactly at the list's end, and every step moves cur one node deeper, so the walk is guaranteed to end where the list ends. Nothing counts iterations and nothing indexes into storage — the loop's shape is the list's shape, and that is why the library's linked structures walk with while. The same three lines, with cur->next replaced by the next node of whatever chain, are the traversal of every linked structure in the standard library.
+
+4.8 The for Loop
+
+The for loop is the counted loop. It combines an initialization, a condition, and a step into one statement, and it is the loop of iterating over a range of indices.
+
+    for (u64 i = 0; i < n; i++)
+    {
+        // body
+    }
+
+The three parts are, in order: the initialization, which runs once before the loop begins; the condition, which is checked before each iteration; and the step, which runs after each iteration. The loop is exactly equivalent to the while form with the pieces placed in order:
+
+    u64 i = 0;
+    while (i < n)
+    {
+        // body
+        i++;
+    }
+
+The for loop exists to make the common counted-iteration pattern a single, readable statement. The standard library uses it constantly. Almost every collection method in the collections module is a for loop over the collection's length: copying a vector's elements, zeroing a buffer, searching a string, counting bits, initializing a table. The for loop is the most common loop in the standard library, and its shape is always the same: a counter from zero, a bound, an increment.
+
+A simple example, summing a fixed array, shows the canonical shape:
+
+    u64 total = 0;
+    for (u64 i = 0; i < n; i++)
+        total += values[i];
+
+The three parts of the for header are flexible. The initialization can declare a fresh counter, as above, or it can be omitted. The condition can be any bool expression. The step can be any expression. Any of the three can be empty. A for loop with no condition and no step is an infinite loop, and the standard library writes infinite loops in this style:
+
+    for (;;)
+    {
+        // runs until a break exits
+    }
+
+The empty condition is always true, so the loop runs until a break or a return exits it. This is the C idiom for an unbounded loop whose exit is decided inside the body, and Coral keeps it. The JSON parser and the CSV parser both use for (;;) loops for exactly this purpose, scanning forward until they hit a terminator and then breaking.
+
+The for loop is also where a running total takes its most readable shape. Reversing a buffer in place walks two indices toward the middle, and the for loop states the whole walk in its header:
+
+    void reverse(u64* data, u64 n)
+    {
+        for (u64 i = 0, j = n - 1; i < j; i++, j--)
+        {
+            u64 tmp = data[i];
+            data[i] = data[j];
+            data[j] = tmp;
+        }
+    }
+
+The two counters move in opposite directions, the condition i less than j is the meeting test, and the step moves both counters each iteration. The for loop exists precisely for this counted work: the initialization, the condition, and the step in one line, so the walk's shape is visible before the body is read.
+
+Nested for loops compose ranges into grids, and the multiplication table is the old classroom shape: an outer loop for the rows, an inner loop for the columns, and a product where they meet.
+
+    for (u64 r = 1; r <= 10; r++)
+    {
+        for (u64 c = 1; c <= 10; c++)
+            std.print(r * c, "\t");
+        std.print("\n");     // one row per outer iteration
+    }
+
+The inner loop completes an entire row before the outer loop advances, so the printed shape is the grid: ten values across, a newline, ten rows down. The two loops are the two dimensions of the work, each with its own counter, its own bound, and its own step, and the nesting is exactly the nesting of the table. Whenever the work is naturally two-dimensional — a pixel grid, a matrix, a schedule — the nested for is the shape the work takes.
+
+4.9 The loop Keyword
+
+In addition to the C-style for and while, Coral provides the loop keyword for an infinite loop, making the intent explicit without an empty header.
+
+    loop
+    {
+        // runs until a break or return exits
+    }
+
+The loop construct is the clear statement of intent: this loop is unbounded, and its exit is decided inside the body. Where for (;;) says "the loop's header has no end condition," loop says "this is an infinite loop." The two are equivalent in behavior, and the choice is one of clarity. The loop keyword is used when the body's break conditions are the whole story, and an explicit infinite loop reads better than an empty for header.
+
+The infinite loop is the loop of servers, event loops, and interactive sessions, which run until they are told to stop. It is also the loop of careful parsers that advance position until a terminator is found. The body of an infinite loop always contains the exit, a break or a return, and the loop construct makes that structure visible. A minimal REPL shows the pattern:
+
+    loop
+    {
+        std.strView line = readLine();
+        if (line.len == 0) break;   // end of input: exit
+        run(line);
+    }
+
+4.10 The Ranged for Loop
+
+The ranged for loop iterates directly over a container, without an index variable. It is the for-each loop, and it is how Coral expresses iteration over collections.
+
+    for (var x : container)
+    {
+        // body, with x bound to each element
+    }
+
+The ranged for iterates over the elements of the container in order, binding the loop variable to each element in turn. The loop variable is declared with var, and its type is inferred from the container's element type. The standard library's variadic print functions use the ranged for to iterate over their argument packs:
+
+    pub void print<T...>(T... args)
+    {
+        for (var arg : args) _fprintOne(1, arg);
+    }
+
+The loop variable arg is bound to each argument, one per iteration, with no index, no bounds, and no step. The ranged for says what the loop does, iterate over the elements, and hides the mechanics. This is the loop of iteration, as opposed to the loop of indexing, and it is used whenever the elements themselves matter and the index does not.
+
+Summing a vector of values with the ranged for shows the difference from indexing; the loop reads the element, and nowhere is a counter visible:
+
+    u64 total = 0;
+    for (var v : vec) total += v;
+
+The ranged for is not a separate kind of iteration invented for one collection type. It is defined over the iterator protocol, which is the subject of the next section. Any type that implements the protocol can be iterated with the ranged for, which is what makes the construct a general mechanism rather than a special case.
+
+4.11 The Iterator Protocol
+
+The ranged for works through a protocol, a small set of operations that a type implements to say how it is iterated. The protocol is the contract between the container and the loop, and understanding it is understanding what the ranged for actually does under the hood.
+
+A type that can be iterated provides a way to obtain an iterator over its elements. The iterator tracks the current position, provides the current element, and advances to the next position. The standard collections implement this protocol: a vector is iterated by walking its contiguous storage from the first element to the last, a linked list by walking its node chain, a map by walking its entries. Each collection knows how to walk itself, and the ranged for does not need to know the difference.
+
+When you write a ranged for over a container, the compiler lowers it to the protocol operations: obtain the iterator for this container, and while the iterator has a next element, bind the loop variable to the current element and run the body, then advance the iterator. The exact lowering depends on the container's storage, and the compiler picks the efficient walk for each type. For a contiguous vector, the walk is a pointer that advances across the storage; for a linked list, it is a node pointer following links. The protocol hides the storage while preserving its performance.
+
+The point is worth stating plainly: the ranged for is not a macro that only works on known containers. It is defined over a contract, and your own types can join. If you write a Tree that can be walked in order, implementing the protocol makes for (var n : tree) work, and the loop body never needs to know the traversal details.
+
+The iterator protocol is how Coral keeps the ranged for general without sacrificing efficiency. A container's iteration is implemented by the container itself, once, in the way that is fastest for that container's layout. Every ranged for over that container reuses that implementation. There is no generic walker that could be slower than the container's natural traversal, because the container defines its own traversal.
+
+4.12 Iteration and Invalidation
+
+The iterator protocol has a discipline, and the most important part of that discipline is the rule about modifying a container while iterating it. The rule is simple and worth stating directly: do not modify the structure of a container while iterating over it.
+
+The reason is mechanical. An iterator holds a position into the container. If the container's storage moves, as it does when a vector grows and reallocates, an iterator obtained before the move points at memory that has been freed or reused. If the container's element count changes, an iterator's position can become wrong, skipping elements or reading beyond the end. The iterator is a snapshot of a position, and it is only valid while the container's structure stays stable.
+
+Consider a vector being iterated while new elements arrive:
+
+    // Wrong: pushing inside the loop may reallocate or extend
+    // the storage, and the iterator's position no longer lines up.
+    for (var x : v)
+    {
+        if (x == FLAG) v.push(x * 2);   // do not mutate while iterating
+    }
+
+This is not a restriction Coral imposes from a sense of safety theater; it is a consequence of how the protocol works and how the collections are laid out. The linked list's iterator is a node pointer, valid as long as the node exists. The vector's iterator is a pointer into the vector's buffer, valid only while the buffer stays where it is. Both are fast because they hold a raw position, and both require the structural stability that keeps positions meaningful.
+
+The idiom for collecting results from a search is to gather into a separate container while iterating, then modify the original after iteration ends. The standard library follows this pattern, and it is the pattern every Coral programmer should use: read while iterating, write after.
+
+    // Correct: collect the interesting indices, then act after iteration.
+    vec<u64> found;
+    for (var x : v)
+        if (x == FLAG) found.push(indexOf(x));
+    for (var idx : found)
+        v.remove(idx);
+
+4.13 break and continue
+
+The loop bodies of Coral are controlled from inside by two statements: break and continue.
+
+The break statement exits the innermost loop immediately. Execution continues at the first statement after the loop. The break statement is how an infinite loop ends and how a search stops early.
+
+The continue statement skips the rest of the current iteration and moves to the next one. For a for loop, continue jumps to the step, so the counter advances normally. For a while loop, continue jumps to the condition. The continue statement is how an iteration is skipped without ending the loop.
+
+The standard library uses both pervasively. Parsers break when they hit a terminator, search functions break when they find a match, the priority queue's sift operations break when the heap property is restored. Loops continue when they encounter input they do not process, skipping blank lines in a config parser, skipping separators in a tokenizer, skipping characters that do not begin a token. The pair of statements gives a loop full control over its own execution, and the idioms for their use are the same idioms C programmers know.
+
+A loop that sums only the nonblank lines of a file shows continue in action:
+
+    u64 totalChars = 0;
+    while (read next line into line)
+    {
+        if (line.len == 0) continue;   // skip nothing lines entirely
+        totalChars += line.len;
+    }
+
+The key fact about break and continue in Coral is that they affect the innermost loop only. A break inside a nested loop exits the inner loop, not the outer one. A continue inside a nested loop advances the inner loop. If the outer loop must be affected, the code arranges for it explicitly, typically with a flag checked by the outer loop's condition or by a return from the surrounding function. The simple rule, break and continue act on the nearest loop, matches the simple, predictable philosophy of the language.
+
+A two-dimensional search shows the nesting. Finding the first occurrence of a value in a grid walks rows and columns, and the inner break ends the column scan while the outer search continues:
+
+    bool found = false;
+    u64 foundRow = 0;
+    u64 foundCol = 0;
+    for (u64 r = 0; r < rows && !found; r++)
+    {
+        for (u64 c = 0; c < cols; c++)
+        {
+            if (grid[r][c] == target)
+            {
+                foundRow = r;
+                foundCol = c;
+                found = true;
+                break;
+            }
+        }
+    }
+
+The inner break exits the column loop, and the outer loop's condition tests the found flag, so the whole search stops as soon as the target appears. The flag is the explicit way to carry a decision from the inner loop to the outer loop, and the pattern, a flag in the outer condition set by the inner body, is the standard idiom when a nested loop must stop together.
+
+4.14 Early Return
+
+The return statement exits the current function immediately, and it is the primary way a function ends early. Early return is the strategy of handling a special case by returning as soon as it is known, rather than threading every case through the body.
+
+    u64 find(char c)
+    {
+        for (u64 i = 0; i < self.len; i++)
+            if (self.ptr[i] == c) return i;
+        return self.len;
+    }
+
+This function returns the index of the first match, or a sentinel if there is no match. The return inside the loop exits the whole function at the moment the match is found, which is the early return strategy. Without it, the function would need a flag, a break, and an extra conditional after the loop. Early return keeps the happy path straight-line code and handles the found case at the point where it is discovered.
+
+Early return is the dominant style in the standard library. The search functions return as soon as they find their target. The validation functions return false as soon as they find a violation. The parsers return as soon as they reach a decision. The style makes the code read top to bottom: check a condition, and if the condition decides the outcome, return immediately. What remains after the checks is the main path.
+
+A validator shows the style in full, each check disposing of one failure mode:
+
+    bool isValidName(std.strView s)
+    {
+        if (s.len == 0) return false;
+        if (!isAlpha(s.ptr[0])) return false;
+        for (u64 i = 1; i < s.len; i++)
+            if (!isAlnum(s.ptr[i]) && s.ptr[i] != '_') return false;
+        return true;
+    }
+
+The discipline of early return is to keep the function's exit points legible. A function that returns in several places is fine as long as each return is at the point where the decision is made and the reason for the return is visible in the surrounding condition. Coral's functions are small, and each return corresponds to a condition in the text, so the exits are easy to trace.
+
+4.15 defer
+
+Coral provides the defer statement for guaranteed cleanup. A defer statement registers a piece of code to run when the current scope exits, and the code runs regardless of how the scope is exited: by reaching the end, by a return, or by a break.
+
+    void processFile()
+    {
+        File* f = openFile("data.txt");
+        defer closeFile(f);
+        // body; closeFile(f) runs when this function exits
+    }
+
+The defer registers closeFile(f) to run at the end of the function. No matter how the function exits, whether the body completes, returns early, or breaks out of a loop, the deferred call runs. This is Coral's answer to the resource cleanup problem, and it is the mechanism that makes cleanup guaranteed without a finally clause and without exceptions.
+
+The power of defer is that the cleanup is written next to the acquisition. The line that opens the file and the line that guarantees it is closed are adjacent. A reader can see the whole lifetime of the resource at a glance, instead of hunting for a cleanup block at the end of a function that may have a dozen paths. And when the function changes, when a new early return is added or a new branch is introduced, the deferred cleanup adapts automatically: the new path also runs the deferred call. The guarantee scales with the complexity of the function, which is exactly the direction that matters.
+
+Multiple defers in the same scope run in reverse order of registration. If the code defers A, then defers B, then defers C, the order of execution on exit is C, then B, then A. This is the correct order for resource lifetimes: the most recently acquired resource, the innermost, is released first. The stack discipline of defers matches the stack discipline of the resources themselves.
+
+The reverse order is what makes layered resources tear down correctly. A connection holds a socket, and the socket's buffer must be freed before the socket is closed, and the socket must be closed before the connection is released. Written in acquisition order, the defers release in exactly the reverse:
+
+    Connection* conn = connect(host, port);
+    defer releaseConnection(conn);
+    Socket* sock = conn.socket;
+    defer closeSocket(sock);
+    u8* buf = socketBuffer(sock);
+    defer freeBuffer(buf);
+
+The innermost acquisition, the buffer, is deferred last and therefore released first, and the outermost acquisition, the connection, is deferred first and released last. Each resource is released before the resource it depends on, because the reverse order of the defers is the reverse order of the acquisitions. The stack discipline is not an accident of implementation; it is the correct order for nested ownership, and the defers produce it automatically.
+
+Defer is the mechanism Coral uses in place of exception-based cleanup. In an exception language, cleanup relies on the unwinding machinery running destructors or finally blocks on the way out. Coral has no exceptions, so there is no unwinding, but defer provides the same guarantee through the language itself: the code runs on every exit of the scope, deterministically, in order, with no machinery hidden in the runtime. The guarantee is complete, and it is written where the resource is acquired.
+
+4.16 assert
+
+The assert statement is Coral's built-in runtime check. It takes a bool expression, evaluates it, and if the expression is false, the program fails with a diagnostic pointing at the assertion.
+
+    assert(i < self->len);
+    assert(self.ptr != null);
+    assert(factor != 0);
+
+The standard library uses assert pervasively as a contract check at the top of methods and in the middle of algorithms. The vector's access methods assert their index is in range. The priority queue asserts it is not popped while empty. The duration's division asserts its divisor is nonzero. Each assert states, in code, a fact the method relies on, and the assertion is checked at runtime so a violation is caught with a precise location rather than manifesting as a memory error.
+
+The role of assert is to catch programmer error, not to handle expected conditions. An assertion that fails is a bug in the program, and the assertion is the tripwire that catches it at the moment of violation, with the line number and condition in the diagnostic. Expected conditions, conditions that arise from user input or external events, are handled with the Result machinery, not with asserts. The distinction is the same one C programmers draw: assert for what must be true, Result for what might not be.
+
+The distinction is why an assert reads as a statement about the code, not about the world:
+
+    u64 divide(u64 a, u64 b)
+    {
+        assert(b != 0);        // "this is a bug if b is zero" — the caller broke the contract
+        return a / b;
+    }
+
+    std.Result<u64, i32> parseRatio(std.strView s)
+    {
+        if (s.len == 0) return std.Result<u64, i32>::err(-1);   // "this might happen" — handle it, don't assert
+        // ...
+    }
+
+4.17 Choosing the Right Loop
+
+The four loop forms cover different situations, and the choice among them is a matter of matching the loop to the shape of the work.
+
+Use while when the loop runs until a condition becomes false and the number of iterations is not known in advance. Searching, scanning, and traversing are while-loop work.
+
+Use for when the loop runs over a counted range of indices. Iterating a fixed number of times, walking a buffer by index, and building tables are for-loop work.
+
+Use the ranged for when iterating over the elements of a container and the elements matter more than the indices. Printing a collection, transforming each element, and searching elements are ranged-for work.
+
+Use loop when the loop is unbounded and its exit is decided entirely inside the body. Servers, event loops, and parsers that scan until a terminator are loop work.
+
+The standard library demonstrates the whole range. The string methods use for for indexed scans and while for boundary scans. The parsers use for (;;) for token loops and loop for their main scan. The collection methods use for for element walks and while for node chains. The variadic print functions use the ranged for for argument packs. Reading the standard library is reading a catalog of which loop fits which job.
+
+4.18 Loop Fusion and Unrolling
+
+Two loop concepts appear in compiler discussions and are worth understanding at a conceptual level, because they explain what the compiler does with your loops and why code is written the way it is.
+
+Loop unrolling is the compiler duplicating the loop body so that several iterations are handled per pass. Instead of running the body once per iteration with a loop branch each time, the unrolled loop runs several bodies in sequence with one branch per group. Unrolling reduces the number of loop overhead operations, the branch and counter updates, and it lets the processor see more independent work to overlap. The compiler decides whether and how much to unroll based on the loop's size and trip count. The programmer's part is to write loops that are simple and regular, which the compiler can then unroll safely. A loop that always looks the same, a counter from zero to a bound by one, is a loop the compiler can unroll.
+
+Loop fusion is the merging of two adjacent loops that iterate over the same range into a single loop. If two loops both walk the same array, fusing them walks the array once and does both passes' work per element. Fusion reduces the total number of iterations and improves locality. The compiler may fuse loops it can prove equivalent in range and independent in body, and the programmer's part is again regularity: two loops over the same bounds with no interactions between them are candidates for fusion.
+
+Neither unrolling nor fusion is something the programmer writes. They are compiler transformations, and they are mentioned here so that reading about optimization, and seeing optimized code, does not confuse. When the compiler generates native code from a Coral loop, it applies exactly these kinds of transformations where they are safe and profitable. The Coral code you write remains clear, and the compiler turns the clear form into the fast form. The principle is the one established throughout this book: write the loop that says what you mean, and let the compiler apply its machinery to the meaning.
+
+4.19 Error Handling as Control Flow
+
+Error handling is control flow, and Coral treats it as such. The way a language reports and handles failure determines how its programs are shaped, how they are read, and how they fail. Coral's answer was established in the first chapter: no exceptions. This section makes that answer concrete, and it describes the machinery Coral actually uses to handle failure: the Result type, the Option type, assertion, termination, and deferred cleanup.
+
+The philosophy bears repeating because it is the foundation of everything here. Exceptions are hidden control flow. When a call can throw, the call graph contains invisible paths: a failure can unwind arbitrarily far, bypassing intermediate functions, running destructors and finally blocks, and reporting the problem far from its cause. Coral rejects this, and it rejects the entire vocabulary of that model. There are no checked exceptions and no unchecked exceptions, because there are no exceptions at all. There is no stack unwinding, because there is nothing to unwind for. There is no try, no catch, no throw, and no finally, because those keywords exist to manage a control-flow mechanism Coral does not have.
+
+In place of exceptions, Coral has values. A function that can fail returns a value that says so, and the caller decides what to do with it. The failure is data, visible in the function's signature, checked by the type system, and handled at the point where the caller can act on it. This is the model of error handling as control flow: the flow of the program explicitly includes the failure paths, and nothing about them is hidden.
+
+4.20 The Result Type
+
+The Result type is Coral's primary error-handling type. It is a generic struct that holds either a success value or an error value, and nothing else.
+
+A Result is created in one of two states. A function that succeeds returns a Result in the ok state, carrying the success value. A function that fails returns a Result in the err state, carrying the error value. The type parameters name both: Result of T and E is a result whose success value has type T and whose error value has type E.
+
+    std.Result<std.File, i32> openFile(std.strView path);
+
+This signature says everything: the function may succeed with a File, or fail with an i32 error. The reader sees the failure mode in the return type, before reading a line of the implementation. This is the value of Result and the reason it replaces exceptions: the failure is part of the signature, not a footnote in the documentation.
+
+The Result type provides the two constructors, a function to create an ok result carrying a value, and a function to create an err result carrying an error. It provides inspection methods, a method to ask whether the result is ok and a method to ask whether it is an error. And it provides the extraction and chaining methods described in the coming sections. The type is deliberately small: it does one thing, represent an outcome, and the methods cover exactly the operations an outcome needs.
+
+The Result type works for any error type. A small program might use an integer code, a string message, or an enum describing the failure kinds. The error type is a type parameter, so the programmer chooses the error representation that fits the function. The standard library uses Result where a fallible operation must distinguish success from failure and carry a value in the success case.
+
+The caller's side shows why the signature is the contract. A function that opens a configuration file receives a Result and must handle both states before touching the value:
+
+    std.Result<Config, ParseError> result = loadConfig(path);
+    if (result.isOk())
+    {
+        Config cfg = result.unwrap();
+        applyConfig(cfg);
+    }
+    else
+    {
+        reportError(result.unwrapErr());
+    }
+
+The branch is the error handling, and it is visible control flow: the program checks the state, extracts the value on the success path, and handles the error on the failure path. There is no hidden path where the failure unwinds elsewhere; the caller sees both branches in the text and decides what each does. The Result makes the failure a first-class part of the function's behavior, and the caller's handling is a first-class part of the function's use.
+
+4.21 The Option Type
+
+The Option type is Coral's type for a value that may be absent. It is the type of "some value or no value," and it is the safe replacement for the null pointers and sentinel values that C uses for absence.
+
+An Option is created in one of two states. Some carries a value. None carries nothing. The type parameter names the value type: an Option of T holds either a T or nothing.
+
+    option<u64> findByte(char c);
+
+This signature says that the function may find a byte, returning its index, or may find nothing. The absence is typed. There is no sentinel value, no -1 meaning "not found," no null pointer to test. The absence is a state of the type, and the caller must handle both states before using the value.
+
+The distinction between Result and Option is the distinction between failure and absence. Result says the operation had an error; it did not complete as asked. Option says the operation completed, and the answer is that there is no value here. A file lookup fails with a Result; a search that finds nothing returns an Option. The two types are distinct because the two situations are distinct, and Coral does not collapse them.
+
+The Option type provides the two constructors, some and none, the inspection methods isSome and isNone, the extraction methods, and the chaining methods. The hash map's lookup returns an Option of the value, because the key either exists or does not, and the caller handles both possibilities through the Option's methods.
+
+4.22 Inspection and Extraction
+
+The first thing a caller does with a Result or an Option is ask what state it is in. The inspection methods answer that question directly.
+
+A Result provides isOk, which returns true when the result holds a success value, and isErr, which returns true when it holds an error. An Option provides isSome and isNone with the obvious meanings. These are the primary branching points: a function that receives a Result checks isOk, and handles the ok path and the error path.
+
+Extraction is the operation of getting the value out. The unwrap method returns the value when it is present, and it asserts the precondition rather than returning garbage: calling unwrap on an err result, or on a none option, triggers an assertion failure, because the call was a programming error. The unwrapOr method is the safe extraction: it returns the value when present, and a provided default when absent. The unwrapErr method of Result extracts the error value, asserting that the result is indeed an error.
+
+    std.File f = r.unwrapOr(defaultFile);
+
+The choice between unwrap and unwrapOr is the choice between "I know this is present" and "give me this if present, otherwise that." unwrap is for the cases where the presence is guaranteed by the surrounding logic, and its assertion makes the guarantee checked. unwrapOr is for the cases where absence has a reasonable default, and it makes the default explicit in the call. The distinction is the same distinction everywhere in Coral: what must be true is asserted, what might not be is handled.
+
+4.23 The okPtr and ptr Accessors
+
+For performance, both Result and Option provide pointer accessors that avoid copying the contained value.
+
+The okPtr method of Result returns a pointer to the success value when the result is ok, and null when it is an error. The errPtr method returns a pointer to the error value when the result is an error, and null when it is ok. The Option type provides ptr and constPtr with the same shape: a pointer to the value when present, null when absent.
+
+These accessors give callers a way to work with the contained value through a pointer, which matters when the value is large or when it must be modified in place. The pattern is the familiar one: check the state, and if the accessor returns a non-null pointer, use it; the null pointer is the absence, and the check against null is the state test. The accessors are the bridge between the typed absence of Option and Result and the pointer world of C, and they are used where the contained value must be touched through a pointer.
+
+4.24 Chaining: map, andThen, orElse
+
+The chaining methods are how a Result or an Option is transformed without manual branching. They are Coral's answer to the pattern of "do this, and if it succeeded do that," and they compose operations on a single value.
+
+The andThen method chains a fallible operation onto a Result. It takes a function that receives the contained value and returns a new Result. If the first result is ok, the function is applied and the result of the chain becomes the function's result; if the first result is an error, the function is skipped and the error carries through. This is the sequencing operation: run the first step, and only if it succeeded run the second.
+
+    r.andThen(nextStep);
+
+The orElse method handles the error path. It takes a function that receives the error and returns a new Result. If the first result is an error, the function is applied; if it is ok, the ok value carries through unchanged. This is the recovery operation: when the first step fails, run a step that handles the failure and produces a new result.
+
+The map methods transform the contained value. The Result type provides mapOk, which applies a function to the success value when the result is ok, and mapErr, which applies a function to the error value when the result is an error. The Option type provides map, applying a function to the value when present. These are the transformation operations: change the value while leaving the state alone.
+
+The chain methods compose, and composition is their purpose. A sequence of steps, each of which can fail, is written as a chain of andThen calls, one per step, and the chain reads top to bottom: if this succeeds, do that; if that succeeds, do the next. The error short-circuits the chain automatically, because an error skips the remaining andThen steps. The result is a program whose happy path is written as a linear chain and whose failure path is handled at the points where recovery makes sense. This is the control flow of error handling, expressed as a sequence of value transformations instead of a tangle of nested conditionals.
+
+The chain methods work on the value in place, transforming the contained value and replacing the result with each step's outcome. The chain is a pipeline of transformations, each step taking the outcome of the last.
+
+A full pipeline shows the composition. Loading a user record means opening a file, reading a line, and parsing an identifier, each of which can fail, and the three steps chain into one Result:
+
+    std.Result<User, Err> loadUser(std.strView path)
+    {
+        std.Result<std.File, Err> f = openFile(path);
+        std.Result<std.strView, Err> line = f.mapOk(readLine);
+        std.Result<u64, Err> id = line.mapOk(parseId);
+        std.Result<User, Err> user = id.mapOk(makeUser);
+        return user;
+    }
+
+Each step transforms the contained value while the error state carries through untouched. If openFile fails, the remaining mapOk calls see an error and skip their functions, and the error survives to the end. The happy path is a linear chain, one transformation per line, and the failure path is the same chain short-circuited. The error flows, the values transform, and the reader sees the whole sequence of operations and the point where the error would enter, all in the function's lines.
+
+4.25 Abort and Termination
+
+The model so far has been recoverable failure: a Result or an Option that the caller can inspect and handle. Coral also has a model for failure that cannot be recovered, and it is deliberate and explicit.
+
+The assert statement, covered earlier in this chapter, is the primary abort mechanism. An assertion failure terminates the program with a diagnostic at the failure site. The unwrap methods use assertion internally: unwrapping a result that is an error, or an option that is none, asserts the precondition and terminates. This is the abort path, and it is for the cases where continuing is impossible or wrong: a programming error, a violated invariant, a condition that must never occur.
+
+The exit function terminates the program with an exit code, immediately and without returning. It is the deliberate end: a program that decides it is done, or that a fatal condition requires stopping, calls exit with a status. The process module provides this, and the startup machinery of the language uses the same termination path when the program ends. There is no unwinding on this path; the program stops where exit is called.
+
+The distinction between recoverable and unrecoverable is drawn by the types. A Result or an Option is recoverable: the function returned a value, and the caller can handle both states. An assertion failure or a deliberate exit is unrecoverable: the program stops. The language makes the boundary visible because it is a real boundary. A function that can fail returns a Result, and the failure is handled. A condition that must never happen is asserted, and the assertion terminates. Nothing is ambiguous, because the two mechanisms are distinct and their roles are fixed.
+
+4.26 Resource Cleanup with Errors
+
+The combination of Result and defer is how Coral handles the hardest part of error handling: making sure resources are released when an error path exits.
+
+The defer statement, covered earlier in this chapter, registers cleanup that runs on every exit of the scope, including the error exits. The pattern is to acquire a resource, defer its release, and then operate on it, with every error path returning through the deferred cleanup:
+
+    std.Result<Buffer, i32> readFile()
+    {
+        std.File f = fileOpen(std.strView::fromCstr("data.txt"), std.strView::fromCstr("r"));
+        defer fileClose(f);
+        Buffer b = Buffer::new();
+        defer b.dispose();
+        // ... read into b, returning ok(b) or an error
+        // on every path, f is closed and b is disposed
+    }
+
+The defers guarantee that the file is closed and the buffer is disposed no matter how the function exits, including the error returns. The cleanup is written at the point of acquisition, and every path, success or error, runs it. This is Coral's replacement for the finally clause and for exception-based unwinding: the guarantee is complete, and it is written in the code, not hidden in a runtime.
+
+The smart pointer types extend the same idea to ownership. A smart pointer owns the object it points to and releases it when the pointer is destroyed. A shared pointer tracks multiple owners and releases the object when the last owner is gone. These types make the release automatic at the end of the pointer's scope, so an error path that exits a scope releases the owned objects without an explicit defer. The ownership is in the type, and the release is guaranteed.
+
+Coral has no destructors in the C++ sense and no RAII as a language-forced contract on every type. What it has is the defer statement for explicit guaranteed cleanup, and smart pointer types for ownership-based release. Both are explicit, both are visible in the code, and neither depends on a hidden unwinding mechanism. The combination covers the resource cleanup problem completely, without the machinery Coral rejected.
+
+4.27 Reasoning About Loops: Invariants
+
+A loop that runs is a loop that can be trusted, and the way to make a loop trustworthy is the loop invariant: a property that is true when the loop begins, true after every iteration, and therefore true when the loop ends. The invariant is the loop's contract, and reading and writing loops through their invariants is how a programmer knows the loop does what it claims.
+
+Consider a running sum:
+
+    u64 total = 0;
+    for (u64 i = 0; i < n; i++)
+        total += data[i];
+
+The invariant is that total holds the sum of the elements before the current index. Before the loop, total is zero, which is the sum of the empty range, so the invariant holds. Each iteration adds the next element, so the invariant, "total is the sum of the first i elements," holds again with i advanced. When i reaches n, the loop ends, and the invariant says total is the sum of all n elements, which is exactly the loop's job. The loop is correct, and the invariant is the proof.
+
+The invariant also guides the code's shape. When a loop must maintain two facts, the loop header and body are written to keep both facts true together. The search loop's invariant is that the target has not appeared in the part already scanned; the swap loop's invariant is that the range before i and after j is already reversed. Writing the invariant first, then the loop, produces a loop whose body preserves the invariant and whose condition terminates the loop, and the two requirements are the whole specification of the loop.
+
+Consider a loop that is easy to get wrong, the binary search. Its invariant must be stated before it makes sense:
+
+    // invariant: target, if present, lies in [lo, hi)
+    while (lo < hi)
+    {
+        u64 mid = lo + (hi - lo) / 2;
+        if (arr[mid] < target) lo = mid + 1;
+        else hi = mid;
+    }
+
+The invariant, "the answer is in [lo, hi)," is preserved by every branch: taking lo up past a smaller element keeps hi above it, and pulling hi down to an equal or greater element keeps lo below it. When the loop ends, lo is hi, and the invariant pins the answer exactly there. The loop terminates because the interval shrinks every pass. Half the difficulty of binary search is that the invariant must be written down; the other half is that it then writes the loop for you.
+
+The invariant is also what makes the running maximum trivial to trust. The loop keeps one value, and the invariant states its meaning across the whole run:
+
+    u64 best = data[0];
+    for (u64 i = 1; i < n; i++)
+        if (data[i] > best) best = data[i];
+    // invariant: best is the largest of data[0..i)
+
+Before the loop, best is data[0], the largest of the one-element range, and the invariant holds. Each step compares the next element against best and keeps the larger, so the invariant holds again with i advanced. When i reaches n, best is the largest of the whole array — the loop's job, proved by the property it maintained at every step. The same reading applies to every loop in the standard library, whether its invariant is written down in a comment or carried silently by the code.
+
+The invariant is what distinguishes a loop from a guessing game. Without it, a loop is trusted because it seems to work; with it, a loop is trusted because its property is stated and preserved. The standard library's loops all have invariants, even when unstated: the vector's scan maintains an index in range, the heap's sift maintains the heap property, the tree walk maintains the path from the root. Reading the loop against its invariant is reading the loop correctly, and the habit is the difference between a program that runs and a program that is right.
+
+4.28 A Worked Example: The Command Dispatcher
+
+The match-style switch is at its best where the types do the dispatching. A command dispatcher receives a command, an enum, and selects the action for each kind. The enum names the possibilities, the switch matches them, and the compiler checks the coverage.
+
+    pub enum Command
+    {
+        Move,
+        Attack,
+        Heal,
+        Quit
+    }
+
+    void runCommand(Command cmd)
+    {
+        switch (cmd)
+        {
+            Move =>
+                moveUnit(currentUnit),
+            Attack =>
+                attackTarget(currentTarget),
+            Heal =>
+                healUnit(currentUnit),
+            Quit =>
+                gameOver = true
+        }
+    }
+
+The switch matches the enum's variants directly, and the compiler verifies that every variant is handled: no case is missing, and no fallthrough silently runs the wrong action. Adding a new command to the enum makes the compiler demand its case, because the exhaustiveness check refuses to leave a variant unhandled. The dispatcher is total by construction, and the type system enforces the totality. The decision is a table of the type's variants, and the type is the table's index.
+
+The same dispatch, written as an if chain, would compare cmd against each variant and lose the totality guarantee. The switch is the form that matches the type's structure, and the exhaustiveness check is the form's reward: the compiler turns "handle every case" into a fact the program cannot violate.
+
+4.29 A Worked Example: The Tokenizer
+
+The tokenizer shows the control-flow features working together. It scans a character buffer, classifies each token by its first character, skips separators, and stops at the end of input. The loop shape is the infinite loop with an internal exit, the state machine is an enum with a switch, and the cleanup is a defer.
+
+    pub enum TokKind
+    {
+        Ident,
+        Number,
+        Symbol
+    }
+
+    pub struct Token
+    {
+        TokKind kind;
+        u64 start;
+        u64 len;
+    }
+
+    void tokenize(const char* src, u64 srcLen, void(Token) emit)
+    {
+        u64 i = 0;
+        loop
+        {
+            while (i < srcLen && isSpace(src[i])) i++;
+            if (i >= srcLen) break;
+            u64 start = i;
+            char c = src[i];
+            if (isDigit(c))
+            {
+                while (i < srcLen && isDigit(src[i])) i++;
+                emit(Token{ Number, start, i - start });
+            }
+            else if (isAlpha(c))
+            {
+                while (i < srcLen && isAlpha(src[i])) i++;
+                emit(Token{ Ident, start, i - start });
+            }
+            else
+            {
+                i++;
+                emit(Token{ Symbol, start, 1 });
+            }
+        }
+    }
+
+The outer loop is unbounded, and its break is the end-of-input exit. The inner while loops consume whole tokens, advancing i past each character class. The if chain classifies each token by its first character, and the emit call hands each token to the caller. The loop's invariant is that everything before i has been tokenized, and the loop preserves it by advancing i past each token it emits. The tokenizer is a small program, and its control flow is a catalog of the chapter's constructs: loop, while, break, if chain, and the reading of a position through the code.
+
+4.30 A Worked Example: Parsing with Defer and Result
+
+The cleanest demonstration of the error model is a function that acquires a resource, does fallible work, and must release the resource on every path. The pattern pairs defer with Result, and the function reads as a straight-line program whose exits are all covered.
+
+    std.Result<u64, ParseErr> sumFile(std.strView path)
+    {
+        std.File f = fileOpen(path, std.strView::fromCstr("r"));
+        defer fileClose(f);
+        u64 total = 0;
+        u8 buf[256];
+        i64 n = 0;
+        while ((n = fileRead(f, buf, 256)) > 0)
+        {
+            for (i64 i = 0; i < n; i++)
+            {
+                if (!isDigit(buf[i]))
+                {
+                    if (buf[i] == ',') continue;
+                    return std.Result<u64, ParseErr>::err(ParseErr.InvalidChar);
+                }
+                total = total * 10 + (u64)(buf[i] - '0');
+            }
+        }
+        return std.Result<u64, ParseErr>::ok(total);
+    }
+
+The file is opened and immediately protected by defer, so every return, the error return inside the loop and the success return at the end, runs fileClose on the way out. The parse logic handles each character: digits accumulate into the total, commas are skipped, and any other character is an error returned immediately. The error return is the failure path, the deferred close runs on it, and the function's contract, sum the numbers or report an invalid character, is stated by its Result type. The error handling is written where the failure is detected, and the cleanup is written where the resource is acquired, and neither depends on machinery outside the code.
+
+4.31 Control Flow and the Machine
+
+Control flow is the part of a program that maps most directly to the hardware, and understanding the mapping explains why Coral's control flow is shaped as it is. A processor does not understand if, while, or switch. It executes instructions in sequence, and it has one way to change that sequence: the branch instruction, a jump taken or not taken based on a condition.
+
+A Coral if statement compiles to a comparison and a conditional branch: compute the condition, compare, and jump to the else block if the comparison is false. A while loop compiles to a comparison at the top, a body, and a branch back to the comparison. A for loop is a while loop with the initialization, condition, and step arranged in the order the language specifies. A switch compiles to a series of comparisons, or to a jump table when the cases are dense enough to index directly. Every construct in this chapter is a shape built from comparisons and branches, and the processor executes the shape as a sequence of jumps.
+
+The mapping is why the C model of control flow is the right model for Coral. The language's constructs are exactly the constructs that compile to straight-line code and branches, with no hidden machinery between the source and the instructions. The conditions are comparisons, the loops are branches, and the cost of a decision is the cost of a comparison and a jump, visible in the source as the condition. When a program's hot loop is a while loop over a buffer, the compiled program is a tight sequence of loads, compares, and branches, and the loop's shape in the source is the loop's shape in the machine.
+
+The modern additions follow the same rule. The ranged for compiles to the container's iterator walk, which is a loop over the container's natural layout. The match-style switch compiles to a sequence of comparisons over the enum's variants, or to a jump table when the compiler can index them. The defer compiles to the cleanup instructions placed at each exit point, duplicated where the compiler must run them on every path. Each addition is a convenience in the source and plain branches in the machine, and the machine's simplicity is the source's trustworthiness.
+
+4.32 Control Flow and the Type-First Principle
+
+The control flow of Coral is the control flow of C, and that is the point. The conditions are bools, the loops are the C loops, the break and continue are the C statements, and a C programmer reading Coral control flow reads it correctly on sight. The additions, the ranged for, defer, and the match-style switch, are the places where Coral modernizes the model without breaking it.
+
+The additions are all type-driven, which is why they fit the language. The ranged for is defined by the iterator protocol, which is defined by types. The match-style switch is defined by patterns, which are built from types, and its exhaustiveness checking is the type system at work. The conditions are bools, enforced by the type system. Control flow in Coral is not a separate machinery bolted onto the type system; it is the type system, directing execution. The philosophy of the earlier chapters, types first, enforced by the compiler, extends to the very structure of the program's decisions.
+
+Chapter 4 Summary
+
+Coral's control flow is C's control flow, with conditions that must be real bools and no truthiness.
+
+The if, else if, and else statements form ordered decision chains, and short-circuit conditions make bound tests and pointer tests safe to write inline.
+
+The classic switch dispatches on one value with constant cases and a default, without accidental fallthrough.
+
+The match-style switch pairs patterns with results using a fat arrow, uses the underscore as the wildcard, produces a value as an expression, and checks exhaustiveness over enums.
+
+Pattern matching is built from the type system: literals, constants, enum variants, barred lists, and the underscore, and it is how a value's type selects its behavior.
+
+The while loop tests before each iteration and may run zero times. The for loop combines initialization, condition, and step. The loop keyword is the explicit infinite loop.
+
+The ranged for iterates over container elements directly, and it is defined by the iterator protocol, which each container implements for its own storage.
+
+Iterators hold positions, so modifying a container's structure during iteration invalidates them. Collect results while iterating; modify after.
+
+Break exits the innermost loop, continue skips to the next iteration, and both act only on the nearest loop.
+
+Early return exits a function at the moment a decision is made, keeping the happy path straight-line code.
+
+The defer statement registers cleanup to run when a scope exits, regardless of how it exits, in reverse order of registration, and it is Coral's guarantee of resource cleanup without exceptions.
+
+The assert statement is the runtime tripwire for what must be true, distinct from Result, which handles what might not be.
+
+Choose the loop by the shape of the work: while for scans, for for counted ranges, ranged for for elements, loop for unbounded servers and parsers.
+
+Loop unrolling and fusion are compiler transformations on regular loops; the programmer writes clear loops and the compiler makes them fast.
+
+A loop invariant is a property true before the loop, after every iteration, and at the end, and reading a loop against its invariant is how a loop is known to be correct.
+
+The match-style switch is the dispatcher for enums: the compiler checks that every variant is handled, so adding a variant forces its case.
+
+The tokenizer and the parser show the constructs together: loop with an internal break for scanning, while loops for consuming tokens, the if chain for classification, and defer paired with Result so every error path releases its resources.
+
+Control flow maps to the machine as comparisons and branches, which is why the C model of control flow is Coral's model: the source constructs compile to straight-line code and jumps with nothing hidden between.
+
+Control flow in Coral is the type system directing execution, and the modern additions, ranged for, match-style switch, and defer, are type-driven without breaking the C model.
+
+

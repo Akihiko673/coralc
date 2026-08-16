@@ -1,0 +1,5 @@
+i32 main()
+{
+    u64 n = strlen("hello);
+    return 0;
+}

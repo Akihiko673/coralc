@@ -1,0 +1,164 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+
+pub struct NoretBare
+{
+    u64 exitCode;
+    char* out;
+    u32 outLen;
+    u32 outCap;
+
+    NoretBare new(u64 exitCode)
+    {
+        NoretBare n;
+        n.exitCode = exitCode;
+        n.out = null;
+        n.outLen = 0;
+        n.outCap = 0;
+        return n;
+    }
+
+    void ensureCap(NoretBare*, u32 needed)
+    {
+        if (self.outLen + needed <= self.outCap) return;
+        u32 newCap = self.outCap ? self.outCap * 2 : 64;
+        while (self.outLen + needed > newCap) newCap *= 2;
+        char* newOut = mman.alloc<char>(newCap);
+        if (self.out)
+        {
+            mman.copy<char>(newOut, self.out, self.outLen);
+            mman.dealloc<char>(self.out);
+        }
+        self.out = newOut;
+        self.outCap = newCap;
+    }
+
+    void c(NoretBare*, char ch)
+    {
+        self.ensureCap(1);
+        self.out[self.outLen++] = ch;
+    }
+
+    void s(NoretBare*, const char* str)
+    {
+        u32 len = 0;
+        while (str[len]) len++;
+        self.ensureCap(len);
+        for (u32 i = 0; i < len; i++)
+            self.out[self.outLen++] = str[i];
+    }
+
+    const char* getString(NoretBare*)
+    {
+        self.ensureCap(1);
+        self.out[self.outLen] = 0;
+        return self.out;
+    }
+
+    void clear(NoretBare*)
+    {
+        self.outLen = 0;
+    }
+
+    void destroy(NoretBare*)
+    {
+        if (self.out) mman.dealloc<char>(self.out);
+    }
+
+    void emitHalt(NoretBare*, const char* arch)
+    {
+        if (bareArchMatch(arch, "x86_64") || bareArchMatch(arch, "x86") || bareArchMatch(arch, "x86_32"))
+        {
+            self.s("\tcli");
+            self.c('\n');
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\thlt");
+            self.c('\n');
+            self.s("\tjmp .halt");
+            self.c('\n');
+        }
+        else if (bareArchMatch(arch, "arm64"))
+        {
+            self.s("\tmsr daifset, #2");
+            self.c('\n');
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\twfi");
+            self.c('\n');
+            self.s("\tb .halt");
+            self.c('\n');
+        }
+        else if (bareArchMatch(arch, "arm"))
+        {
+            self.s("\tcpsid i");
+            self.c('\n');
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\twfi");
+            self.c('\n');
+            self.s("\tb .halt");
+            self.c('\n');
+        }
+        else if (bareArchMatch(arch, "riscv64"))
+        {
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\twfi");
+            self.c('\n');
+            self.s("\tj .halt");
+            self.c('\n');
+        }
+        else if (bareArchMatch(arch, "ppc64") || bareArchMatch(arch, "ppc"))
+        {
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\tb .halt");
+            self.c('\n');
+        }
+        else if (bareArchMatch(arch, "mips64") || bareArchMatch(arch, "mips"))
+        {
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\tj .halt");
+            self.c('\n');
+            self.s("\tnop");
+            self.c('\n');
+        }
+        else if (bareArchMatch(arch, "sparcv9") || bareArchMatch(arch, "sparc64"))
+        {
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\tba .halt");
+            self.c('\n');
+            self.s("\tnop");
+            self.c('\n');
+        }
+        else
+        {
+            self.s("\tcli");
+            self.c('\n');
+            self.s(".halt:");
+            self.c('\n');
+            self.s("\thlt");
+            self.c('\n');
+            self.s("\tjmp .halt");
+            self.c('\n');
+        }
+    }
+}
+
+static bool bareArchMatch(const char* arch, const char* known)
+{
+    if (!arch || !known) return false;
+    u32 i = 0;
+    while (arch[i] && known[i])
+    {
+        char a = arch[i];
+        char k = known[i];
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (a != k) return false;
+        i++;
+    }
+    return arch[i] == 0 && known[i] == 0;
+}

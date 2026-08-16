@@ -1,0 +1,558 @@
+@[no_warn_unsafe]
+
+mod libc = import("std/platform/libc.crl");
+mod mman = import("std/memory/mman.crl");
+mod vec = import("std/collections/vec.crl");
+mod ch = import("std/core/char.crl");
+
+pub struct ByteView
+{
+    const u8* ptr;
+    u64 len;
+
+    static ByteView fromParts(const u8* ptr, u64 len)
+    {
+        ByteView bv;
+        bv.ptr = ptr;
+        bv.len = len;
+        return bv;
+    }
+
+    static ByteView fromStrView(strView sv)
+    {
+        ByteView bv;
+        bv.ptr = (const u8*)sv.ptr;
+        bv.len = sv.len;
+        return bv;
+    }
+
+    static ByteView empty()
+    {
+        ByteView bv;
+        bv.ptr = null;
+        bv.len = 0;
+        return bv;
+    }
+}
+
+pub struct strView
+{
+    const char* ptr;
+    u64 len;
+
+    static strView fromCstr(const char* cstr)
+    {
+        strView sv;
+        sv.ptr = cstr;
+        sv.len = libc.strlen(cstr);
+        return sv;
+    }
+
+    static strView fromParts(const char* ptr, u64 len)
+    {
+        strView sv;
+        sv.ptr = ptr;
+        sv.len = len;
+        return sv;
+    }
+
+    static strView empty()
+    {
+        strView sv;
+        sv.ptr = (const char*)"";
+        sv.len = 0;
+        return sv;
+    }
+
+    const u8* asU8() { return (const u8*)self->ptr; }
+
+    char at(u64 idx)
+    {
+        assert(idx < self->len);
+        return self->ptr[idx];
+    }
+
+    bool isEmpty() { return self->len == 0; }
+
+    bool equals(strView other)
+    {
+        if (self->len != other.len) return false;
+        return libc.memcmp((const void*)self->ptr, (const void*)other.ptr, self->len) == 0;
+    }
+
+    i32 compare(strView other)
+    {
+        u64 minLen = self->len < other.len ? self->len : other.len;
+        i32 r = libc.memcmp((const void*)self->ptr, (const void*)other.ptr, minLen);
+        if (r != 0) return r;
+        if (self->len < other.len) return -1;
+        if (self->len > other.len) return 1;
+        return 0;
+    }
+
+    bool startsWith(strView prefix)
+    {
+        if (prefix.len > self->len) return false;
+        return libc.memcmp((const void*)self->ptr, (const void*)prefix.ptr, prefix.len) == 0;
+    }
+
+    bool endsWith(strView suffix)
+    {
+        if (suffix.len > self->len) return false;
+        return libc.memcmp((const void*)(self->ptr + (self->len - suffix.len)),
+                      (const void*)suffix.ptr, suffix.len) == 0;
+    }
+
+    bool containsView(strView needle)
+    {
+        return self->findView(needle) < self->len;
+    }
+
+    bool containsByte(char c)
+    {
+        return self->findByte(c) < self->len;
+    }
+
+    u64 findByte(char c)
+    {
+        for (u64 i = 0; i < self->len; i++)
+            if (self->ptr[i] == c) return i;
+        return self->len;
+    }
+
+    u64 rfindByte(char c)
+    {
+        u64 i = self->len;
+        while (i > 0)
+        {
+            i--;
+            if (self->ptr[i] == c) return i;
+        }
+        return self->len;
+    }
+
+    u64 findView(strView needle)
+    {
+        if (needle.len == 0) return 0;
+        if (needle.len > self->len) return self->len;
+        for (u64 i = 0; i <= self->len - needle.len; i++)
+        {
+            if (libc.memcmp((const void*)(self->ptr + i), (const void*)needle.ptr, needle.len) == 0) return i;
+        }
+        return self->len;
+    }
+
+    strView slice(u64 start, u64 end)
+    {
+        assert(start <= end);
+        assert(end <= self->len);
+        return strView::fromParts(self->ptr + start, end - start);
+    }
+
+    strView trimStart()
+    {
+        u64 i = 0;
+        while (i < self->len && (self->ptr[i] == ' ' ||
+                                 self->ptr[i] == '\t' ||
+                                 self->ptr[i] == '\n' ||
+                                 self->ptr[i] == '\r')) i++;
+        return strView::fromParts(self->ptr + i, self->len - i);
+    }
+
+    strView trimEnd()
+    {
+        u64 e = self->len;
+        while (e > 0 && (self->ptr[e-1] == ' ' ||
+                          self->ptr[e-1] == '\t' ||
+                          self->ptr[e-1] == '\n' ||
+                          self->ptr[e-1] == '\r')) e--;
+        return strView::fromParts(self->ptr, e);
+    }
+
+    strView trim()
+    {
+        strView t = self->trimStart();
+        return t.trimEnd();
+    }
+
+    bool isAsciiDigit()
+    {
+        for (u64 i = 0; i < self->len; i++)
+        {
+            char c = self->ptr[i];
+            if (!ch.isDigit(c)) return false;
+        }
+        return self->len > 0;
+    }
+
+    bool isAsciiAlpha()
+    {
+        for (u64 i = 0; i < self->len; i++)
+        {
+            char c = self->ptr[i];
+            if (!ch.isAlpha(c)) return false;
+        }
+        return self->len > 0;
+    }
+
+    bool isAsciiAlnum()
+    {
+        for (u64 i = 0; i < self->len; i++)
+        {
+            char c = self->ptr[i];
+            if (!ch.isAlnum(c)) return false;
+        }
+        return self->len > 0;
+    }
+}
+
+pub struct String
+{
+    char* ptr;
+    u64 len;
+    u64 cap;
+
+    static String new()
+    {
+        String s;
+        s.ptr = (char*)mman.alloc<u8>(16 + 1);
+        s.ptr[0] = 0;
+        s.len = 0;
+        s.cap = 16;
+        return s;
+    }
+
+    static String withCap(u64 cap)
+    {
+        u64 c = cap > 7 ? cap : 7;
+        String s;
+        s.ptr = (char*)mman.alloc<u8>(c + 1);
+        s.ptr[0] = 0;
+        s.len = 0;
+        s.cap = c;
+        return s;
+    }
+
+    static String fromView(strView sv)
+    {
+        String s = String::withCap(sv.len);
+        libc.memcpy((void*)s.ptr, (const void*)sv.ptr, sv.len);
+        s.ptr[sv.len] = 0;
+        s.len = sv.len;
+        return s;
+    }
+
+    static String fromCstr(const char* cstr)
+    {
+        return String::fromView(strView::fromCstr(cstr));
+    }
+
+    String clone()
+    {
+        return String::fromView(self->asView());
+    }
+
+    void free()
+    {
+        mman.dealloc<u8>((u8*)self.ptr);
+        self.ptr = null;
+        self.len = 0;
+        self.cap = 0;
+    }
+
+    void _ensure(u64 extra)
+    {
+        if (self.len + extra <= self.cap) return;
+        u64 nc = self.cap * 2;
+        if (nc < self.len + extra) nc = self.len + extra;
+        self.ptr = (char*)mman.realloc<u8>((u8*)self.ptr, nc + 1);
+        self.cap = nc;
+    }
+
+    strView asView() { return strView::fromParts(self->ptr, self->len); }
+    const char* asCstr() { return self->ptr; }
+    const u8* asU8() { return (const u8*)self->ptr; }
+
+    void pushChar(char c)
+    {
+        self._ensure(1);
+        self.ptr[self.len++] = c;
+        self.ptr[self.len] = 0;
+    }
+
+    void pushByte(u8 b)
+    {
+        self._ensure(1);
+        self.ptr[self.len++] = (char)b;
+        self.ptr[self.len] = 0;
+    }
+
+    void appendView(strView sv)
+    {
+        self.pushView(sv);
+    }
+
+    void pushView(strView sv)
+    {
+        bool selfRef = sv.ptr >= self.ptr && (u64)(sv.ptr - self.ptr) <= self.len;
+        self._ensure(sv.len);
+        if (selfRef)
+        {
+            u64 off = (u64)(sv.ptr - self.ptr);
+            libc.memmove((void*)(self.ptr + self.len), (const void*)(self.ptr + off), sv.len);
+        }
+        else
+            libc.memcpy((void*)(self.ptr + self.len), (const void*)sv.ptr, sv.len);
+        self.len += sv.len;
+        self.ptr[self.len] = 0;
+    }
+
+    void pushStr(const String* other)
+    {
+        self.pushView(other->asView());
+    }
+
+    void pushCstr(const char* cstr)
+    {
+        self.pushView(strView::fromCstr(cstr));
+    }
+
+    void pushRepeat(char c, u64 n)
+    {
+        self._ensure(n);
+        libc.memset((void*)(self.ptr + self.len), (i32)(u8)c, n);
+        self.len += n;
+        self.ptr[self.len] = 0;
+    }
+
+    void clear()
+    {
+        self.len = 0;
+        self.ptr[0] = 0;
+    }
+
+    void shrinkToFit()
+    {
+        self.ptr = (char*)mman.realloc<u8>((u8*)self.ptr, self.len + 1);
+        self.cap = self.len;
+    }
+
+    void truncate(u64 newLen)
+    {
+        if (newLen >= self.len) return;
+        self.len = newLen;
+        self.ptr[self.len] = 0;
+    }
+
+    void insertView(u64 idx, strView sv)
+    {
+        assert(idx <= self.len);
+        self._ensure(sv.len);
+        libc.memmove((void*)(self.ptr + idx + sv.len), (const void*)(self.ptr + idx), self.len - idx + 1);
+        if (sv.ptr >= self.ptr && (u64)(sv.ptr - self.ptr) <= self.len)
+        {
+            u64 off = (u64)(sv.ptr - self.ptr);
+            const u8* src = self.ptr + off;
+            if (off >= idx) src = self.ptr + off + sv.len;
+            libc.memmove((void*)(self.ptr + idx), (const void*)src, sv.len);
+        }
+        else
+            libc.memcpy((void*)(self.ptr + idx), (const void*)sv.ptr, sv.len);
+        self.len += sv.len;
+    }
+
+    void removeRange(u64 start, u64 end)
+    {
+        assert(start <= end);
+        assert(end <= self.len);
+        u64 tail = self.len - end;
+        libc.memmove((void*)(self.ptr + start), (const void*)(self.ptr + end), tail + 1);
+        self.len -= (end - start);
+    }
+
+    void replaceAll(strView needle, strView replacement)
+    {
+        if (needle.len == 0) return;
+        String result = String::new();
+        u64 i = 0;
+        while (i <= self.len)
+        {
+            strView rest = strView::fromParts(self.ptr + i, self.len - i);
+            u64 pos = rest.findView(needle);
+            if (pos == rest.len)
+            {
+                result.pushView(rest);
+                break;
+            }
+            result.pushView(strView::fromParts(rest.ptr, pos));
+            result.pushView(replacement);
+            i += pos + needle.len;
+        }
+        self.free();
+        *self = result;
+    }
+
+    void toUpper()
+    {
+        for (u64 i = 0; i < self.len; i++)
+            self.ptr[i] = ch.toUpper(self.ptr[i]);
+    }
+
+    void toLower()
+    {
+        for (u64 i = 0; i < self.len; i++)
+            self.ptr[i] = ch.toLower(self.ptr[i]);
+    }
+
+    void reverse()
+    {
+        u64 lo = 0;
+        u64 hi = self.len;
+        while (lo < hi)
+        {
+            hi--;
+            char t = self.ptr[lo];
+            self.ptr[lo++] = self.ptr[hi];
+            self.ptr[hi] = t;
+        }
+    }
+
+    char at(u64 idx)
+    {
+        assert(idx < self->len);
+        return self->ptr[idx];
+    }
+
+    bool isEmpty() { return self->len == 0; }
+
+    bool equals(const String* other)
+    {
+        strView sv = self->asView();
+        return sv.equals(other->asView());
+    }
+
+    bool equalsView(strView sv)
+    {
+        return self->asView().equals(sv);
+    }
+
+    i32 compare(const String* other)
+    {
+        strView sv = self->asView();
+        return sv.compare(other->asView());
+    }
+
+    u64 findChar(char c)
+    {
+        return self->asView().findByte(c);
+    }
+
+    u64 rfindChar(char c)
+    {
+        return self->asView().rfindByte(c);
+    }
+
+    u64 findView(strView needle)
+    {
+        return self->asView().findView(needle);
+    }
+
+    bool startsWith(strView prefix)
+    {
+        return self->asView().startsWith(prefix);
+    }
+
+    bool endsWith(strView suffix)
+    {
+        return self->asView().endsWith(suffix);
+    }
+
+    bool containsView(strView needle)
+    {
+        return self->asView().containsView(needle);
+    }
+
+    String trim()
+    {
+        strView tv = self->asView();
+        return String::fromView(tv.trim());
+    }
+
+    String trimStart()
+    {
+        strView tv = self->asView();
+        return String::fromView(tv.trimStart());
+    }
+
+    String trimEnd()
+    {
+        strView tv = self->asView();
+        return String::fromView(tv.trimEnd());
+    }
+
+    String substr(u64 start, u64 end)
+    {
+        assert(start <= end);
+        assert(end <= self->len);
+        return String::fromView(strView::fromParts(self->ptr + start, end - start));
+    }
+
+    vec.vec<strView> splitByte(char delim)
+    {
+        vec.vec<strView> parts = vec.vec<strView>::new();
+        u64 start = 0;
+        for (u64 i = 0; i <= self->len; i++)
+        {
+            if (i == self->len || self->ptr[i] == delim)
+            {
+                parts.push(strView::fromParts(self->ptr + start, i - start));
+                start = i + 1;
+            }
+        }
+        return parts;
+    }
+
+    String repeat(u64 n)
+    {
+        String r = String::withCap(self->len * n);
+        for (u64 i = 0; i < n; i++) r.pushStr(self);
+        return r;
+    }
+
+    static String join(strView sep, const vec.vec<strView>* parts)
+    {
+        String r = String::new();
+        for (u64 i = 0; i < parts->len; i++)
+        {
+            if (i > 0) r.pushView(sep);
+            r.pushView(*parts->atConst(parts, i));
+        }
+        return r;
+    }
+
+    String padLeft(u64 totalLen, char padChar)
+    {
+        if (self->len >= totalLen) return self->clone();
+        u64 pad = totalLen - self->len;
+        String r = String::withCap(totalLen);
+        r.pushRepeat(padChar, pad);
+        r.pushStr(self);
+        return r;
+    }
+
+    String padRight(u64 totalLen, char padChar)
+    {
+        if (self->len >= totalLen) return self->clone();
+        String r = self->clone();
+        r.pushRepeat(padChar, totalLen - self->len);
+        return r;
+    }
+
+    u64 countChar(char c)
+    {
+        u64 n = 0;
+        for (u64 i = 0; i < self->len; i++)
+            if (self->ptr[i] == c) n++;
+        return n;
+    }
+}

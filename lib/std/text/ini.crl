@@ -1,0 +1,163 @@
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod hashmap = import("std/collections/hashmap.crl");
+mod strutil = import("std/text/strutil.crl");
+mod option = import("std/data/option.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct iniSection
+{
+    hashmap.hashmap<string.String, string.String> entries;
+
+    iniSection new()
+    {
+        iniSection s;
+        s.entries = hashmap.hashmap<string.String, string.String>::new(hashString, eq);
+        return s;
+    }
+
+    void dispose()
+    {
+        self.entries.eachEntry(freeEntry);
+        self.entries.dispose();
+    }
+
+    string.String get(string.strView key)
+    {
+        string.String sk = string.String::fromView(key);
+        option.option<string.String> v = self.entries.get(sk);
+        sk.free();
+        if (v.isNone()) return string.String::new();
+        string.String stored = v.unwrap();
+        return string.String::fromView(stored.asView());
+    }
+
+    void set(string.strView key, string.strView value)
+    {
+        string.String sk = string.String::fromView(key);
+        option.option<hashmap.HashMapEntry<string.String, string.String>> old = self.entries.removeEntry(sk);
+        if (old.isSome())
+        {
+            hashmap.HashMapEntry<string.String, string.String> e = old.unwrap();
+            e.key.free();
+            e.value.free();
+        }
+        string.String sv = string.String::fromView(value);
+        self.entries.insert(sk, sv);
+    }
+}
+
+pub struct iniFile
+{
+    vec.vec<iniSection> sections;
+    vec.vec<string.String> names;
+
+    iniFile new()
+    {
+        iniFile f;
+        f.sections = vec.vec<iniSection>::new();
+        f.names = vec.vec<string.String>::new();
+        iniSection global = iniSection::new();
+        f.sections.push(global);
+        f.names.push(string.String::new());
+        return f;
+    }
+
+    void dispose()
+    {
+        for (u64 i = 0; i < self.sections.count(); i++)
+            self.sections.atPtr(i)->dispose();
+        for (u64 i = 0; i < self.names.count(); i++)
+            self.names.atPtr(i)->free();
+        self.sections.dispose();
+        self.names.dispose();
+    }
+
+    bool parse(string.strView input)
+    {
+        vec.vec<string.strView> lines = strutil.splitVec(input, '\n');
+        u64 curSection = 0;
+        for (u64 i = 0; i < lines.count(); i++)
+        {
+            string.strView line = strutil.trim(lines.at(i));
+            if (line.len == 0 || line.ptr[0] == ';' || line.ptr[0] == '#') continue;
+            if (line.ptr[0] == '[')
+            {
+                i64 closeIdx = strutil.indexOfChar(line, ']');
+                if (closeIdx < 0) continue;
+                string.strView name = strutil.trim(string.strView::fromParts(line.ptr + 1, (u64)closeIdx - 1));
+                iniSection sec = iniSection::new();
+                self.sections.push(sec);
+                self.names.push(string.String::fromView(name));
+                curSection = self.sections.count() - 1;
+                continue;
+            }
+            i64 eq = strutil.indexOfChar(line, '=');
+            if (eq < 0) continue;
+            string.strView key = strutil.trim(string.strView::fromParts(line.ptr, (u64)eq));
+            string.strView value = strutil.trim(string.strView::fromParts(line.ptr + (u64)eq + 1, line.len - (u64)eq - 1));
+            i64 semi = strutil.indexOfChar(value, ';');
+            if (semi >= 0)
+                value = strutil.trim(string.strView::fromParts(value.ptr, (u64)semi));
+            self.sections.atPtr(curSection)->set(key, value);
+        }
+        lines.dispose();
+        return true;
+    }
+
+    iniSection* section(string.strView name)
+    {
+        for (u64 i = 0; i < self.names.count(); i++)
+        {
+            string.strView n = self.names.at(i).asView();
+            if (n.len == name.len)
+            {
+                bool match = true;
+                for (u64 j = 0; j < n.len; j++)
+                    if (n.ptr[j] != name.ptr[j]) { match = false; break; }
+                if (match) return self.sections.atPtr(i);
+            }
+        }
+        return null;
+    }
+
+    string.String get(string.strView section, string.strView key)
+    {
+        for (u64 i = 0; i < self.names.count(); i++)
+        {
+            string.strView n = self.names.at(i).asView();
+            if (n.len == section.len)
+            {
+                bool match = true;
+                for (u64 j = 0; j < n.len; j++)
+                    if (n.ptr[j] != section.ptr[j]) { match = false; break; }
+                if (match)
+                    return self.sections.at(i).get(key);
+            }
+        }
+        return string.String::new();
+    }
+}
+
+u64 hashString(string.String s)
+{
+    string.strView v = s.asView();
+    u64 hash = 14695981039346656037u;
+    for (u64 i = 0; i < v.len; i++)
+    {
+        hash ^= (u64)(u8)v.ptr[i];
+        hash *= 1099511628211u;
+    }
+    return hash;
+}
+
+bool eq(string.String a, string.String b)
+{
+    return a.asView().equalsView(b.asView());
+}
+
+void freeEntry(hashmap.HashMapEntry<string.String, string.String>* e)
+{
+    e->key.free();
+    e->value.free();
+}

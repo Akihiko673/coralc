@@ -1,0 +1,164 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod hashmap = import("std/collections/hashmap.crl");
+mod option = import("std/data/option.crl");
+
+pub struct CacheEntry<K, V>
+{
+    K key;
+    V value;
+    CacheEntry<K, V>* prev;
+    CacheEntry<K, V>* next;
+}
+
+pub struct cache<K, V>
+{
+    hashmap.hashmap<K, CacheEntry<K, V>*> map;
+    CacheEntry<K, V>* head;
+    CacheEntry<K, V>* tail;
+    u64 maxSize;
+    u64(K) hashFn;
+    bool(K, K) eqFn;
+
+    static cache<K, V> new(u64 max, u64(K) hf, bool(K, K) ef)
+    {
+        cache<K, V> c;
+        c.map = hashmap.hashmap<K, CacheEntry<K, V>*>::new(hf, ef);
+        c.head = null;
+        c.tail = null;
+        c.maxSize = max > 0 ? max : 64;
+        c.hashFn = hf;
+        c.eqFn = ef;
+        return c;
+    }
+
+    void dispose()
+    {
+        CacheEntry<K, V>* cur = self.head;
+        while (cur != null)
+        {
+            CacheEntry<K, V>* next = cur->next;
+            mman.dealloc<CacheEntry<K, V>>(cur);
+            cur = next;
+        }
+        self.map.dispose();
+        self.head = null;
+        self.tail = null;
+    }
+
+    u64 count() { return self.map.count(); }
+    u64 maxSizeValue() { return self.maxSize; }
+
+    void _moveToFront(CacheEntry<K, V>* entry)
+    {
+        if (entry == self.head) return;
+        if (entry->prev != null) entry->prev->next = entry->next;
+        if (entry->next != null) entry->next->prev = entry->prev;
+        if (entry == self.tail) self.tail = entry->prev;
+        entry->prev = null;
+        entry->next = self.head;
+        if (self.head != null) self.head->prev = entry;
+        self.head = entry;
+        if (self.tail == null) self.tail = entry;
+    }
+
+    void _evict()
+    {
+        if (self.tail == null) return;
+        CacheEntry<K, V>* old = self.tail;
+        self.tail = old->prev;
+        if (self.tail != null) self.tail->next = null;
+        else self.head = null;
+        self.map.remove(old->key);
+        mman.dealloc<CacheEntry<K, V>>(old);
+    }
+
+    void insert(K key, V value)
+    {
+        CacheEntry<K, V>* existing = self.map.getPtr(key);
+        if (existing != null)
+        {
+            existing->value = value;
+            self._moveToFront(existing);
+            return;
+        }
+        CacheEntry<K, V>* entry = mman.alloc<CacheEntry<K, V>>(1);
+        entry->key = key;
+        entry->value = value;
+        entry->prev = null;
+        entry->next = self.head;
+        if (self.head != null) self.head->prev = entry;
+        self.head = entry;
+        if (self.tail == null) self.tail = entry;
+        self.map.insert(key, entry);
+        if (self.map.count() > self.maxSize) self._evict();
+    }
+
+    option.option<V> get(K key)
+    {
+        CacheEntry<K, V>** entryPtr = self.map.getPtr(key);
+        if (entryPtr == null) return option.option<V>::none();
+        CacheEntry<K, V>* entry = *entryPtr;
+        self._moveToFront(entry);
+        option.option<V> result = option.option<V>::some(entry->value);
+        return result;
+    }
+
+    V* getPtr(K key)
+    {
+        CacheEntry<K, V>** entryPtr = self.map.getPtr(key);
+        if (entryPtr == null) return null;
+        CacheEntry<K, V>* entry = *entryPtr;
+        self._moveToFront(entry);
+        return &entry->value;
+    }
+
+    bool contains(K key)
+    {
+        return self.map.contains(key);
+    }
+
+    void remove(K key)
+    {
+        CacheEntry<K, V>** entryPtr = self.map.getPtr(key);
+        if (entryPtr == null) return;
+        CacheEntry<K, V>* entry = *entryPtr;
+        if (entry->prev != null) entry->prev->next = entry->next;
+        if (entry->next != null) entry->next->prev = entry->prev;
+        if (entry == self.head) self.head = entry->next;
+        if (entry == self.tail) self.tail = entry->prev;
+        self.map.remove(key);
+        mman.dealloc<CacheEntry<K, V>>(entry);
+    }
+
+    void clear()
+    {
+        CacheEntry<K, V>* cur = self.head;
+        while (cur != null)
+        {
+            CacheEntry<K, V>* next = cur->next;
+            mman.dealloc<CacheEntry<K, V>>(cur);
+            cur = next;
+        }
+        self.map.clear();
+        self.head = null;
+        self.tail = null;
+    }
+
+    void each(void(K, V) fn)
+    {
+        CacheEntry<K, V>* cur = self.head;
+        while (cur != null)
+        {
+            fn(cur->key, cur->value);
+            cur = cur->next;
+        }
+    }
+
+    void resize(u64 newMax)
+    {
+        self.maxSize = newMax > 0 ? newMax : 1;
+        while (self.map.count() > self.maxSize) self._evict();
+    }
+}

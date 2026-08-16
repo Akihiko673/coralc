@@ -1,0 +1,443 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+
+pub struct IdiomRecognizePass
+{
+    ir_types.IrContext* ctx;
+    u64 recognized;
+
+    IdiomRecognizePass new(ir_types.IrContext* ctx)
+    {
+        IdiomRecognizePass p;
+        p.ctx = ctx;
+        p.recognized = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.recognized = 0;
+        bool changed = false;
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (self.recognizeIdiom(inst))
+                {
+                    self.recognized++;
+                    changed = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    // Recognize common code idioms and replace with single instructions
+    bool recognizeIdiom(ir_types.IrInst* inst)
+    {
+        if (inst.nops < 2) return false;
+
+        ir_types.IrValue* a = inst.ops[0];
+        ir_types.IrValue* b = inst.ops[1];
+        if (!a || !b) return false;
+
+        if (self.matchRotate(inst, a, b))
+            return true;
+
+        if (self.matchBswap(inst))
+            return true;
+
+        if (self.matchMinMax(inst, a, b))
+            return true;
+
+        if (self.matchAbs(inst, a, b))
+            return true;
+
+        if (self.matchFma(inst, a, b))
+            return true;
+
+        return false;
+    }
+
+    // Match rotate idiom, or(shl(x, N), lshr(x, M-N)) -> rotl(x, N)
+    bool matchRotate(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    {
+        if (inst.opcode != ir_opcodes.IrOpcode::Or) return false;
+        if (a.kind != ir_types.IrValueKind::Inst || b.kind != ir_types.IrValueKind::Inst) return false;
+
+        ir_types.IrInst* aInst = (ir_types.IrInst*)a;
+        ir_types.IrInst* bInst = (ir_types.IrInst*)b;
+
+        if (aInst->opcode == ir_opcodes.IrOpcode::Shl &&
+            bInst->opcode == ir_opcodes.IrOpcode::Lshr &&
+            aInst->nops == 2 && bInst->nops == 2)
+        {
+            ir_types.IrValue* x1 = aInst->ops[0];
+            ir_types.IrValue* x2 = bInst->ops[0];
+            ir_types.IrValue* n1 = aInst->ops[1];
+            ir_types.IrValue* n2 = bInst->ops[1];
+
+            if (x1 == x2 && n1.kind == ir_types.IrValueKind::ConstInt &&
+                n2.kind == ir_types.IrValueKind::ConstInt)
+            {
+                u32 bits = x1.type ? x1.type.width : 64;
+                u64 shift = n1.valData;
+                u64 complement = n2.valData;
+
+                if (complement == bits - shift || complement == (64 - shift))
+                {
+                    ir_types.IrType* ty = x1.type;
+                    ir_types.IrValue* rotlOps[2] = { x1, self.ctx.constInt(ty, shift) };
+                    ir_types.IrInst* rotlInst = self.ctx.createInst(ir_opcodes.IrOpcode::Rotl, ty, rotlOps, 2, 0, 0);
+                    rotlOps[0].addUser(rotlInst);
+                    rotlOps[1].addUser(rotlInst);
+                    inst.parent.insertBefore(rotlInst, inst);
+                    inst.base.replaceAllUses(&rotlInst.base);
+                    inst.erase();
+                    return true;
+                }
+            }
+        }
+
+        if (aInst->opcode == ir_opcodes.IrOpcode::Lshr &&
+            bInst->opcode == ir_opcodes.IrOpcode::Shl &&
+            aInst->nops == 2 && bInst->nops == 2)
+        {
+            ir_types.IrValue* x1 = aInst->ops[0];
+            ir_types.IrValue* x2 = bInst->ops[0];
+            ir_types.IrValue* n1 = aInst->ops[1];
+            ir_types.IrValue* n2 = bInst->ops[1];
+
+            if (x1 == x2 && n1.kind == ir_types.IrValueKind::ConstInt &&
+                n2.kind == ir_types.IrValueKind::ConstInt)
+            {
+                u32 bits = x1.type ? x1.type.width : 64;
+                u64 shift = n1.valData;
+                u64 complement = n2.valData;
+
+                if (complement == bits - shift || complement == (64 - shift))
+                {
+                    ir_types.IrType* ty = x1.type;
+                    ir_types.IrValue* rotrOps[2] = { x1, self.ctx.constInt(ty, shift) };
+                    ir_types.IrInst* rotrInst = self.ctx.createInst(ir_opcodes.IrOpcode::Rotr, ty, rotrOps, 2, 0, 0);
+                    rotrOps[0].addUser(rotrInst);
+                    rotrOps[1].addUser(rotrInst);
+                    inst.parent.insertBefore(rotrInst, inst);
+                    inst.base.replaceAllUses(&rotrInst.base);
+                    inst.erase();
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool matchFma(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    {
+        if (inst.opcode != ir_opcodes.IrOpcode::FAdd) return false;
+        if (!inst.base.type || inst.base.type.kind != ir_types.IrTypeKind::Float) return false;
+
+        ir_types.IrInst* mulInst = null;
+        ir_types.IrValue* other = null;
+
+        if (a.kind == ir_types.IrValueKind::Inst && ((ir_types.IrInst*)a)->opcode == ir_opcodes.IrOpcode::FMul)
+        {
+            mulInst = (ir_types.IrInst*)a;
+            other = b;
+        }
+        else if (b.kind == ir_types.IrValueKind::Inst && ((ir_types.IrInst*)b)->opcode == ir_opcodes.IrOpcode::FMul)
+        {
+            mulInst = (ir_types.IrInst*)b;
+            other = a;
+        }
+        else
+        {
+            return false;
+        }
+
+        if (!mulInst || mulInst->nops != 2 || !other) return false;
+        if (!mulInst->base.type || mulInst->base.type != inst.base.type) return false;
+
+        ir_types.IrValue* x = mulInst->ops[0];
+        ir_types.IrValue* y = mulInst->ops[1];
+        if (!x || !y) return false;
+
+        ir_types.IrValue* fmaOps[3] = { x, y, other };
+        ir_types.IrInst* fmaInst = self.ctx.createInst(ir_opcodes.IrOpcode::Fma, inst.base.type, fmaOps, 3, 0, 0);
+        fmaOps[0].addUser(fmaInst);
+        fmaOps[1].addUser(fmaInst);
+        fmaOps[2].addUser(fmaInst);
+        inst.parent.insertBefore(fmaInst, inst);
+        inst.base.replaceAllUses(&fmaInst.base);
+        inst.erase();
+        return true;
+    }
+
+    // Match byte-swap idiom, an or-chain of masked byte shifts that places each
+    // source byte at its byte-reversed destination.
+    bool matchBswap(ir_types.IrInst* inst)
+    {
+        if (inst.opcode != ir_opcodes.IrOpcode::Or) return false;
+        if (!inst.base.type || inst.base.type.kind != ir_types.IrTypeKind::Int) return false;
+        u32 width = inst.base.type.width;
+        if (width < 16 || width > 64 || width % 16 != 0) return false;
+        u32 nBytes = width / 8;
+        if (nBytes > 8) return false;
+
+        ir_types.IrInst* leaves[8];
+        ir_types.IrInst* cur = inst;
+        u32 n = 0;
+        while (true)
+        {
+            if (cur.opcode != ir_opcodes.IrOpcode::Or)
+            {
+                leaves[n++] = cur;
+                break;
+            }
+            if (cur.nops != 2) return false;
+            if (cur.ops[1].kind != ir_types.IrValueKind::Inst) return false;
+            leaves[n++] = (ir_types.IrInst*)cur.ops[1];
+            if (n > nBytes) return false;
+            if (cur.ops[0].kind != ir_types.IrValueKind::Inst) return false;
+            cur = (ir_types.IrInst*)cur.ops[0];
+        }
+        if (n != nBytes) return false;
+
+        ir_types.IrValue* x = null;
+        u32 ms[8];
+        u32 ds[8];
+        for (u32 i = 0; i < n; i++)
+        {
+            if (!self.bswapTerm(leaves[i], nBytes, &x, &ms[i], &ds[i])) return false;
+        }
+
+        // Every byte moves to its mirrored destination, no two share one.
+        for (u32 i = 0; i < n; i++)
+        {
+            if (ds[i] != nBytes - 1 - ms[i]) return false;
+            for (u32 j = i + 1; j < n; j++)
+                if (ds[i] == ds[j]) return false;
+        }
+
+        ir_types.IrValue* bops[1] = { x };
+        ir_types.IrInst* bs = self.ctx.createInst(ir_opcodes.IrOpcode::Bswap, inst.base.type, bops, 1, 0, 0);
+        bops[0].addUser(bs);
+        inst.parent.insertBefore(bs, inst);
+        inst.base.replaceAllUses(&bs.base);
+        inst.erase();
+        return true;
+    }
+
+    // Match one byte-swap term; returns its source byte m and destination byte
+    // d, and binds the shared value x on the first call.
+    bool bswapTerm(ir_types.IrInst* leaf, u32 nBytes, ir_types.IrValue** x, u32* m, u32* d)
+    {
+        ir_types.IrInst* shiftInst = leaf;
+        u64 mask = 0;
+        bool isAnd = false;
+        if (leaf.opcode == ir_opcodes.IrOpcode::And && leaf.nops == 2)
+        {
+            if (leaf.ops[1].kind != ir_types.IrValueKind::ConstInt) return false;
+            if (leaf.ops[0].kind != ir_types.IrValueKind::Inst) return false;
+            mask = leaf.ops[1].valData;
+            shiftInst = (ir_types.IrInst*)leaf.ops[0];
+            isAnd = true;
+        }
+        if (shiftInst->opcode != ir_opcodes.IrOpcode::Shl &&
+            shiftInst->opcode != ir_opcodes.IrOpcode::Lshr) return false;
+        if (shiftInst->nops != 2) return false;
+        ir_types.IrValue* sx = shiftInst->ops[0];
+        ir_types.IrValue* s = shiftInst->ops[1];
+        if (s.kind != ir_types.IrValueKind::ConstInt) return false;
+        u64 shift = s.valData;
+        if (shift == 0 || shift % 8 != 0) return false;
+        u32 sBytes = (u32)(shift / 8);
+        bool isShl = shiftInst->opcode == ir_opcodes.IrOpcode::Shl;
+
+        if (!(*x)) *x = sx;
+        else if (*x != sx) return false;
+
+        if (isAnd)
+        {
+            // The mask must isolate exactly one byte, 0xFF << (d * 8).
+            if (mask == 0) return false;
+            u32 dpos = 0;
+            bool found = false;
+            for (u32 k = 0; k < 8; k++)
+            {
+                if (((mask >> (k * 8)) & 0xFF) != 0)
+                {
+                    if (found) return false;
+                    found = true;
+                    dpos = k;
+                }
+            }
+            if (!found || (mask >> (dpos * 8)) != 0xFF) return false;
+            if (dpos >= nBytes) return false;
+
+            u32 spos;
+            if (isShl)
+            {
+                if (sBytes > dpos) return false;
+                spos = dpos - sBytes;
+            }
+            else
+            {
+                spos = dpos + sBytes;
+            }
+            if (spos >= nBytes) return false;
+            *m = spos;
+            *d = dpos;
+            return true;
+        }
+
+        // Maskless term, a shift of nBytes-1 bytes isolates the far byte.
+        if (isShl)
+        {
+            if (sBytes != nBytes - 1) return false;
+            *m = 0;
+            *d = sBytes;
+        }
+        else
+        {
+            if (sBytes != nBytes - 1) return false;
+            *m = sBytes;
+            *d = 0;
+        }
+        return true;
+    }
+
+    // Match min/max idiom, select(icmp_XX(a, b), a, b) -> smin/smax/umin/umax
+    bool matchMinMax(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    {
+        if (inst.opcode != ir_opcodes.IrOpcode::Select) return false;
+        if (a.kind != ir_types.IrValueKind::Inst) return false;
+        if (inst.nops < 3) return false;
+
+        ir_types.IrInst* condInst = (ir_types.IrInst*)a;
+        if (condInst->opcode != ir_opcodes.IrOpcode::ICmp) return false;
+        if (condInst->nops != 2) return false;
+
+        ir_types.IrValue* cmpA = condInst->ops[0];
+        ir_types.IrValue* cmpB = condInst->ops[1];
+        ir_types.IrValue* trueVal = b;
+        ir_types.IrValue* falseVal = inst.ops[2];
+
+        ir_opcodes.IrICmpPred pred = condInst->icmpPred;
+        ir_opcodes.IrOpcode minMaxOp;
+
+        if (trueVal == cmpA && falseVal == cmpB)
+        {
+            switch (pred)
+            {
+            case ir_opcodes.IrICmpPred::Slt: case ir_opcodes.IrICmpPred::Sle: minMaxOp = ir_opcodes.IrOpcode::SMin; break;
+            case ir_opcodes.IrICmpPred::Sgt: case ir_opcodes.IrICmpPred::Sge: minMaxOp = ir_opcodes.IrOpcode::SMax; break;
+            case ir_opcodes.IrICmpPred::Ult: case ir_opcodes.IrICmpPred::Ule: minMaxOp = ir_opcodes.IrOpcode::UMin; break;
+            case ir_opcodes.IrICmpPred::Ugt: case ir_opcodes.IrICmpPred::Uge: minMaxOp = ir_opcodes.IrOpcode::UMax; break;
+            default: return false;
+            }
+        }
+        else if (trueVal == cmpB && falseVal == cmpA)
+        {
+            switch (pred)
+            {
+            case ir_opcodes.IrICmpPred::Slt: case ir_opcodes.IrICmpPred::Sle: minMaxOp = ir_opcodes.IrOpcode::SMax; break;
+            case ir_opcodes.IrICmpPred::Sgt: case ir_opcodes.IrICmpPred::Sge: minMaxOp = ir_opcodes.IrOpcode::SMin; break;
+            case ir_opcodes.IrICmpPred::Ult: case ir_opcodes.IrICmpPred::Ule: minMaxOp = ir_opcodes.IrOpcode::UMax; break;
+            case ir_opcodes.IrICmpPred::Ugt: case ir_opcodes.IrICmpPred::Uge: minMaxOp = ir_opcodes.IrOpcode::UMin; break;
+            default: return false;
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        ir_types.IrType* ty = cmpA.type;
+        ir_types.IrValue* mmOps[2] = { cmpA, cmpB };
+        ir_types.IrInst* mmInst = self.ctx.createInst(minMaxOp, ty, mmOps, 2, 0, 0);
+        mmOps[0].addUser(mmInst);
+        mmOps[1].addUser(mmInst);
+        inst.parent.insertBefore(mmInst, inst);
+        inst.base.replaceAllUses(&mmInst.base);
+        inst.erase();
+        return true;
+    }
+
+    // Match abs idiom, select(icmp_slt(x, 0), neg(x), x) -> abs(x)
+    bool matchAbs(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    {
+        if (inst.opcode != ir_opcodes.IrOpcode::Select) return false;
+        if (a.kind != ir_types.IrValueKind::Inst) return false;
+        if (inst.nops < 3) return false;
+
+        ir_types.IrInst* condInst = (ir_types.IrInst*)a;
+        if (condInst->opcode != ir_opcodes.IrOpcode::ICmp) return false;
+        if (condInst->nops != 2) return false;
+
+        ir_types.IrValue* cmpA = condInst->ops[0];
+        ir_types.IrValue* cmpB = condInst->ops[1];
+
+        if (cmpB.kind != ir_types.IrValueKind::ConstInt || cmpB.valData != 0)
+            return false;
+
+        ir_types.IrValue* trueVal = b;
+        ir_types.IrValue* falseVal = inst.ops[2];
+        ir_opcodes.IrICmpPred pred = condInst->icmpPred;
+
+        ir_types.IrValue* absOperand = null;
+
+        if (trueVal.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* negInst = (ir_types.IrInst*)trueVal;
+            if (negInst->opcode == ir_opcodes.IrOpcode::Neg && negInst->nops == 1 &&
+                negInst->ops[0] == falseVal &&
+                (pred == ir_opcodes.IrICmpPred::Slt || pred == ir_opcodes.IrICmpPred::Sle))
+            {
+                absOperand = falseVal;
+            }
+        }
+
+        if (!absOperand && falseVal.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* negInst = (ir_types.IrInst*)falseVal;
+            if (negInst->opcode == ir_opcodes.IrOpcode::Neg && negInst->nops == 1 &&
+                negInst->ops[0] == trueVal &&
+                (pred == ir_opcodes.IrICmpPred::Sgt || pred == ir_opcodes.IrICmpPred::Sge))
+            {
+                absOperand = trueVal;
+            }
+        }
+
+        if (!absOperand) return false;
+
+        ir_types.IrType* ty = absOperand.type;
+        ir_types.IrValue* absOps[1] = { absOperand };
+        ir_types.IrInst* absInst = self.ctx.createInst(ir_opcodes.IrOpcode::Abs, ty, absOps, 1, 0, 0);
+        absOps[0].addUser(absInst);
+        inst.parent.insertBefore(absInst, inst);
+        inst.base.replaceAllUses(&absInst.base);
+        inst.erase();
+        return true;
+    }
+}
+
+pub bool irPassIdiom(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    IdiomRecognizePass pass = IdiomRecognizePass::new(ctx);
+    return pass.run(func);
+}

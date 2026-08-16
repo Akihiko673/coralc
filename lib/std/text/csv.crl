@@ -1,0 +1,94 @@
+
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct csvReader
+{
+    const u8* data;
+    u64 len;
+    u64 pos;
+    u64 line;
+    bool error;
+    u8 delim;
+
+    csvReader new(strView input)
+    {
+        csvReader r;
+        r.data = input.ptr;
+        r.len = input.len;
+        r.pos = 0;
+        r.line = 1;
+        r.error = false;
+        r.delim = ',';
+        return r;
+    }
+
+    bool eof() { return self.pos >= self.len; }
+
+    bool _readField(string* out)
+    {
+        if (self.pos >= self.len) { self.error = true; return false; }
+        out->clear();
+        if (self.data[self.pos] == '"')
+        {
+            self.pos++;
+            bool quoted = true;
+            while (self.pos < self.len && quoted)
+            {
+                u8 c = self.data[self.pos++];
+                if (c == '"')
+                {
+                    if (self.pos < self.len && self.data[self.pos] == '"')
+                    {
+                        out->pushByte('"');
+                        self.pos++;
+                    }
+                    else quoted = false;
+                }
+                else out->pushByte(c);
+            }
+            if (quoted)
+            {
+                self.error = true;
+                return false;
+            }
+            if (self.pos < self.len && self.data[self.pos] != self.delim && self.data[self.pos] != '\n' && self.data[self.pos] != '\r')
+            {
+                self.error = true;
+                return false;
+            }
+        }
+        else
+        {
+            while (self.pos < self.len)
+            {
+                u8 c = self.data[self.pos];
+                if (c == self.delim || c == '\n' || c == '\r') break;
+                out->pushByte(c);
+                self.pos++;
+            }
+        }
+        return true;
+    }
+
+    bool readRow(vec<string>* fields)
+    {
+        for (u64 i = 0; i < fields->count(); i++)
+            fields->atPtr(i)->free();
+        fields->clear();
+        if (self.pos >= self.len) return false;
+        for (;;)
+        {
+            string field = string.new();
+            if (!self._readField(&field)) { fields->push(field); return false; }
+            fields->push(field);
+            if (self.pos >= self.len) break;
+            if (self.data[self.pos] == self.delim) { self.pos++; continue; }
+            if (self.data[self.pos] == '\r') { self.pos++; }
+            if (self.pos < self.len && self.data[self.pos] == '\n') { self.pos++; self.line++; break; }
+            break;
+        }
+        return true;
+    }
+}

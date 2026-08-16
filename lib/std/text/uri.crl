@@ -1,0 +1,145 @@
+
+mod string = import("std/text/string.crl");
+
+pub struct uri
+{
+    string scheme;
+    string userInfo;
+    string host;
+    u16 port;
+    string path;
+    string query;
+    string fragment;
+    bool hasPort;
+
+    uri new()
+    {
+        uri u;
+        u.scheme = string.new();
+        u.userInfo = string.new();
+        u.host = string.new();
+        u.port = 0;
+        u.hasPort = false;
+        u.path = string.new();
+        u.query = string.new();
+        u.fragment = string.new();
+        return u;
+    }
+
+    void dispose()
+    {
+        self.scheme.free();
+        self.userInfo.free();
+        self.host.free();
+        self.path.free();
+        self.query.free();
+        self.fragment.free();
+    }
+
+    bool parse(strView input)
+    {
+        u64 i = 0;
+
+        u64 schemeEnd = i;
+        while (schemeEnd < input.len && input.ptr[schemeEnd] != ':' && input.ptr[schemeEnd] != '/' && input.ptr[schemeEnd] != '?' && input.ptr[schemeEnd] != '#')
+            schemeEnd++;
+        if (schemeEnd < input.len && input.ptr[schemeEnd] == ':')
+        {
+            self.scheme.free();
+            self.scheme = string.fromView(strView::fromParts(input.ptr, schemeEnd));
+            i = schemeEnd + 1;
+        }
+
+        if (i + 1 < input.len && input.ptr[i] == '/' && input.ptr[i + 1] == '/')
+        {
+            i += 2;
+            u64 authEnd = i;
+            while (authEnd < input.len && input.ptr[authEnd] != '/' && input.ptr[authEnd] != '?' && input.ptr[authEnd] != '#')
+                authEnd++;
+
+            strView authority = strView::fromParts(input.ptr + i, authEnd - i);
+            i = authEnd;
+
+            i64 at = -1;
+            for (u64 j = 0; j < authority.len; j++)
+                if (authority.ptr[j] == '@') { at = (i64)j; break; }
+
+            if (at >= 0)
+            {
+                self.userInfo.free();
+                self.userInfo = string.fromView(strView::fromParts(authority.ptr, (u64)at));
+                authority = strView::fromParts(authority.ptr + (u64)at + 1, authority.len - (u64)at - 1);
+            }
+
+            i64 colon = -1;
+            for (u64 j = 0; j < authority.len; j++)
+                if (authority.ptr[j] == ':') { colon = (i64)j; break; }
+
+            if (colon >= 0)
+            {
+                self.host.free();
+                self.host = string.fromView(strView::fromParts(authority.ptr, (u64)colon));
+                strView portStr = strView::fromParts(authority.ptr + (u64)colon + 1, authority.len - (u64)colon - 1);
+                if (portStr.len == 0) return false;
+                u64 portVal = 0;
+                for (u64 j = 0; j < portStr.len; j++)
+                {
+                    if (portStr.ptr[j] < '0' || portStr.ptr[j] > '9') return false;
+                    portVal = portVal * 10 + (u64)(portStr.ptr[j] - '0');
+                    if (portVal > 65535u) return false;
+                }
+                self.port = (u16)portVal;
+                self.hasPort = true;
+            }
+            else
+            {
+                self.host.free();
+                self.host = string.fromView(authority);
+            }
+        }
+
+        u64 pathEnd = i;
+        while (pathEnd < input.len && input.ptr[pathEnd] != '?' && input.ptr[pathEnd] != '#')
+            pathEnd++;
+        if (pathEnd > i)
+        {
+            self.path.free();
+            self.path = string.fromView(strView::fromParts(input.ptr + i, pathEnd - i));
+        }
+        else if (self.host.len > 0)
+        {
+            self.path.free();
+            self.path = string.fromView(strView::fromCstr("/"));
+        }
+        i = pathEnd;
+
+        if (i < input.len && input.ptr[i] == '?')
+        {
+            i++;
+            u64 qEnd = i;
+            while (qEnd < input.len && input.ptr[qEnd] != '#') qEnd++;
+            self.query.free();
+            self.query = string.fromView(strView::fromParts(input.ptr + i, qEnd - i));
+            i = qEnd;
+        }
+        else if (self.query.len > 0)
+        {
+            self.query.free();
+            self.query = string.new();
+        }
+
+        if (i < input.len && input.ptr[i] == '#')
+        {
+            i++;
+            self.fragment.free();
+            self.fragment = string.fromView(strView::fromParts(input.ptr + i, input.len - i));
+        }
+        else if (self.fragment.len > 0)
+        {
+            self.fragment.free();
+            self.fragment = string.new();
+        }
+
+        return true;
+    }
+}

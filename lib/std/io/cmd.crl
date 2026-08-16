@@ -1,0 +1,105 @@
+@[no_warn_unsafe]
+
+mod string = import("std/text/string.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct ArgParser
+{
+    vec<string> positional;
+    bool error;
+    string errMsg;
+    u64 pos;
+
+    ArgParser new()
+    {
+        ArgParser p;
+        p.positional = vec<string>::new();
+        p.error = false;
+        p.errMsg = string.new();
+        p.pos = 0;
+        return p;
+    }
+
+    void dispose()
+    {
+        for (u64 i = 0; i < self.positional.count(); i++)
+            self.positional.atPtr(i)->free();
+        self.positional.dispose();
+        self.errMsg.free();
+    }
+
+    void parse(i32 argc, char** argv)
+    {
+        for (i32 i = 1; i < argc; i++)
+        {
+            char* arg = argv[i];
+            if (arg[0] == '-' && arg[1] != 0)
+            {
+                if (arg[1] == '-' && arg[2] == 0) break;
+                continue;
+            }
+            self.positional.push(string.fromView(strView::fromCstr(arg)));
+        }
+    }
+
+    bool _afterDoubleDash(i32 argc, char** argv, i32 idx)
+    {
+        for (i32 i = 1; i < idx; i++)
+        {
+            char* arg = argv[i];
+            if (arg[0] == '-' && arg[1] == '-' && arg[2] == 0) return true;
+        }
+        return false;
+    }
+
+    bool hasFlag(i32 argc, char** argv, strView shortFlag, strView longFlag)
+    {
+        for (i32 i = 1; i < argc; i++)
+        {
+            char* arg = argv[i];
+            if (arg[0] == '-' && arg[1] == '-' && arg[2] == 0) break;
+            if (self._afterDoubleDash(argc, argv, i)) continue;
+            if (shortFlag.len == 1 && arg[0] == '-' && arg[1] == shortFlag.ptr[0] && arg[2] == 0) return true;
+            if (longFlag.len > 0 && arg[0] == '-' && arg[1] == '-')
+            {
+                bool match = true;
+                for (u64 j = 0; j < longFlag.len; j++)
+                    if (arg[2 + j] != longFlag.ptr[j]) { match = false; break; }
+                if (match && arg[2 + longFlag.len] == 0) return true;
+            }
+        }
+        return false;
+    }
+
+    bool getOption(i32 argc, char** argv, strView shortFlag, strView longFlag, string* out)
+    {
+        for (i32 i = 1; i < argc - 1; i++)
+        {
+            char* arg = argv[i];
+            if (arg[0] == '-' && arg[1] == '-' && arg[2] == 0) break;
+            if (self._afterDoubleDash(argc, argv, i)) continue;
+            if (shortFlag.len == 1 && arg[0] == '-' && arg[1] == shortFlag.ptr[0] && arg[2] == 0)
+            {
+                out->free();
+                *out = string.fromView(strView::fromCstr(argv[i + 1]));
+                return true;
+            }
+            if (longFlag.len > 0 && arg[0] == '-' && arg[1] == '-')
+            {
+                bool match = true;
+                for (u64 j = 0; j < longFlag.len; j++)
+                    if (arg[2 + j] != longFlag.ptr[j]) { match = false; break; }
+                if (match && arg[2 + longFlag.len] == 0)
+                {
+                    out->free();
+                    *out = string.fromView(strView::fromCstr(argv[i + 1]));
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    u64 count() { return self.positional.count(); }
+    strView get(u64 idx) { return self.positional.at(idx).asView(); }
+}

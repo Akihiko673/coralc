@@ -1,0 +1,290 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+
+pub struct AlgebraicSimplifyPass
+{
+    ir_types.IrContext* ctx;
+    u64 simplifications;
+
+    AlgebraicSimplifyPass new(ir_types.IrContext* ctx)
+    {
+        AlgebraicSimplifyPass p;
+        p.ctx = ctx;
+        p.simplifications = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.simplifications = 0;
+        bool changed = false;
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (self.simplify(inst))
+                {
+                    self.simplifications++;
+                    changed = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+        return changed;
+    }
+
+    bool simplify(ir_types.IrInst* inst)
+    {
+        // extension elimination collapse chains of sext/zext/trunc
+        // Replacement results always keep the outer instruction result
+        // width, so value semantics are preserved on every target
+        if (inst.opcode == ir_opcodes.IrOpcode::Sext ||
+            inst.opcode == ir_opcodes.IrOpcode::Zext ||
+            inst.opcode == ir_opcodes.IrOpcode::Trunc)
+        {
+            if (inst.nops != 1) return false;
+            ir_types.IrValue* s = inst.ops[0];
+            if (!s || s.kind != ir_types.IrValueKind::Inst) return false;
+            ir_types.IrInst* src = (ir_types.IrInst*)s;
+            if (src->nops != 1) return false;
+            u32 outW = inst.base.type ? inst.base.type.width : 64;
+
+            // zext(zext(x)) -> zext(x, outW), same for sext and trunc
+            if (src->opcode == inst.opcode)
+            {
+                ir_types.IrValue* ops[1] = { src->ops[0] };
+                ir_types.IrInst* ni = self.ctx.createInst(inst.opcode, inst.base.type, ops, 1, 0, 0);
+                ops[0].addUser(ni);
+                inst.parent.insertBefore(ni, inst);
+                inst.base.replaceAllUses(&ni.base);
+                inst.erase();
+                return true;
+            }
+
+            // sext(zext(x)) -> zext(x, outW); the sign bit is zero, so
+            // sign extension never changes the valu
+            if (inst.opcode == ir_opcodes.IrOpcode::Sext &&
+                src->opcode == ir_opcodes.IrOpcode::Zext)
+            {
+                ir_types.IrValue* ops[1] = { src->ops[0] };
+                ir_types.IrInst* ni = self.ctx.createInst(ir_opcodes.IrOpcode::Zext, inst.base.type, ops, 1, 0, 0);
+                ops[0].addUser(ni);
+                inst.parent.insertBefore(ni, inst);
+                inst.base.replaceAllUses(&ni.base);
+                inst.erase();
+                return true;
+            }
+
+            // trunc(zext/sext(y)) if the truncation stays within y's width
+            // the extension is irrelevant; otherwise re-extend y directly
+            if (inst.opcode == ir_opcodes.IrOpcode::Trunc &&
+                (src->opcode == ir_opcodes.IrOpcode::Zext || src->opcode == ir_opcodes.IrOpcode::Sext))
+            {
+                u32 innerW = src->ops[0].type ? src->ops[0].type.width : 64;
+                if (outW == innerW)
+                {
+                    inst.base.replaceAllUses(src->ops[0]);
+                    inst.erase();
+                    return true;
+                }
+                ir_opcodes.IrOpcode op = (outW < innerW) ? ir_opcodes.IrOpcode::Trunc : src->opcode;
+                ir_types.IrValue* ops[1] = { src->ops[0] };
+                ir_types.IrInst* ni = self.ctx.createInst(op, inst.base.type, ops, 1, 0, 0);
+                ops[0].addUser(ni);
+                inst.parent.insertBefore(ni, inst);
+                inst.base.replaceAllUses(&ni.base);
+                inst.erase();
+                return true;
+            }
+            return false;
+        }
+
+        if (inst.nops != 2) return false;
+
+        ir_types.IrValue* a = inst.ops[0];
+        ir_types.IrValue* b = inst.ops[1];
+        if (!a || !b) return false;
+
+        bool aConst = a.kind == ir_types.IrValueKind::ConstInt;
+        bool bConst = b.kind == ir_types.IrValueKind::ConstInt;
+
+        // x + 0 = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Add && bConst && b.valData == 0)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // 0 + x = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Add && aConst && a.valData == 0)
+        {
+            inst.base.replaceAllUses(b);
+            inst.erase();
+            return true;
+        }
+
+        // x - 0 = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Sub && bConst && b.valData == 0)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // x * 0 = 0
+        if (inst.opcode == ir_opcodes.IrOpcode::Mul && bConst && b.valData == 0)
+        {
+            ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
+            inst.base.replaceAllUses(zero);
+            inst.erase();
+            return true;
+        }
+
+        // x * 1 = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Mul && bConst && b.valData == 1)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // x & 0 = 0
+        if (inst.opcode == ir_opcodes.IrOpcode::And && bConst && b.valData == 0)
+        {
+            ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
+            inst.base.replaceAllUses(zero);
+            inst.erase();
+            return true;
+        }
+
+        // x & -1 = x (all bits set)
+        if (inst.opcode == ir_opcodes.IrOpcode::And && bConst)
+        {
+            u32 bits = inst.base.type ? inst.base.type.width : 64;
+            u64 allOnes = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1);
+            if (b.valData == allOnes)
+            {
+                inst.base.replaceAllUses(a);
+                inst.erase();
+                return true;
+            }
+        }
+
+        // x | 0 = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Or && bConst && b.valData == 0)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // x | -1 = -1
+        if (inst.opcode == ir_opcodes.IrOpcode::Or && bConst)
+        {
+            u32 bits = inst.base.type ? inst.base.type.width : 64;
+            u64 allOnes = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1);
+            if (b.valData == allOnes)
+            {
+                ir_types.IrValue* ones = self.ctx.constInt(inst.base.type, allOnes);
+                inst.base.replaceAllUses(ones);
+                inst.erase();
+                return true;
+            }
+        }
+
+        // x ^ 0 = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Xor && bConst && b.valData == 0)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // x ^ x = 0
+        if (inst.opcode == ir_opcodes.IrOpcode::Xor && a == b)
+        {
+            ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
+            inst.base.replaceAllUses(zero);
+            inst.erase();
+            return true;
+        }
+
+        // shl x, 0 = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Shl && bConst && b.valData == 0)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // shr x, 0 = x
+        if ((inst.opcode == ir_opcodes.IrOpcode::Lshr || inst.opcode == ir_opcodes.IrOpcode::Ashr)
+            && bConst && b.valData == 0)
+        {
+            inst.base.replaceAllUses(a);
+            inst.erase();
+            return true;
+        }
+
+        // select true, x, y = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Select && aConst && a.valData == 1)
+        {
+            inst.base.replaceAllUses(b);
+            inst.erase();
+            return true;
+        }
+
+        // select false, x, y = y
+        if (inst.opcode == ir_opcodes.IrOpcode::Select && aConst && a.valData == 0
+            && inst.nops >= 3)
+        {
+            inst.base.replaceAllUses(inst.ops[2]);
+            inst.erase();
+            return true;
+        }
+
+        // neg(neg(x)) = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Neg && a.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* aInst = (ir_types.IrInst*)a;
+            if (aInst->opcode == ir_opcodes.IrOpcode::Neg)
+            {
+                inst.base.replaceAllUses(aInst->ops[0]);
+                inst.erase();
+                return true;
+            }
+        }
+
+        // not(not(x)) = x
+        if (inst.opcode == ir_opcodes.IrOpcode::Not && a.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* aInst = (ir_types.IrInst*)a;
+            if (aInst->opcode == ir_opcodes.IrOpcode::Not)
+            {
+                inst.base.replaceAllUses(aInst->ops[0]);
+                inst.erase();
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+pub bool irPassSimplify(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    AlgebraicSimplifyPass pass = AlgebraicSimplifyPass::new(ctx);
+    return pass.run(func);
+}

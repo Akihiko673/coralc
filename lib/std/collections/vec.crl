@@ -1,0 +1,251 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+
+pub struct vec<T>
+{
+    T* data;
+    u64 len;
+    u64 cap;
+
+    static vec<T> new()
+    {
+        vec<T> v;
+        v.data = null;
+        v.len = 0;
+        v.cap = 0;
+        return v;
+    }
+
+    static vec<T> withCap(u64 capacity)
+    {
+        vec<T> v;
+        v.data = mman.alloc<T>(capacity);
+        v.len = 0;
+        v.cap = capacity;
+        return v;
+    }
+
+    void reserve(u64 newCap)
+    {
+        if (newCap <= self.cap) return;
+        self.data = mman.realloc<T>(self.data, newCap);
+        self.cap = newCap;
+    }
+
+    void push(T val)
+    {
+        if (self.len >= self.cap)
+        {
+            u64 newCap = self.cap > 0 ? self.cap * 2 : 4;
+            self.reserve(newCap);
+        }
+        self.data[self.len] = val;
+        self.len++;
+    }
+
+    T pop()
+    {
+        assert(self.len > 0);
+        self.len--;
+        return self.data[self.len];
+    }
+
+    u64 count()
+    {
+        return self.len;
+    }
+
+    T* atPtr(u64 i)
+    {
+        assert(i < self.len);
+        return &self.data[i];
+    }
+
+    const T* atConst(u64 i)
+    {
+        assert(i < self.len);
+        return (const T*)&self.data[i];
+    }
+
+    T at(u64 i)
+    {
+        assert(i < self.len);
+        return self.data[i];
+    }
+
+    T* ptr()
+    {
+        return self.data;
+    }
+
+    const T* constPtr()
+    {
+        return (const T*)self.data;
+    }
+
+    bool isEmpty()
+    {
+        return self.len == 0;
+    }
+
+    void set(u64 i, T val)
+    {
+        assert(i < self.len);
+        self.data[i] = val;
+    }
+
+    T front()
+    {
+        assert(self.len > 0);
+        return self.data[0];
+    }
+
+    T back()
+    {
+        assert(self.len > 0);
+        return self.data[self.len - 1];
+    }
+
+    void insert(u64 i, T val)
+    {
+        assert(i <= self.len);
+        if (self.len >= self.cap)
+        {
+            u64 newCap = self.cap > 0 ? self.cap * 2 : 4;
+            self.reserve(newCap);
+        }
+        for (u64 j = self.len; j > i; j--)
+            self.data[j] = self.data[j - 1];
+        self.data[i] = val;
+        self.len++;
+    }
+
+    void removeAt(u64 i)
+    {
+        assert(i < self.len);
+        for (u64 j = i; j < self.len - 1; j++)
+            self.data[j] = self.data[j + 1];
+        self.len--;
+    }
+
+    void removeRange(u64 start, u64 end)
+    {
+        assert(start <= end);
+        assert(end <= self.len);
+        u64 tail = self.len - end;
+        for (u64 j = 0; j < tail; j++)
+            self.data[start + j] = self.data[end + j];
+        self.len -= (end - start);
+    }
+
+    bool contains(T val)
+    {
+        for (u64 i = 0; i < self.len; i++)
+        {
+            if (val == self.data[i]) return true;
+        }
+        return false;
+    }
+
+    void fill(T val)
+    {
+        for (u64 i = 0; i < self.len; i++)
+            self.data[i] = val;
+    }
+
+    void reserveExact(u64 newCap)
+    {
+        if (newCap <= self.cap) return;
+        self.data = mman.realloc<T>(self.data, newCap);
+        self.cap = newCap;
+    }
+
+    void shrinkToFit()
+    {
+        if (self.len == self.cap) return;
+        self.data = mman.realloc<T>(self.data, self.len);
+        self.cap = self.len;
+    }
+
+    void clear()
+    {
+        self.len = 0;
+    }
+
+    void reverse()
+    {
+        for (u64 i = 0; i < self.len / 2; i++)
+        {
+            u64 j = self.len - 1 - i;
+            T tmp = self.data[i];
+            self.data[i] = self.data[j];
+            self.data[j] = tmp;
+        }
+    }
+
+    bool isSortedBy(bool(T, T) less)
+    {
+        for (u64 i = 1; i < self.len; i++)
+            if (less(self.data[i], self.data[i - 1])) return false;
+        return true;
+    }
+
+    void sortBy(bool(T, T) less)
+    {
+        _sortByRange(0, self.len, less);
+    }
+
+    void _sortByRange(u64 lo, u64 hi, bool(T, T) less)
+    {
+        if (hi - lo <= 1) return;
+        u64 pi = _partitionBy(lo, hi, less);
+        if (pi > lo) _sortByRange(lo, pi, less);
+        if (pi + 1 < hi) _sortByRange(pi + 1, hi, less);
+    }
+
+    u64 _partitionBy(u64 lo, u64 hi, bool(T, T) less)
+    {
+        T pivot = self.data[hi - 1];
+        u64 i = lo;
+        for (u64 j = lo; j < hi - 1; j++)
+        {
+            if (less(self.data[j], pivot))
+            {
+                T tmp = self.data[i];
+                self.data[i] = self.data[j];
+                self.data[j] = tmp;
+                i++;
+            }
+        }
+        T tmp = self.data[i];
+        self.data[i] = self.data[hi - 1];
+        self.data[hi - 1] = tmp;
+        return i;
+    }
+
+    i64 binarySearchBy(T key, i32(T, T) cmp)
+    {
+        i64 lo = 0;
+        i64 hi = (i64)self.len - 1;
+        while (lo <= hi)
+        {
+            i64 mid = lo + (hi - lo) / 2;
+            i32 c = cmp(key, self.data[(u64)mid]);
+            if (c == 0) return mid;
+            if (c > 0) lo = mid + 1;
+            else hi = mid - 1;
+        }
+        return -1;
+    }
+
+    void dispose()
+    {
+        if (self.data != null)
+        {
+            mman.dealloc<T>(self.data);
+            self.data = null;
+        }
+        self.len = 0;
+        self.cap = 0;
+    }
+}

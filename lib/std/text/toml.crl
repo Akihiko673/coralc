@@ -1,0 +1,406 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod string = import("std/text/string.crl");
+mod libc = import("std/platform/libc.crl");
+mod vec = import("std/collections/vec.crl");
+mod strutil = import("std/text/strutil.crl");
+
+pub enum TomlValueType
+{
+    String,
+    Integer,
+    Float,
+    Bool,
+    Array,
+    Table,
+}
+
+pub struct TomlValue
+{
+    TomlValueType type;
+    String strVal;
+    i64 intVal;
+    f64 floatVal;
+    bool boolVal;
+    vec<TomlValue> arrVal;
+    vec<TomlPair> tableVal;
+
+    static TomlValue stringVal(strView s)
+    {
+        TomlValue v;
+        v.type = TomlValueType::String;
+        v.strVal = String::fromView(s);
+        return v;
+    }
+
+    static TomlValue intVal(i64 n)
+    {
+        TomlValue v;
+        v.type = TomlValueType::Integer;
+        v.intVal = n;
+        return v;
+    }
+
+    static TomlValue floatVal(f64 n)
+    {
+        TomlValue v;
+        v.type = TomlValueType::Float;
+        v.floatVal = n;
+        return v;
+    }
+
+    static TomlValue boolVal(bool b)
+    {
+        TomlValue v;
+        v.type = TomlValueType::Bool;
+        v.boolVal = b;
+        return v;
+    }
+
+    static TomlValue arrayVal()
+    {
+        TomlValue v;
+        v.type = TomlValueType::Array;
+        v.arrVal = vec<TomlValue>::new();
+        return v;
+    }
+
+    static TomlValue tableVal()
+    {
+        TomlValue v;
+        v.type = TomlValueType::Table;
+        v.tableVal = vec<TomlPair>::new();
+        return v;
+    }
+
+    void dispose()
+    {
+        if (self.type == TomlValueType::String) self.strVal.free();
+        if (self.type == TomlValueType::Array)
+        {
+            for (u64 i = 0; i < self.arrVal.count(); i++)
+                self.arrVal.atPtr(i)->dispose();
+            self.arrVal.dispose();
+        }
+        if (self.type == TomlValueType::Table)
+        {
+            for (u64 i = 0; i < self.tableVal.count(); i++)
+            {
+                self.tableVal.atPtr(i)->key.free();
+                self.tableVal.atPtr(i)->value.dispose();
+            }
+            self.tableVal.dispose();
+        }
+    }
+}
+
+pub struct TomlPair
+{
+    String key;
+    TomlValue value;
+}
+
+pub struct TomlDoc
+{
+    vec<TomlPair> root;
+
+    static TomlDoc new()
+    {
+        TomlDoc d;
+        d.root = vec<TomlPair>::new();
+        return d;
+    }
+
+    void dispose()
+    {
+        for (u64 i = 0; i < self.root.count(); i++)
+        {
+            self.root.atPtr(i)->key.free();
+            self.root.atPtr(i)->value.dispose();
+        }
+        self.root.dispose();
+    }
+
+    TomlValue* get(strView key)
+    {
+        for (u64 i = 0; i < self.root.count(); i++)
+        {
+            if (self.root.at(i).key.asView().equals(key))
+                return &self.root.atPtr(i)->value;
+        }
+        return null;
+    }
+
+    TomlValue* getIn(strView table, strView key)
+    {
+        for (u64 i = 0; i < self.root.count(); i++)
+        {
+            if (self.root.at(i).key.asView().equals(table) &&
+                self.root.at(i).value.type == TomlValueType::Table)
+            {
+                vec<TomlPair>* t = &self.root.atPtr(i)->value.tableVal;
+                for (u64 j = 0; j < t->count(); j++)
+                {
+                    if (t->at(j).key.asView().equals(key))
+                        return &t->atPtr(j)->value;
+                }
+            }
+        }
+        return null;
+    }
+}
+
+struct _TomlParser
+{
+    const u8* data;
+    u64 len;
+    u64 pos;
+    u64 line;
+    bool error;
+
+    void skipRest()
+    {
+        while (self.pos < self.len && self.data[self.pos] != '\n')
+        {
+            if (self.data[self.pos] == '\r') { self.pos++; if (self.pos < self.len && self.data[self.pos] == '\n') self.pos++; self.line++; return; }
+            self.pos++;
+        }
+        if (self.pos < self.len) { self.pos++; self.line++; }
+    }
+
+    void skipLine()
+    {
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos];
+            if (c == '\n') { self.pos++; self.line++; return; }
+            if (c == '\r') { self.pos++; if (self.pos < self.len && self.data[self.pos] == '\n') self.pos++; self.line++; return; }
+            self.pos++;
+        }
+    }
+
+    u8 peek()
+    {
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos];
+            if (c == ' ' || c == '\t') { self.pos++; continue; }
+            if (c == '#') { self.skipLine(); continue; }
+            if (c == '\n' || c == '\r') { self.skipLine(); continue; }
+            return c;
+        }
+        return 0;
+    }
+
+    u8 next()
+    {
+        u8 c = self.peek();
+        if (c == 0) return 0;
+        self.pos++;
+        return c;
+    }
+
+    String parseKey()
+    {
+        u64 start = self.pos;
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos];
+            if (c == ' ' || c == '\t' || c == '=' || c == '\n' || c == '\r' || c == '#' || c == '.' || c == '[' || c == ']') break;
+            self.pos++;
+        }
+        if (self.pos == start) { self.error = true; return String::new(); }
+        return String::fromView(strView::fromParts(self.data + start, self.pos - start));
+    }
+
+    String parseBasicString()
+    {
+        String s = String::new();
+        if (self.next() != '"') { self.error = true; return s; }
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos++];
+            if (c == '"') return s;
+            if (c == '\\')
+            {
+                if (self.pos >= self.len) { self.error = true; return s; }
+                u8 esc = self.data[self.pos++];
+                if (esc == 'n') s.pushChar('\n');
+                else if (esc == 't') s.pushChar('\t');
+                else if (esc == 'r') s.pushChar('\r');
+                else if (esc == '"') s.pushChar('"');
+                else if (esc == '\\') s.pushChar('\\');
+                else if (esc == 'b') s.pushChar('\b');
+                else if (esc == 'f') s.pushChar('\f');
+                else { self.error = true; return s; }
+            }
+            else s.pushChar((char)c);
+        }
+        self.error = true;
+        return s;
+    }
+
+    TomlValue parseValue()
+    {
+        u8 c = self.peek();
+        if (c == '"')
+        {
+            String s = self.parseBasicString();
+            TomlValue v = TomlValue::stringVal(s.asView());
+            s.free();
+            return v;
+        }
+        if (c == 't')
+        {
+            if (self.pos + 4 <= self.len && self.data[self.pos] == 't' && self.data[self.pos+1] == 'r' && self.data[self.pos+2] == 'u' && self.data[self.pos+3] == 'e')
+            { self.pos += 4; return TomlValue::boolVal(true); }
+            self.error = true; return TomlValue::boolVal(false);
+        }
+        if (c == 'f')
+        {
+            if (self.pos + 5 <= self.len && self.data[self.pos] == 'f' && self.data[self.pos+1] == 'a' && self.data[self.pos+2] == 'l' && self.data[self.pos+3] == 's' && self.data[self.pos+4] == 'e')
+            { self.pos += 5; return TomlValue::boolVal(false); }
+            self.error = true; return TomlValue::boolVal(false);
+        }
+        if (c == '[') return self.parseArray();
+        if (c == '-' || (c >= '0' && c <= '9'))
+        {
+            bool neg = false;
+            u64 start = self.pos;
+            if (c == '-') { neg = true; self.pos++; }
+            u64 limit = neg ? 0x8000000000000000u : 0x7FFFFFFFFFFFFFFFu;
+            u64 intVal = 0;
+            while (self.pos < self.len && self.data[self.pos] >= '0' && self.data[self.pos] <= '9')
+            {
+                u64 d = (u64)(self.data[self.pos] - '0');
+                if (intVal > (limit - d) / 10u)
+                {
+                    self.error = true;
+                    return TomlValue::boolVal(false);
+                }
+                intVal = intVal * 10 + d;
+                self.pos++;
+            }
+            if (neg && self.pos == start + 1)
+            {
+                self.error = true;
+                return TomlValue::boolVal(false);
+            }
+            if (self.pos < self.len && (self.data[self.pos] == '.' || self.data[self.pos] == 'e' || self.data[self.pos] == 'E'))
+            {
+                u64 fstart = self.pos;
+                while (self.pos < self.len)
+                {
+                    u8 ch = self.data[self.pos];
+                    if ((ch < '0' || ch > '9') && ch != '.' && ch != 'e' && ch != 'E' && ch != '+' && ch != '-') break;
+                    self.pos++;
+                }
+                String s = String::fromView(strView::fromParts(self.data + start, self.pos - start));
+                char* end;
+                f64 fv = libc.strtod(s.asView().ptr, &end);
+                if (end != s.asView().ptr + (self.pos - start))
+                {
+                    s.free();
+                    self.error = true;
+                    return TomlValue::boolVal(false);
+                }
+                s.free();
+                // strtod already sees the leading '-' sign; do not negate again
+                return TomlValue::floatVal(fv);
+            }
+            if (neg) return TomlValue::intVal(-(i64)intVal);
+            return TomlValue::intVal((i64)intVal);
+        }
+        self.error = true;
+        return TomlValue::boolVal(false);
+    }
+
+    TomlValue parseArray()
+    {
+        TomlValue arr = TomlValue::arrayVal();
+        if (self.next() != '[') { self.error = true; arr.dispose(); return TomlValue::boolVal(false); }
+        for (;;)
+        {
+            u8 c = self.peek();
+            if (c == ']') { self.pos++; return arr; }
+            if (c == 0) { self.error = true; arr.dispose(); return TomlValue::boolVal(false); }
+            TomlValue elem = self.parseValue();
+            if (self.error) { elem.dispose(); arr.dispose(); return TomlValue::boolVal(false); }
+            arr.arrVal.push(elem);
+            c = self.peek();
+            if (c == ',') { self.pos++; continue; }
+            self.error = true;
+            arr.dispose();
+            return TomlValue::boolVal(false);
+        }
+    }
+}
+
+pub bool parseToml(strView input, TomlDoc* doc)
+{
+    _TomlParser p;
+    p.data = (const u8*)input.ptr;
+    p.len = input.len;
+    p.pos = 0;
+    p.line = 1;
+    p.error = false;
+
+    vec<TomlPair>* currentTable = &doc->root;
+    String currentTableName = String::new();
+
+    while (p.pos < p.len)
+    {
+        u8 c = p.peek();
+        if (c == 0) break;
+
+        if (c == '[')
+        {
+            p.pos++;
+            bool isSub = false;
+            if (p.peek() == '[') { isSub = true; p.pos++; }
+            String tableName = String::new();
+            bool first = true;
+            for (;;)
+            {
+                String part = p.parseKey();
+                if (p.error) { tableName.free(); currentTableName.free(); return false; }
+                if (!first) tableName.pushChar('.');
+                tableName.appendView(part.asView());
+                part.free();
+                first = false;
+                u8 nc = p.peek();
+                if (nc == ']') break;
+                if (nc != '.') { p.error = true; tableName.free(); currentTableName.free(); return false; }
+                p.pos++;
+            }
+            if (isSub) { if (p.next() != ']') { tableName.free(); currentTableName.free(); return false; } }
+            if (p.next() != ']') { tableName.free(); currentTableName.free(); return false; }
+            p.skipLine();
+            currentTableName.free();
+            currentTableName = tableName;
+
+            TomlPair pair;
+            pair.key = String::fromView(currentTableName.asView());
+            pair.value = TomlValue::tableVal();
+            doc->root.push(pair);
+            currentTable = &doc->root.atPtr(doc->root.count() - 1)->value.tableVal;
+            continue;
+        }
+
+        String key = p.parseKey();
+        if (p.error) { key.free(); currentTableName.free(); return false; }
+        if (p.next() != '=') { key.free(); currentTableName.free(); p.error = true; return false; }
+        TomlValue val = p.parseValue();
+        if (p.error) { key.free(); val.dispose(); currentTableName.free(); return false; }
+        p.skipLine();
+
+        TomlPair pair;
+        pair.key = key;
+        pair.value = val;
+        currentTable->push(pair);
+    }
+
+    currentTableName.free();
+    return !p.error;
+}

@@ -1,0 +1,47 @@
+@[no_warn_unsafe]
+
+pub u64 encode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+{
+    u64 pos = 0;
+    for (u64 i = 0; i < srcLen && pos + 2 <= dstCap; i++)
+    {
+        u8 hi = src[i] >> 4;
+        u8 lo = src[i] & 0x0F;
+        dst[pos++] = hi < 10 ? (u8)('0' + hi) : (u8)('a' + hi - 10);
+        dst[pos++] = lo < 10 ? (u8)('0' + lo) : (u8)('a' + lo - 10);
+    }
+    return pos;
+}
+
+u8 _hexVal(u8 c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return 0xFF;
+}
+
+pub u64 decode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+{
+    u64 pos = 0;
+    for (u64 i = 0; i + 1 < srcLen && pos < dstCap; i += 2)
+    {
+        u8 hi = _hexVal(src[i]);
+        u8 lo = _hexVal(src[i + 1]);
+        if (hi == 0xFF || lo == 0xFF) return 0;
+        dst[pos++] = (hi << 4) | lo;
+    }
+    if (srcLen % 2 != 0) return 0;
+    return pos;
+}
+
+pub bool isValid(const u8* src, u64 len)
+{
+    for (u64 i = 0; i < len; i++)
+    {
+        u8 c = src[i];
+        bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!ok) return false;
+    }
+    return len % 2 == 0;
+}

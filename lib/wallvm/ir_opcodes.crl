@@ -1,0 +1,549 @@
+@[no_warn_unsafe]
+
+
+pub enum IrOpcode
+{
+    // Terminators
+    Br,
+    CondBr,
+    Ret,
+    Unreachable,
+    Noret,
+    // Unary
+    Neg,
+    Not,
+    // Binary arithmetic
+    Add,
+    Sub,
+    Mul,
+    SDiv,
+    UDiv,
+    SRem,
+    URem,
+    // Binary bitwise
+    And,
+    Or,
+    Xor,
+    Shl,
+    Ashr,
+    Lshr,
+    // Memory
+    Alloca,
+    Load,
+    Store,
+    Gep,
+    // Cast
+    Trunc,
+    Zext,
+    Sext,
+    FpTrunc,
+    FpExt,
+    FpToSi,
+    SiToFp,
+    FpToUi,
+    UiToFp,
+    Bitcast,
+    // Compare
+    ICmp,
+    FCmp,
+    // Bit manipulation
+    CtPop,
+    CtLz,
+    CtTz,
+    Rotl,
+    Rotr,
+    Bswap,
+    // Integer min/max
+    SMin,
+    SMax,
+    UMin,
+    UMax,
+    // Integer abs
+    Abs,
+    // Floating-point
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    Fma,
+    FAbs,
+    FSqrt,
+    // Vector/SIMD
+    ShuffleVector,
+    ExtractElement,
+    InsertElement,
+    // Inline assembly
+    InlineAsm,
+    // Atomics
+    AtomicLoad,
+    AtomicStore,
+    AtomicRmw,
+    AtomicCmpXchg,
+    Fence,
+    // Exception handling
+    LandingPad,
+    ExtractValue,
+    // GC support
+    GcRoot,
+    GcWriteBarrier,
+    GcSafepoint,
+    // Other
+    Call,
+    Phi,
+    Select
+}
+
+// ICmp predicates
+pub enum IrICmpPred
+{
+    Eq,
+    Ne,
+    Slt,
+    Sle,
+    Sgt,
+    Sge,
+    Ult,
+    Ule,
+    Ugt,
+    Uge
+}
+
+// FCmp predicates
+pub enum IrFCmpPred
+{
+    Oeq,
+    One,
+    Olt,
+    Ole,
+    Ogt,
+    Oge,
+    Ueq,
+    Une,
+    Ult,
+    Ule,
+    Ugt,
+    Uge
+}
+
+// Atomic RMW operations
+pub enum IrAtomicRmwOp
+{
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Nand,
+    Or,
+    Xor,
+    Max,
+    Min,
+    UMax,
+    UMin
+}
+
+// Atomic memory ordering
+pub enum IrAtomicOrdering
+{
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst
+}
+
+// Opcode classification
+pub bool irOpcodeIsTerminator(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Br:
+    case IrOpcode::CondBr:
+    case IrOpcode::Ret:
+    case IrOpcode::Unreachable:
+    case IrOpcode::Noret:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsVector(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::ShuffleVector:
+    case IrOpcode::ExtractElement:
+    case IrOpcode::InsertElement:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsAtomic(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::AtomicLoad:
+    case IrOpcode::AtomicStore:
+    case IrOpcode::AtomicRmw:
+    case IrOpcode::AtomicCmpXchg:
+    case IrOpcode::Fence:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsGc(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::GcRoot:
+    case IrOpcode::GcWriteBarrier:
+    case IrOpcode::GcSafepoint:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsBinary(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Add:
+    case IrOpcode::Sub:
+    case IrOpcode::Mul:
+    case IrOpcode::SDiv:
+    case IrOpcode::UDiv:
+    case IrOpcode::SRem:
+    case IrOpcode::URem:
+    case IrOpcode::And:
+    case IrOpcode::Or:
+    case IrOpcode::Xor:
+    case IrOpcode::Shl:
+    case IrOpcode::Ashr:
+    case IrOpcode::Lshr:
+    case IrOpcode::Rotl:
+    case IrOpcode::Rotr:
+    case IrOpcode::SMin:
+    case IrOpcode::SMax:
+    case IrOpcode::UMin:
+    case IrOpcode::UMax:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsCast(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Trunc:
+    case IrOpcode::Zext:
+    case IrOpcode::Sext:
+    case IrOpcode::FpTrunc:
+    case IrOpcode::FpExt:
+    case IrOpcode::FpToSi:
+    case IrOpcode::SiToFp:
+    case IrOpcode::FpToUi:
+    case IrOpcode::UiToFp:
+    case IrOpcode::Bitcast:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsMemory(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Alloca:
+    case IrOpcode::Load:
+    case IrOpcode::Store:
+    case IrOpcode::Gep:
+    case IrOpcode::AtomicLoad:
+    case IrOpcode::AtomicStore:
+        return true;
+    default:
+        return false;
+    }
+}
+
+pub bool irOpcodeIsCommutative(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Add:
+    case IrOpcode::Mul:
+    case IrOpcode::And:
+    case IrOpcode::Or:
+    case IrOpcode::Xor:
+    case IrOpcode::SMin:
+    case IrOpcode::SMax:
+    case IrOpcode::UMin:
+    case IrOpcode::UMax:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Opcode string names
+static const char* irOpcodeStrHelper(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Br: return "br";
+    case IrOpcode::CondBr: return "cond_br";
+    case IrOpcode::Ret: return "ret";
+    case IrOpcode::Unreachable: return "unreachable";
+    case IrOpcode::Noret: return "noret";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper2(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Neg: return "neg";
+    case IrOpcode::Not: return "not";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper3(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Add: return "add";
+    case IrOpcode::Sub: return "sub";
+    case IrOpcode::Mul: return "mul";
+    case IrOpcode::SDiv: return "sdiv";
+    case IrOpcode::UDiv: return "udiv";
+    case IrOpcode::SRem: return "srem";
+    case IrOpcode::URem: return "urem";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper4(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::And: return "and";
+    case IrOpcode::Or: return "or";
+    case IrOpcode::Xor: return "xor";
+    case IrOpcode::Shl: return "shl";
+    case IrOpcode::Ashr: return "ashr";
+    case IrOpcode::Lshr: return "lshr";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper5(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Alloca: return "alloca";
+    case IrOpcode::Load: return "load";
+    case IrOpcode::Store: return "store";
+    case IrOpcode::Gep: return "gep";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper6(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::Trunc: return "trunc";
+    case IrOpcode::Zext: return "zext";
+    case IrOpcode::Sext: return "sext";
+    case IrOpcode::FpTrunc: return "fptrunc";
+    case IrOpcode::FpExt: return "fpext";
+    case IrOpcode::FpToSi: return "fptosi";
+    case IrOpcode::SiToFp: return "sitofp";
+    case IrOpcode::FpToUi: return "fptoui";
+    case IrOpcode::UiToFp: return "uitofp";
+    case IrOpcode::Bitcast: return "bitcast";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper7(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::ICmp: return "icmp";
+    case IrOpcode::FCmp: return "fcmp";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper8(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::CtPop: return "ctpop";
+    case IrOpcode::CtLz: return "ctlz";
+    case IrOpcode::CtTz: return "cttz";
+    case IrOpcode::Rotl: return "rotl";
+    case IrOpcode::Rotr: return "rotr";
+    case IrOpcode::Bswap: return "bswap";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper9(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::SMin: return "smin";
+    case IrOpcode::SMax: return "smax";
+    case IrOpcode::UMin: return "umin";
+    case IrOpcode::UMax: return "umax";
+    case IrOpcode::Abs: return "abs";
+    case IrOpcode::FAdd: return "fadd";
+    case IrOpcode::FSub: return "fsub";
+    case IrOpcode::FMul: return "fmul";
+    case IrOpcode::FDiv: return "fdiv";
+    case IrOpcode::Fma: return "fma";
+    case IrOpcode::FAbs: return "fabs";
+    case IrOpcode::FSqrt: return "fsqrt";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper10(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::ShuffleVector: return "shufflevector";
+    case IrOpcode::ExtractElement: return "extractelement";
+    case IrOpcode::InsertElement: return "insertelement";
+    case IrOpcode::InlineAsm: return "inlineasm";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper11(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::AtomicLoad: return "atomic_load";
+    case IrOpcode::AtomicStore: return "atomic_store";
+    case IrOpcode::AtomicRmw: return "atomic_rmw";
+    case IrOpcode::AtomicCmpXchg: return "atomic_cmpxchg";
+    case IrOpcode::Fence: return "fence";
+    default: return null;
+    }
+}
+
+static const char* irOpcodeStrHelper12(IrOpcode op)
+{
+    switch (op)
+    {
+    case IrOpcode::LandingPad: return "landingpad";
+    case IrOpcode::ExtractValue: return "extractvalue";
+    case IrOpcode::GcRoot: return "gc_root";
+    case IrOpcode::GcWriteBarrier: return "gc_writebarrier";
+    case IrOpcode::GcSafepoint: return "gc_safepoint";
+    case IrOpcode::Call: return "call";
+    case IrOpcode::Phi: return "phi";
+    case IrOpcode::Select: return "select";
+    default: return null;
+    }
+}
+
+pub const char* irOpcodeStr(IrOpcode op)
+{
+    const char* r;
+    r = irOpcodeStrHelper(op); if (r) return r;
+    r = irOpcodeStrHelper2(op); if (r) return r;
+    r = irOpcodeStrHelper3(op); if (r) return r;
+    r = irOpcodeStrHelper4(op); if (r) return r;
+    r = irOpcodeStrHelper5(op); if (r) return r;
+    r = irOpcodeStrHelper6(op); if (r) return r;
+    r = irOpcodeStrHelper7(op); if (r) return r;
+    r = irOpcodeStrHelper8(op); if (r) return r;
+    r = irOpcodeStrHelper9(op); if (r) return r;
+    r = irOpcodeStrHelper10(op); if (r) return r;
+    r = irOpcodeStrHelper11(op); if (r) return r;
+    r = irOpcodeStrHelper12(op); if (r) return r;
+    return "unknown";
+}
+
+pub const char* irICmpStr(IrICmpPred p)
+{
+    switch (p)
+    {
+    case IrICmpPred::Eq: return "eq";
+    case IrICmpPred::Ne: return "ne";
+    case IrICmpPred::Slt: return "slt";
+    case IrICmpPred::Sle: return "sle";
+    case IrICmpPred::Sgt: return "sgt";
+    case IrICmpPred::Sge: return "sge";
+    case IrICmpPred::Ult: return "ult";
+    case IrICmpPred::Ule: return "ule";
+    case IrICmpPred::Ugt: return "ugt";
+    case IrICmpPred::Uge: return "uge";
+    }
+    return "unknown";
+}
+
+pub const char* irAtomicRmwOpStr(IrAtomicRmwOp op)
+{
+    switch (op)
+    {
+    case IrAtomicRmwOp::Xchg: return "xchg";
+    case IrAtomicRmwOp::Add: return "add";
+    case IrAtomicRmwOp::Sub: return "sub";
+    case IrAtomicRmwOp::And: return "and";
+    case IrAtomicRmwOp::Nand: return "nand";
+    case IrAtomicRmwOp::Or: return "or";
+    case IrAtomicRmwOp::Xor: return "xor";
+    case IrAtomicRmwOp::Max: return "max";
+    case IrAtomicRmwOp::Min: return "min";
+    case IrAtomicRmwOp::UMax: return "umax";
+    case IrAtomicRmwOp::UMin: return "umin";
+    }
+    return "unknown";
+}
+
+pub const char* irAtomicOrderingStr(IrAtomicOrdering o)
+{
+    switch (o)
+    {
+    case IrAtomicOrdering::Relaxed: return "relaxed";
+    case IrAtomicOrdering::Acquire: return "acquire";
+    case IrAtomicOrdering::Release: return "release";
+    case IrAtomicOrdering::AcqRel: return "acq_rel";
+    case IrAtomicOrdering::SeqCst: return "seq_cst";
+    }
+    return "unknown";
+}
+
+pub const char* irFCmpStr(IrFCmpPred p)
+{
+    switch (p)
+    {
+    case IrFCmpPred::Oeq: return "oeq";
+    case IrFCmpPred::One: return "one";
+    case IrFCmpPred::Olt: return "olt";
+    case IrFCmpPred::Ole: return "ole";
+    case IrFCmpPred::Ogt: return "ogt";
+    case IrFCmpPred::Oge: return "oge";
+    case IrFCmpPred::Ueq: return "ueq";
+    case IrFCmpPred::Une: return "une";
+    case IrFCmpPred::Ult: return "ult";
+    case IrFCmpPred::Ule: return "ule";
+    case IrFCmpPred::Ugt: return "ugt";
+    case IrFCmpPred::Uge: return "uge";
+    }
+    return "unknown";
+}

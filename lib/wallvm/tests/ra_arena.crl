@@ -1,0 +1,45 @@
+mod mman = import("std/memory/mman.crl");
+
+const u64 BUF_CAP = 67108864;
+pub u8 buf[BUF_CAP];
+u64 used;
+mman.Allocator allocState;
+
+void* _bumpAlloc(void* ctx, u64 size)
+{
+    (void)ctx;
+    if (size == 0) return null;
+    u64 aligned = (size + 15u) & ~15u;
+    if (used + aligned > BUF_CAP) return null;
+    void* p = (void*)(buf + used);
+    used += aligned;
+    return p;
+}
+
+void _noopFree(void* ctx, void* ptr)
+{
+    (void)ctx;
+    (void)ptr;
+}
+
+void* _bumpRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (ptr == null) return _bumpAlloc(ctx, newSize);
+    if (newSize == 0) return null;
+    u64 aligned = (newSize + 15u) & ~15u;
+    if (used + aligned > BUF_CAP) return null;
+    void* p = (void*)(buf + used);
+    used += aligned;
+    mman.copy<u8>(p, ptr, aligned);
+    return p;
+}
+
+pub void install()
+{
+    used = 0;
+    allocState.ctx = null;
+    allocState.alloc = _bumpAlloc;
+    allocState.free = _noopFree;
+    allocState.realloc = _bumpRealloc;
+    mman.defaultAllocator = &allocState;
+}

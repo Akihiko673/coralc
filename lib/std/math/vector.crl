@@ -1,0 +1,213 @@
+pub struct Vec2
+{
+    f64 x;
+    f64 y;
+
+    static Vec2 new(f64 x, f64 y)
+    {
+        Vec2 v;
+        v.x = x;
+        v.y = y;
+        return v;
+    }
+
+    Vec2 add(Vec2 other)
+    {
+        Vec2 r;
+        r.x = self.x + other.x;
+        r.y = self.y + other.y;
+        return r;
+    }
+
+    Vec2 sub(Vec2 other)
+    {
+        Vec2 r;
+        r.x = self.x - other.x;
+        r.y = self.y - other.y;
+        return r;
+    }
+
+    Vec2 scale(f64 s)
+    {
+        Vec2 r;
+        r.x = self.x * s;
+        r.y = self.y * s;
+        return r;
+    }
+
+    f64 dot(Vec2 other)
+    {
+        return self.x * other.x + self.y * other.y;
+    }
+
+    f64 lengthSq()
+    {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    f64 length()
+    {
+        return sqrt(self.lengthSq());
+    }
+
+    Vec2 normalize()
+    {
+        f64 len = self.length();
+        if (len < 1e-15) return self;
+        return self.scale(1.0 / len);
+    }
+
+    Vec2 lerp(Vec2 other, f64 t)
+    {
+        Vec2 r;
+        r.x = self.x + (other.x - self.x) * t;
+        r.y = self.y + (other.y - self.y) * t;
+        return r;
+    }
+}
+
+pub struct Vec3
+{
+    f64 x;
+    f64 y;
+    f64 z;
+
+    static Vec3 new(f64 x, f64 y, f64 z)
+    {
+        Vec3 v;
+        v.x = x; v.y = y; v.z = z;
+        return v;
+    }
+
+    Vec3 add(Vec3 other)
+    {
+        Vec3 r;
+        r.x = self.x + other.x; r.y = self.y + other.y; r.z = self.z + other.z;
+        return r;
+    }
+
+    Vec3 sub(Vec3 other)
+    {
+        Vec3 r;
+        r.x = self.x - other.x; r.y = self.y - other.y; r.z = self.z - other.z;
+        return r;
+    }
+
+    Vec3 scale(f64 s)
+    {
+        Vec3 r;
+        r.x = self.x * s; r.y = self.y * s; r.z = self.z * s;
+        return r;
+    }
+
+    f64 dot(Vec3 other)
+    {
+        return self.x * other.x + self.y * other.y + self.z * other.z;
+    }
+
+    Vec3 cross(Vec3 other)
+    {
+        Vec3 r;
+        r.x = self.y * other.z - self.z * other.y;
+        r.y = self.z * other.x - self.x * other.z;
+        r.z = self.x * other.y - self.y * other.x;
+        return r;
+    }
+
+    f64 lengthSq()
+    {
+        return self.x * self.x + self.y * self.y + self.z * self.z;
+    }
+
+    f64 length()
+    {
+        return sqrt(self.lengthSq());
+    }
+
+    Vec3 normalize()
+    {
+        f64 len = self.length();
+        if (len < 1e-15) return self;
+        return self.scale(1.0 / len);
+    }
+
+    Vec3 lerp(Vec3 other, f64 t)
+    {
+        Vec3 r;
+        r.x = self.x + (other.x - self.x) * t;
+        r.y = self.y + (other.y - self.y) * t;
+        r.z = self.z + (other.z - self.z) * t;
+        return r;
+    }
+}
+
+pub struct Vec4
+{
+    f64 x;
+    f64 y;
+    f64 z;
+    f64 w;
+
+    static Vec4 new(f64 x, f64 y, f64 z, f64 w)
+    {
+        Vec4 v;
+        v.x = x; v.y = y; v.z = z; v.w = w;
+        return v;
+    }
+
+    Vec4 add(Vec4 other)
+    {
+        Vec4 r;
+        r.x = self.x + other.x; r.y = self.y + other.y;
+        r.z = self.z + other.z; r.w = self.w + other.w;
+        return r;
+    }
+
+    Vec4 sub(Vec4 other)
+    {
+        Vec4 r;
+        r.x = self.x - other.x; r.y = self.y - other.y;
+        r.z = self.z - other.z; r.w = self.w - other.w;
+        return r;
+    }
+
+    Vec4 scale(f64 s)
+    {
+        Vec4 r;
+        r.x = self.x * s; r.y = self.y * s;
+        r.z = self.z * s; r.w = self.w * s;
+        return r;
+    }
+
+    f64 dot(Vec4 other)
+    {
+        return self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w;
+    }
+
+    f64 lengthSq()
+    {
+        return self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
+    }
+
+    f64 length()
+    {
+        return sqrt(self.lengthSq());
+    }
+
+    Vec4 normalize()
+    {
+        f64 len = self.length();
+        if (len < 1e-15) return self;
+        return self.scale(1.0 / len);
+    }
+
+    Vec4 lerp(Vec4 other, f64 t)
+    {
+        Vec4 r;
+        r.x = self.x + (other.x - self.x) * t;
+        r.y = self.y + (other.y - self.y) * t;
+        r.z = self.z + (other.z - self.z) * t;
+        r.w = self.w + (other.w - self.w) * t;
+        return r;
+    }
+}

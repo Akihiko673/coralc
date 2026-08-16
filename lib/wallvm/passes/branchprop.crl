@@ -1,0 +1,177 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod domtree = import("wallvm/domtree.crl");
+
+// Condition-constraint propagation, for a cond_br whose condition is
+// icmp eq/ne (v, const) (optionally negated), the comparison guarantees
+// v == const along one side of the branch. Rewrite v with the constant
+// in every block reachable only through that side (dominated by the taken
+// target and not dominated by the other target).
+pub struct BranchPropPass
+{
+    ir_types.IrContext* ctx;
+    u64 props;
+
+    BranchPropPass new(ir_types.IrContext* ctx)
+    {
+        BranchPropPass p;
+        p.ctx = ctx;
+        p.props = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.props = 0;
+        bool changed = false;
+
+        domtree.IrDomTree* dom = domtree.irDomtreeNew(func);
+        if (!dom) return false;
+
+        u8* inRegion = mman.alloc<u8>(func.nblocks > 0 ? func.nblocks : 1);
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            if (bb.ninsts == 0) continue;
+            ir_types.IrInst* term = bb.insts[bb.ninsts - 1];
+            if (term.opcode != ir_opcodes.IrOpcode::CondBr) continue;
+            if (term.nops < 3) continue;
+
+            ir_types.IrValue* cond = term.ops[0];
+            ir_types.IrValue* tgtT = term.ops[1];
+            ir_types.IrValue* tgtF = term.ops[2];
+            if (!cond || !tgtT || !tgtF) continue;
+
+            bool invert = false;
+            if (cond.kind == ir_types.IrValueKind::Inst)
+            {
+                ir_types.IrInst* ci = (ir_types.IrInst*)cond;
+                if (ci.opcode == ir_opcodes.IrOpcode::Not && ci.nops == 1)
+                {
+                    invert = true;
+                    cond = ci.ops[0];
+                }
+            }
+            if (cond.kind != ir_types.IrValueKind::Inst) continue;
+            ir_types.IrInst* ci = (ir_types.IrInst*)cond;
+            if (ci.opcode != ir_opcodes.IrOpcode::ICmp || ci.nops != 2) continue;
+            if (ci.icmpPred != ir_opcodes.IrICmpPred::Eq && ci.icmpPred != ir_opcodes.IrICmpPred::Ne) continue;
+
+            ir_types.IrValue* a = ci.ops[0];
+            ir_types.IrValue* b = ci.ops[1];
+            ir_types.IrValue* v = null;
+            ir_types.IrValue* cst = null;
+            if (a.kind == ir_types.IrValueKind::Inst && b.kind == ir_types.IrValueKind::ConstInt)
+            {
+                v = a;
+                cst = b;
+            }
+            else if (b.kind == ir_types.IrValueKind::Inst && a.kind == ir_types.IrValueKind::ConstInt)
+            {
+                v = b;
+                cst = a;
+            }
+            else continue;
+            if (!v || !cst) continue;
+
+            // One side guarantees v == c, taken target, Not flips the condition.
+            bool takeTrue = (ci.icmpPred == ir_opcodes.IrICmpPred::Eq) != invert;
+            ir_types.IrValue* subV = takeTrue ? tgtT : tgtF;
+            ir_types.IrValue* otherV = takeTrue ? tgtF : tgtT;
+            if (subV.kind != ir_types.IrValueKind::Block || otherV.kind != ir_types.IrValueKind::Block) continue;
+            ir_types.IrBlock* subBlock = (ir_types.IrBlock*)subV;
+            ir_types.IrBlock* otherBlock = (ir_types.IrBlock*)otherV;
+
+            bool any = false;
+            for (u32 k = 0; k < func.nblocks; k++)
+            {
+                ir_types.IrBlock* b2 = func.blocks[k];
+                if (domtree.irDomtreeDominates(dom, subBlock, b2) &&
+                    !domtree.irDomtreeDominates(dom, otherBlock, b2))
+                {
+                    inRegion[k] = 1;
+                    any = true;
+                }
+                else
+                {
+                    inRegion[k] = 0;
+                }
+            }
+            if (!any) continue;
+
+            ir_types.IrValue* cval = self.ctx.constInt(v.type, cst.valData);
+            for (u32 k = 0; k < func.nblocks; k++)
+            {
+                if (!inRegion[k]) continue;
+                if (self.rewriteBlock(func.blocks[k], v, cval, inRegion, func))
+                    changed = true;
+            }
+        }
+
+        mman.dealloc<u8>(inRegion);
+        return changed;
+    }
+
+    // Rewrite uses of v with cval inside a region block. Phi operands are
+    // only rewritten for incoming edges from blocks inside the region.
+    bool rewriteBlock(ir_types.IrBlock* bb, ir_types.IrValue* v, ir_types.IrValue* cval, u8* inRegion, ir_types.IrFunc* func)
+    {
+        bool changed = false;
+        for (u32 i = 0; i < bb.ninsts; i++)
+        {
+            ir_types.IrInst* inst = bb.insts[i];
+            if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+            {
+                bool replaced = false;
+                for (u32 oi = 1; oi + 1 < inst.nops; oi += 2)
+                {
+                    if (inst.ops[oi].kind != ir_types.IrValueKind::Block) continue;
+                    ir_types.IrBlock* pb = (ir_types.IrBlock*)inst.ops[oi];
+                    u32 pbi = 0;
+                    for (u32 k = 0; k < func.nblocks; k++)
+                        if (func.blocks[k] == pb) { pbi = k; break; }
+                    if (pbi < func.nblocks && inRegion[pbi] && inst.ops[oi - 1] == v)
+                    {
+                        inst.ops[oi - 1] = cval;
+                        replaced = true;
+                    }
+                }
+                if (replaced)
+                {
+                    v.removeUser(inst);
+                    cval.addUser(inst);
+                    changed = true;
+                }
+                continue;
+            }
+
+            bool replaced = false;
+            for (u32 j = 0; j < inst.nops; j++)
+            {
+                if (inst.ops[j] == v)
+                {
+                    inst.ops[j] = cval;
+                    replaced = true;
+                }
+            }
+            if (replaced)
+            {
+                v.removeUser(inst);
+                cval.addUser(inst);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+}
+
+pub bool irPassBranchProp(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    BranchPropPass pass = BranchPropPass::new(ctx);
+    return pass.run(func);
+}

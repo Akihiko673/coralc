@@ -1,0 +1,14 @@
+mod libc = import("std/platform/libc.crl");
+
+i32 main()
+{
+    u64 n = libc.strlen("hello world");
+    if (n != 11) return 1;
+    const u8* a = "abc";
+    const u8* b = "abd";
+    i32 cmp = libc.strcmp(a, b);
+    if (cmp >= 0) return 2;
+    i32 same = libc.strcmp("xy", "xy");
+    if (same != 0) return 3;
+    return 0;
+}

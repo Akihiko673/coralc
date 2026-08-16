@@ -1,0 +1,84 @@
+@[no_warn_unsafe]
+
+pub struct Result<T, E>
+{
+    bool ok;
+    T value;
+    E error;
+
+    Result<T,E> ok(T value)
+    {
+        Result<T,E> r;
+        r.ok = true;
+        r.value = value;
+        return r;
+    }
+
+    Result<T,E> err(E error)
+    {
+        Result<T,E> r;
+        r.ok = false;
+        r.error = error;
+        return r;
+    }
+
+    bool isOk(const self*)
+    {
+        return self->ok;
+    }
+
+    bool isErr(const self*)
+    {
+        return !self->ok;
+    }
+
+    T unwrap(const self*)
+    {
+        assert(self->ok);
+        return self->value;
+    }
+
+    T unwrapOr(const self*, T defaultVal)
+    {
+        if (self->ok) return self->value;
+        return defaultVal;
+    }
+
+    E unwrapErr(const self*)
+    {
+        assert(!self->ok);
+        return self->error;
+    }
+
+    T* okPtr(const self*)
+    {
+        if (self->ok) return &self->value;
+        return null;
+    }
+
+    E* errPtr(const self*)
+    {
+        if (!self->ok) return &self->error;
+        return null;
+    }
+
+    void mapOk(T(T) fn)
+    {
+        if (self.ok) self.value = fn(self.value);
+    }
+
+    void mapErr(E(E) fn)
+    {
+        if (!self.ok) self.error = fn(self.error);
+    }
+
+    void andThen(Result<T,E>(T) fn)
+    {
+        if (self.ok) *self = fn(self.value);
+    }
+
+    void orElse(Result<T,E>(E) fn)
+    {
+        if (!self.ok) *self = fn(self.error);
+    }
+}

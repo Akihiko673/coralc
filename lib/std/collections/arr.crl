@@ -1,0 +1,74 @@
+@[no_warn_unsafe]
+
+pub struct arr<T, N>
+{
+    T data[N];
+
+    T* ptr()
+    {
+        return self.data;
+    }
+
+    const T* constPtr()
+    {
+        return (const T*)self.data;
+    }
+
+    u64 count()
+    {
+        return N;
+    }
+
+    bool isEmpty()
+    {
+        return N == 0;
+    }
+
+    T at(u64 i)
+    {
+        assert(i < N);
+        return self.data[i];
+    }
+
+    void set(u64 i, T val)
+    {
+        assert(i < N);
+        self.data[i] = val;
+    }
+
+    T* atPtr(u64 i)
+    {
+        assert(i < N);
+        return &self.data[i];
+    }
+
+    T front()
+    {
+        assert(N > 0);
+        return self.data[0];
+    }
+
+    T back()
+    {
+        assert(N > 0);
+        return self.data[N - 1];
+    }
+
+    void fill(T val)
+    {
+        for (u64 i = 0; i < N; i++)
+            self.data[i] = val;
+    }
+
+    void copyTo(T* dst)
+    {
+        for (u64 i = 0; i < N; i++)
+            dst[i] = self.data[i];
+    }
+
+    void copyFrom(const T* src)
+    {
+        for (u64 i = 0; i < N; i++)
+            self.data[i] = src[i];
+    }
+}

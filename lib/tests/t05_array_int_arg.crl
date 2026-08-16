@@ -1,0 +1,17 @@
+mod arr = import("std/collections/arr.crl");
+
+i32 main()
+{
+    arr.arr<u64, 3> a;
+    a.set(0, 111);
+    a.set(1, 222);
+    a.set(2, 333);
+    if (a.count() != 3) return 1;
+    if (a.at(1) != 222) return 2;
+    if (a.isEmpty()) return 3;
+    u64 sum = 0;
+    for (u64 i = 0; i < a.count(); i++)
+        sum = sum + a.at(i);
+    if (sum != 666) return 4;
+    return 0;
+}

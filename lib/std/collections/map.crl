@@ -1,0 +1,248 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod option = import("std/data/option.crl");
+
+pub struct MapEntry<K, V>
+{
+    K key;
+    V value;
+    i32 height;
+    MapEntry<K, V>* left;
+    MapEntry<K, V>* right;
+}
+
+pub struct map<K, V>
+{
+    MapEntry<K, V>* root;
+    u64 len;
+    i32(K, K) cmpFn;
+
+    static map<K, V> new(i32(K, K) cmp)
+    {
+        map<K, V> m;
+        m.root = null;
+        m.len = 0;
+        m.cmpFn = cmp;
+        return m;
+    }
+
+    void dispose()
+    {
+        self._disposeNode(self.root);
+        self.root = null;
+        self.len = 0;
+    }
+
+    u64 count()
+    {
+        return self.len;
+    }
+
+    bool isEmpty()
+    {
+        return self.len == 0;
+    }
+
+    void insert(K key, V value)
+    {
+        self.root = self._insert(self.root, key, value);
+    }
+
+    option<V> get(K key)
+    {
+        MapEntry<K, V>* n = self._find(self.root, key);
+        if (n != null) return option<V>::some(n.value);
+        return option<V>::none();
+    }
+
+    V* getPtr(K key)
+    {
+        MapEntry<K, V>* n = self._find(self.root, key);
+        if (n != null) return &n.value;
+        return null;
+    }
+
+    bool contains(K key)
+    {
+        return self._find(self.root, key) != null;
+    }
+
+    void remove(K key)
+    {
+        self.root = self._remove(self.root, key);
+    }
+
+    void clear()
+    {
+        self._disposeNode(self.root);
+        self.root = null;
+        self.len = 0;
+    }
+
+    void each(void(K, V) fn)
+    {
+        self._eachInOrder(self.root, fn);
+    }
+
+    i32 _max(i32 a, i32 b)
+    {
+        if (a > b) return a;
+        return b;
+    }
+
+    i32 _height(MapEntry<K, V>* n)
+    {
+        if (n == null) return -1;
+        return n.height;
+    }
+
+    i32 _balance(MapEntry<K, V>* n)
+    {
+        if (n == null) return 0;
+        return self._height(n.left) - self._height(n.right);
+    }
+
+    MapEntry<K, V>* _rotateRight(MapEntry<K, V>* y)
+    {
+        MapEntry<K, V>* x = y.left;
+        MapEntry<K, V>* t2 = x.right;
+        x.right = y;
+        y.left = t2;
+        y.height = 1 + self._max(self._height(y.left), self._height(y.right));
+        x.height = 1 + self._max(self._height(x.left), self._height(x.right));
+        return x;
+    }
+
+    MapEntry<K, V>* _rotateLeft(MapEntry<K, V>* x)
+    {
+        MapEntry<K, V>* y = x.right;
+        MapEntry<K, V>* t2 = y.left;
+        y.left = x;
+        x.right = t2;
+        x.height = 1 + self._max(self._height(x.left), self._height(x.right));
+        y.height = 1 + self._max(self._height(y.left), self._height(y.right));
+        return y;
+    }
+
+    MapEntry<K, V>* _insert(MapEntry<K, V>* n, K key, V value)
+    {
+        if (n == null)
+        {
+            MapEntry<K, V>* newNode = mman.alloc<MapEntry<K, V>>(1);
+            newNode.key = key;
+            newNode.value = value;
+            newNode.height = 0;
+            newNode.left = null;
+            newNode.right = null;
+            self.len++;
+            return newNode;
+        }
+        i32 c = self.cmpFn(key, n.key);
+        if (c < 0)
+            n.left = self._insert(n.left, key, value);
+        else if (c > 0)
+            n.right = self._insert(n.right, key, value);
+        else
+        {
+            n.value = value;
+            return n;
+        }
+        n.height = 1 + self._max(self._height(n.left), self._height(n.right));
+        i32 bal = self._balance(n);
+        if (bal > 1 && self.cmpFn(key, n.left.key) < 0)
+            return self._rotateRight(n);
+        if (bal < -1 && self.cmpFn(key, n.right.key) > 0)
+            return self._rotateLeft(n);
+        if (bal > 1 && self.cmpFn(key, n.left.key) > 0)
+        {
+            n.left = self._rotateLeft(n.left);
+            return self._rotateRight(n);
+        }
+        if (bal < -1 && self.cmpFn(key, n.right.key) < 0)
+        {
+            n.right = self._rotateRight(n.right);
+            return self._rotateLeft(n);
+        }
+        return n;
+    }
+
+    MapEntry<K, V>* _findMin(MapEntry<K, V>* n)
+    {
+        MapEntry<K, V>* cur = n;
+        while (cur.left != null) cur = cur.left;
+        return cur;
+    }
+
+    MapEntry<K, V>* _remove(MapEntry<K, V>* n, K key)
+    {
+        if (n == null) return null;
+        i32 c = self.cmpFn(key, n.key);
+        if (c < 0)
+            n.left = self._remove(n.left, key);
+        else if (c > 0)
+            n.right = self._remove(n.right, key);
+        else
+        {
+            if (n.left == null || n.right == null)
+            {
+                self.len--;
+                MapEntry<K, V>* child = n.left != null ? n.left : n.right;
+                mman.dealloc<MapEntry<K, V>>(n);
+                return child;
+            }
+            else
+            {
+                MapEntry<K, V>* succ = self._findMin(n.right);
+                n.key = succ.key;
+                n.value = succ.value;
+                n.right = self._remove(n.right, succ.key);
+            }
+        }
+        n.height = 1 + self._max(self._height(n.left), self._height(n.right));
+        i32 bal = self._balance(n);
+        if (bal > 1 && self._balance(n.left) >= 0)
+            return self._rotateRight(n);
+        if (bal > 1 && self._balance(n.left) < 0)
+        {
+            n.left = self._rotateLeft(n.left);
+            return self._rotateRight(n);
+        }
+        if (bal < -1 && self._balance(n.right) <= 0)
+            return self._rotateLeft(n);
+        if (bal < -1 && self._balance(n.right) > 0)
+        {
+            n.right = self._rotateRight(n.right);
+            return self._rotateLeft(n);
+        }
+        return n;
+    }
+
+    MapEntry<K, V>* _find(MapEntry<K, V>* n, K key)
+    {
+        while (n != null)
+        {
+            i32 c = self.cmpFn(key, n.key);
+            if (c == 0) return n;
+            if (c < 0) n = n.left;
+            else n = n.right;
+        }
+        return null;
+    }
+
+    void _eachInOrder(MapEntry<K, V>* n, void(K, V) fn)
+    {
+        if (n == null) return;
+        self._eachInOrder(n.left, fn);
+        fn(n.key, n.value);
+        self._eachInOrder(n.right, fn);
+    }
+
+    void _disposeNode(MapEntry<K, V>* n)
+    {
+        if (n == null) return;
+        self._disposeNode(n.left);
+        self._disposeNode(n.right);
+        mman.dealloc<MapEntry<K, V>>(n);
+    }
+}

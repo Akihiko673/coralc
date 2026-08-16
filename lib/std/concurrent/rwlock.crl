@@ -1,0 +1,41 @@
+mod libc = import("std/platform/libc.crl");
+
+pub struct rwlock
+{
+    void* impl[8];
+
+    void init()
+    {
+        libc.pthread_rwlock_init(self.impl, null);
+    }
+
+    void destroy()
+    {
+        libc.pthread_rwlock_destroy(self.impl);
+    }
+
+    void readLock()
+    {
+        libc.pthread_rwlock_rdlock(self.impl);
+    }
+
+    void writeLock()
+    {
+        libc.pthread_rwlock_wrlock(self.impl);
+    }
+
+    bool tryReadLock()
+    {
+        return libc.pthread_rwlock_tryrdlock(self.impl) == 0;
+    }
+
+    bool tryWriteLock()
+    {
+        return libc.pthread_rwlock_trywrlock(self.impl) == 0;
+    }
+
+    void unlock()
+    {
+        libc.pthread_rwlock_unlock(self.impl);
+    }
+}

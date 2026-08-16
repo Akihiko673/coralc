@@ -1,0 +1,297 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod loop_detect = import("wallvm/passes/loop_detect.crl");
+mod licm = import("wallvm/passes/licm.crl");
+mod domtree = import("wallvm/domtree.crl");
+mod mman = import("std/memory/mman.crl");
+
+// Cross-loop CSE. LICM skips memory operations, so hoisting loop-invariant
+// loads out of loops that cannot write memory, then sweeping the preheader for
+// redundant computations, closes that gap.
+pub struct LoopCsePass
+{
+    ir_types.IrContext* ctx;
+    u64 hoisted;
+    u64 eliminated;
+
+    LoopCsePass new(ir_types.IrContext* ctx)
+    {
+        LoopCsePass p;
+        p.ctx = ctx;
+        p.hoisted = 0;
+        p.eliminated = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        loop_detect.IrLoop** loops = loop_detect.irLoopDetectNatural(func);
+        if (!loops) return false;
+
+        bool changed = false;
+        for (u32 li = 0; loops[li]; li++)
+        {
+            loop_detect.IrLoop* lp = loops[li];
+            if (self.hoistLoopLoads(func, lp)) changed = true;
+            if (lp->preheader && self.dedupeBlock(lp->preheader)) changed = true;
+        }
+
+        mman.dealloc<loop_detect.IrLoop*>(loops);
+        return changed;
+    }
+
+    // Any opcode that can conditionally or through a callee write memory
+    // invalidates cross-iteration load hoisting.
+    bool isWriter(ir_opcodes.IrOpcode op)
+    {
+        switch (op)
+        {
+        case ir_opcodes.IrOpcode::Store:
+        case ir_opcodes.IrOpcode::AtomicLoad:
+        case ir_opcodes.IrOpcode::AtomicStore:
+        case ir_opcodes.IrOpcode::AtomicRmw:
+        case ir_opcodes.IrOpcode::AtomicCmpXchg:
+        case ir_opcodes.IrOpcode::Fence:
+        case ir_opcodes.IrOpcode::Call:
+        case ir_opcodes.IrOpcode::InlineAsm:
+        case ir_opcodes.IrOpcode::LandingPad:
+        case ir_opcodes.IrOpcode::GcRoot:
+        case ir_opcodes.IrOpcode::GcWriteBarrier:
+        case ir_opcodes.IrOpcode::GcSafepoint:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool loopHasWriter(loop_detect.IrLoop* lp)
+    {
+        for (u32 bi = 0; bi < lp->nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = lp->blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+                if (self.isWriter(bb.insts[ii].opcode)) return true;
+        }
+        return false;
+    }
+
+    bool isHoistableLoad(ir_types.IrInst* inst, loop_detect.IrLoop* lp)
+    {
+        if (inst.opcode != ir_opcodes.IrOpcode::Load) return false;
+        return licm.isLoopInvariant(inst, lp);
+    }
+
+    bool hoistLoopLoads(ir_types.IrFunc* func, loop_detect.IrLoop* lp)
+    {
+        if (self.loopHasWriter(lp)) return false;
+
+        ir_types.IrBlock* pre = lp->preheader;
+        bool changed = false;
+
+        bool hasCandidate = false;
+        for (u32 bi = 0; bi < lp->nblocks && !hasCandidate; bi++)
+        {
+            ir_types.IrBlock* bb = lp->blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+                if (self.isHoistableLoad(bb.insts[ii], lp))
+                {
+                    hasCandidate = true;
+                    break;
+                }
+        }
+        if (!hasCandidate) return false;
+
+        if (!pre)
+        {
+            pre = licm.createPreheader(self.ctx, lp, func);
+            if (!pre) return false;
+        }
+
+        domtree.IrDomTree* dt = domtree.irDomtreeNew(func);
+        if (!dt) return false;
+
+        for (u32 bi = 0; bi < lp->nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = lp->blocks[bi];
+
+            // Only loads in blocks that run on every path are hoisted, the
+            // block must dominate the latch (every path to the back edge).
+            if (!domtree.irDomtreeDominates(dt, bb, lp->latch)) continue;
+
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (self.isHoistableLoad(inst, lp))
+                {
+                    licm.hoistToPreheader(inst, pre);
+                    self.hoisted++;
+                    changed = true;
+                }
+                else
+                {
+                    ii++;
+                }
+            }
+        }
+
+        domtree.irDomtreeFree(dt);
+        return changed;
+    }
+
+    bool isPureCandidate(ir_opcodes.IrOpcode op)
+    {
+        switch (op)
+        {
+        case ir_opcodes.IrOpcode::Add:
+        case ir_opcodes.IrOpcode::Sub:
+        case ir_opcodes.IrOpcode::Mul:
+        case ir_opcodes.IrOpcode::And:
+        case ir_opcodes.IrOpcode::Or:
+        case ir_opcodes.IrOpcode::Xor:
+        case ir_opcodes.IrOpcode::Shl:
+        case ir_opcodes.IrOpcode::Lshr:
+        case ir_opcodes.IrOpcode::Ashr:
+        case ir_opcodes.IrOpcode::SMin:
+        case ir_opcodes.IrOpcode::SMax:
+        case ir_opcodes.IrOpcode::UMin:
+        case ir_opcodes.IrOpcode::UMax:
+        case ir_opcodes.IrOpcode::ICmp:
+        case ir_opcodes.IrOpcode::FAdd:
+        case ir_opcodes.IrOpcode::FSub:
+        case ir_opcodes.IrOpcode::FMul:
+        case ir_opcodes.IrOpcode::FDiv:
+        case ir_opcodes.IrOpcode::FCmp:
+        case ir_opcodes.IrOpcode::Trunc:
+        case ir_opcodes.IrOpcode::Zext:
+        case ir_opcodes.IrOpcode::Sext:
+        case ir_opcodes.IrOpcode::FpTrunc:
+        case ir_opcodes.IrOpcode::FpExt:
+        case ir_opcodes.IrOpcode::FpToSi:
+        case ir_opcodes.IrOpcode::SiToFp:
+        case ir_opcodes.IrOpcode::FpToUi:
+        case ir_opcodes.IrOpcode::UiToFp:
+        case ir_opcodes.IrOpcode::Bitcast:
+        case ir_opcodes.IrOpcode::Neg:
+        case ir_opcodes.IrOpcode::Not:
+        case ir_opcodes.IrOpcode::Abs:
+        case ir_opcodes.IrOpcode::FAbs:
+        case ir_opcodes.IrOpcode::FSqrt:
+        case ir_opcodes.IrOpcode::CtPop:
+        case ir_opcodes.IrOpcode::CtLz:
+        case ir_opcodes.IrOpcode::CtTz:
+        case ir_opcodes.IrOpcode::Rotl:
+        case ir_opcodes.IrOpcode::Rotr:
+        case ir_opcodes.IrOpcode::Bswap:
+        case ir_opcodes.IrOpcode::Select:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool isDedupeCandidate(ir_opcodes.IrOpcode op)
+    {
+        if (op == ir_opcodes.IrOpcode::Load) return true;
+        return self.isPureCandidate(op);
+    }
+
+    bool sameOperands(ir_types.IrInst* a, ir_types.IrInst* b)
+    {
+        if (a->nops != b->nops) return false;
+        for (u32 i = 0; i < a->nops; i++)
+            if (a->ops[i] != b->ops[i]) return false;
+        return true;
+    }
+
+    bool areEquivalent(ir_types.IrInst* a, ir_types.IrInst* b)
+    {
+        if (a->opcode != b->opcode) return false;
+        if (a->base.type != b->base.type) return false;
+        if (a->nops != b->nops) return false;
+        if (a->opcode == ir_opcodes.IrOpcode::ICmp && a->icmpPred != b->icmpPred) return false;
+        if (a->opcode == ir_opcodes.IrOpcode::FCmp && a->fcmpPred != b->fcmpPred) return false;
+
+        if (sameOperands(a, b)) return true;
+
+        if (a->nops == 2 && ir_opcodes.irOpcodeIsCommutative(a->opcode))
+        {
+            if (a->ops[0] == b->ops[1] && a->ops[1] == b->ops[0])
+                return true;
+        }
+
+        return false;
+    }
+
+    void fold(ir_types.IrInst* inst, ir_types.IrInst* prev)
+    {
+        inst.base.replaceAllUses(&prev.base);
+        inst.erase();
+        self.eliminated++;
+    }
+
+    // Sweep the preheader for redundant computations. Pure instructions fold
+    // against any earlier equivalent (SSA values are immutable, a store between
+    // them cannot change a result). Loads only fold where no writer lies
+    // between the copies.
+    bool dedupeBlock(ir_types.IrBlock* pre)
+    {
+        bool changed = false;
+        u32 i = 0;
+        while (i < pre.ninsts)
+        {
+            ir_types.IrInst* inst = pre.insts[i];
+            if (!self.isDedupeCandidate(inst.opcode))
+            {
+                i++;
+                continue;
+            }
+
+            bool folded = false;
+            if (inst.opcode == ir_opcodes.IrOpcode::Load)
+            {
+                u32 j = i;
+                while (j > 0)
+                {
+                    j--;
+                    ir_types.IrInst* prev = pre.insts[j];
+                    if (self.isWriter(prev.opcode)) break;
+                    if (self.areEquivalent(inst, prev))
+                    {
+                        self.fold(inst, prev);
+                        changed = true;
+                        folded = true;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                for (u32 j = 0; j < i; j++)
+                {
+                    ir_types.IrInst* prev = pre.insts[j];
+                    if (self.areEquivalent(inst, prev))
+                    {
+                        self.fold(inst, prev);
+                        changed = true;
+                        folded = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!folded) i++;
+        }
+        return changed;
+    }
+}
+
+pub bool irPassLoopCse(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    LoopCsePass pass = LoopCsePass::new(ctx);
+    return pass.run(func);
+}

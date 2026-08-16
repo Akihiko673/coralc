@@ -1,0 +1,144 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct TreeNode<T>
+{
+    T value;
+    vec.vec<TreeNode<T>*> children;
+}
+
+pub struct tree<T>
+{
+    TreeNode<T>* root;
+
+    static tree<T> new()
+    {
+        tree<T> t;
+        t.root = null;
+        return t;
+    }
+
+    void dispose()
+    {
+        if (self.root != null)
+        {
+            self._disposeNode(self.root);
+            self.root = null;
+        }
+    }
+
+    void _disposeNode(TreeNode<T>* node)
+    {
+        for (u64 i = 0; i < node->children.count(); i++)
+            self._disposeNode(node->children.at(i));
+        node->children.dispose();
+        mman.dealloc<TreeNode<T>>(node);
+    }
+
+    bool isEmpty() { return self.root == null; }
+
+    TreeNode<T>* setRoot(T val)
+    {
+        if (self.root != null) self._disposeNode(self.root);
+        self.root = mman.alloc<TreeNode<T>>(1);
+        self.root->value = val;
+        self.root->children = vec.vec<TreeNode<T>*>::new();
+        return self.root;
+    }
+
+    TreeNode<T>* addChild(TreeNode<T>* parent, T val)
+    {
+        if (parent == null) return null;
+        TreeNode<T>* child = mman.alloc<TreeNode<T>>(1);
+        child->value = val;
+        child->children = vec.vec<TreeNode<T>*>::new();
+        parent->children.push(child);
+        return child;
+    }
+
+    u64 childCount(TreeNode<T>* node)
+    {
+        if (node == null) return 0;
+        return node->children.count();
+    }
+
+    TreeNode<T>* childAt(TreeNode<T>* node, u64 idx)
+    {
+        if (node == null) return null;
+        return node->children.at(idx);
+    }
+
+    void removeChild(TreeNode<T>* parent, u64 idx)
+    {
+        if (parent == null || idx >= parent->children.count()) return;
+        TreeNode<T>* child = parent->children.at(idx);
+        self._disposeNode(child);
+        parent->children.removeAt(idx);
+    }
+
+    void preOrder(void(T) fn)
+    {
+        if (self.root != null) self._preOrder(self.root, fn);
+    }
+
+    void _preOrder(TreeNode<T>* node, void(T) fn)
+    {
+        fn(node->value);
+        for (u64 i = 0; i < node->children.count(); i++)
+            self._preOrder(node->children.at(i), fn);
+    }
+
+    void postOrder(void(T) fn)
+    {
+        if (self.root != null) self._postOrder(self.root, fn);
+    }
+
+    void _postOrder(TreeNode<T>* node, void(T) fn)
+    {
+        for (u64 i = 0; i < node->children.count(); i++)
+            self._postOrder(node->children.at(i), fn);
+        fn(node->value);
+    }
+
+    u64 depth(TreeNode<T>* node)
+    {
+        if (node == null) return 0;
+        u64 maxD = 0;
+        for (u64 i = 0; i < node->children.count(); i++)
+        {
+            u64 d = self.depth(node->children.at(i));
+            if (d > maxD) maxD = d;
+        }
+        return maxD + 1;
+    }
+
+    u64 size()
+    {
+        u64 n = 0;
+        if (self.root != null) self._count(self.root, &n);
+        return n;
+    }
+
+    void _count(TreeNode<T>* node, u64* n)
+    {
+        (*n)++;
+        for (u64 i = 0; i < node->children.count(); i++)
+            self._count(node->children.at(i), n);
+    }
+
+    vec.vec<T> toVec()
+    {
+        vec.vec<T> v = vec.vec<T>::new();
+        if (self.root != null) self._toVec(self.root, &v);
+        return v;
+    }
+
+    void _toVec(TreeNode<T>* node, vec.vec<T>* v)
+    {
+        v->push(node->value);
+        for (u64 i = 0; i < node->children.count(); i++)
+            self._toVec(node->children.at(i), v);
+    }
+}

@@ -1,0 +1,72 @@
+@[no_warn_unsafe]
+
+mod libc = import("std/platform/libc.crl");
+mod string = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub distinct FileHandle = void*; // i used distinct, cuz i don't want niggas randomly placing a void* in place of it
+                                 // niggas gonna need to ocast it. then, they's on their own
+
+pub FileHandle fileOpen(string.strView path, string.strView mode)
+{
+    char pathBuf[4096];
+    char modeBuf[16];
+    u64 plen = path.len < 4095u ? path.len : 4095u;
+    u64 mlen = mode.len < 15 ? mode.len : 15u;
+    mman.copy<u8>(pathBuf, (const u8*)path.ptr, plen);
+    mman.copy<u8>(modeBuf, (const u8*)mode.ptr, mlen);
+    pathBuf[plen] = 0;
+    modeBuf[mlen] = 0;
+    return (FileHandle)libc.fopen(pathBuf, modeBuf);
+}
+
+pub void fileClose(FileHandle fh)
+{
+    libc.fclose((void*)fh);
+}
+
+pub u64 fileWrite(FileHandle fh, string.strView data)
+{
+    return libc.fwrite(data.ptr, 1u, data.len, (void*)fh);
+}
+
+pub u64 fileRead(FileHandle fh, u8* buf, u64 maxLen)
+{
+    return libc.fread(buf, 1u, maxLen, (void*)fh);
+}
+
+pub bool fileEof(FileHandle fh)
+{
+    return libc.feof((void*)fh) != 0;
+}
+
+pub bool fileError(FileHandle fh)
+{
+    return libc.ferror((void*)fh) != 0;
+}
+
+pub void fileFlush(FileHandle fh)
+{
+    libc.fflush((void*)fh);
+}
+
+pub u64 fileWriteString(FileHandle fh, const string.String* s)
+{
+    return libc.fwrite(s->ptr, 1u, s->len, (void*)fh);
+}
+
+pub bool fileReadAll(string.strView path, string.String* out)
+{
+    FileHandle fh = fileOpen(path, string.strView::fromCstr("rb"));
+    if (fh == (FileHandle)0) return false;
+    char chunk[4096];
+    for (;;)
+    {
+        u64 n = fileRead(fh, (u8*)chunk, 4086u);
+        if (n == 0u) break;
+        out->pushView(out, string.strView::fromParts(chunk, n));
+    }
+    bool ok = !fileError(fh);
+    fileClose(fh);
+    return ok;
+}

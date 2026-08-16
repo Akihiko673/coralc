@@ -1,0 +1,179 @@
+@[no_warn_unsafe]
+mod mman = import("std/memory/mman.crl");
+
+pub struct NoretArm64
+{
+    u64 exitCode;
+    char* out;
+    u32 outLen;
+    u32 outCap;
+
+    NoretArm64 new(u64 exitCode)
+    {
+        NoretArm64 n;
+        n.exitCode = exitCode;
+        n.out = null;
+        n.outLen = 0;
+        n.outCap = 0;
+        return n;
+    }
+
+    void ensureCap(NoretArm64*, u32 needed)
+    {
+        if (self.outLen + needed <= self.outCap) return;
+        u32 newCap = self.outCap ? self.outCap * 2 : 64;
+        while (self.outLen + needed > newCap) newCap *= 2;
+        char* newOut = mman.alloc<char>(newCap);
+        if (self.out)
+        {
+            mman.copy<char>(newOut, self.out, self.outLen);
+            mman.dealloc<char>(self.out);
+        }
+        self.out = newOut;
+        self.outCap = newCap;
+    }
+
+    void c(NoretArm64*, char ch)
+    {
+        self.ensureCap(1);
+        self.out[self.outLen++] = ch;
+    }
+
+    void s(NoretArm64*, const char* str)
+    {
+        u32 len = 0;
+        while (str[len]) len++;
+        self.ensureCap(len);
+        for (u32 i = 0; i < len; i++)
+            self.out[self.outLen++] = str[i];
+    }
+
+    const char* getString(NoretArm64*)
+    {
+        self.ensureCap(1);
+        self.out[self.outLen] = 0;
+        return self.out;
+    }
+
+    void clear(NoretArm64*)
+    {
+        self.outLen = 0;
+    }
+
+    void destroy(NoretArm64*)
+    {
+        if (self.out) mman.dealloc<char>(self.out);
+    }
+}
+
+static bool platformMatch(const char* platform, const char* known)
+{
+    if (!platform || !known) return false;
+    u32 i = 0;
+    while (platform[i] && known[i])
+    {
+        char a = platform[i];
+        char k = known[i];
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (a != k) return false;
+        i++;
+    }
+    return platform[i] == 0 && known[i] == 0;
+}
+
+pub void emitLinuxSyscall(NoretArm64*)
+{
+    self.emitMovRegImm64("x0", self->exitCode);
+    self.c('\n');
+    self.emitMovRegImm64("x8", 93);
+    self.c('\n');
+    self.emitSvc(0);
+    self.c('\n');
+}
+
+pub void emitWindowsTerminate(NoretArm64*)
+{
+    self.emitMovRegImm64("w0", self->exitCode);
+    self.c('\n');
+    self.emitCall("ExitProcess");
+    self.c('\n');
+}
+
+pub void emitMacOSExit(NoretArm64*)
+{
+    self.emitMovRegImm64("x0", self->exitCode);
+    self.c('\n');
+    self.emitMovRegImm64("x16", 1);
+    self.c('\n');
+    self.emitSvc(0x80);
+    self.c('\n');
+}
+
+pub void emitBareMetalHalt(NoretArm64*)
+{
+    self.emitLabel(".halt");
+    self.c('\n');
+    self.emitWfi();
+    self.c('\n');
+    self.emitB(".halt");
+    self.c('\n');
+}
+
+pub void emitNoretPlatform(NoretArm64*, const char* platform)
+{
+    if (platformMatch(platform, "LINUX"))
+        self.emitLinuxSyscall();
+    else if (platformMatch(platform, "WINDOWS"))
+        self.emitWindowsTerminate();
+    else if (platformMatch(platform, "MACOS"))
+        self.emitMacOSExit();
+    else
+        self.emitBareMetalHalt();
+}
+
+static void emitMovRegImm64(NoretArm64*, const char* reg, u64 imm)
+{
+    self->s(self, "\tmov ");
+    self->s(self, reg);
+    self->s(self, ", #");
+    u64 val = imm;
+    char buf[24];
+    u32 n = 0;
+    if (val == 0) buf[n++] = '0';
+    else { while (val) { buf[n++] = (char)('0' + val % 10); val /= 10; } }
+    for (i32 i = (i32)n - 1; i >= 0; i--) self->c(self, buf[i]);
+}
+
+static void emitSvc(NoretArm64*, u32 imm)
+{
+    self->s(self, "\tsvc #");
+    char buf[8];
+    u32 n = 0;
+    u32 val = imm;
+    if (val == 0) buf[n++] = '0';
+    else { while (val) { buf[n++] = (char)('0' + val % 10); val /= 10; } }
+    for (i32 i = (i32)n - 1; i >= 0; i--) self->c(self, buf[i]);
+}
+
+static void emitLabel(NoretArm64*, const char* label)
+{
+    self->s(self, label);
+    self->c(self, ':');
+}
+
+static void emitWfi(NoretArm64*)
+{
+    self->s(self, "\twfi");
+}
+
+static void emitB(NoretArm64*, const char* target)
+{
+    self->s(self, "\tb ");
+    self->s(self, target);
+}
+
+static void emitCall(NoretArm64*, const char* target)
+{
+    self->s(self, "\tcall ");
+    self->s(self, target);
+}

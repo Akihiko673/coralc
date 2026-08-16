@@ -1,0 +1,372 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+
+const u32 FLI_COUNT = 32; // still thinking of adding a constexpr or final keyword
+const u32 SLI_COUNT = 32;
+const u64 MIN_BLOCK_SIZE = 32u;
+const u64 BLOCK_ALIGN = 8u;
+const u64 BLOCK_USED = 1u;
+const u64 BLOCK_PREV_USED = 2u;
+
+struct BlockHeader
+{
+    u64 sizeAndFlags;
+}
+
+struct FreeBlock
+{
+    BlockHeader header;
+    FreeBlock* prev;
+    FreeBlock* next;
+}
+
+pub struct Tlsf
+{
+    void* heapStart;
+    void* heapEnd;
+    u64 heapSize;
+    FreeBlock* freeLists[FLI_COUNT][SLI_COUNT];
+    u32 fliBitmap;
+    u32 sliBitmap[FLI_COUNT];
+
+    void init(void* heap, u64 size)
+    {
+        self.heapStart = heap;
+        self.heapEnd = (u8*)heap + size;
+        self.heapSize = size;
+
+        for (u32 fli = 0; fli < FLI_COUNT; fli++)
+        {
+            self.sliBitmap[fli] = 0;
+            for (u32 sli = 0; sli < SLI_COUNT; sli++)
+                self.freeLists[fli][sli] = null;
+        }
+        self.fliBitmap = 0;
+
+        u64 aligned = (size - sizeof(BlockHeader)) & ~(BLOCK_ALIGN - 1u);
+        u8* start = (u8*)heap + sizeof(BlockHeader);
+        BlockHeader* first = (BlockHeader*)start;
+        first->sizeAndFlags = aligned | BLOCK_PREV_USED;
+        self._writeFooter(first);
+        self._insertFree(first);
+    }
+
+    u32 _fls(u32 x)
+    {
+        if (x == 0) return 0;
+        u32 r = 0;
+        if (x >= 0x10000u) { r += 16; x >>= 16; }
+        if (x >= 0x100u) { r += 8; x >>= 8; }
+        if (x >= 0x10u) { r += 4; x >>= 4; }
+        if (x >= 0x4u) { r += 2; x >>= 2; }
+        if (x >= 0x2u) { r += 1; }
+        return r;
+    }
+
+    u32 _lsbIndex(u32 x)
+    {
+        // isolate lowest set bit, x & -x  (two's complement)
+        // then find its position via _fls (already 0-based)
+        u32 isolated = x & ((u32)(-(i32)x));
+        u32 pos = self._fls(isolated);
+        return pos;
+    }
+
+    void _getIndex(u64 size, u32* fli, u32* sli)
+    {
+        // for sizes up to ~2^36, this works with u64 shift
+        u32 raw;
+        if (size >= (1u << 14))
+            raw = (u32)(size >> 4);
+        else if (size >= (1u << 6))
+            raw = (u32)(size >> 4);
+        else
+            raw = 1;
+
+        *fli = self._fls(raw);
+        if (*fli < 1) *fli = 1;
+
+        if (*fli >= 5)
+        {
+            u32 shift = *fli - 4;
+            if (shift < 32)
+                *sli = ((u32)(size >> (shift + 4))) & (SLI_COUNT - 1);
+            else
+                *sli = 0;
+        }
+        else
+        {
+            *sli = (raw << (4 - *fli)) & (SLI_COUNT - 1);
+        }
+
+        if (*fli >= FLI_COUNT) *fli = FLI_COUNT - 1;
+    }
+
+    u64 _blockSize(const BlockHeader* block)
+    {
+        return block->sizeAndFlags & ~3u;
+    }
+
+    BlockHeader* _blockFromPtr(void* ptr)
+    {
+        return (BlockHeader*)((u8*)ptr - sizeof(BlockHeader));
+    }
+
+    void _memcpy(void* dst, const void* src, u64 n)
+    {
+        u8* d = (u8*)dst;
+        const u8* s = (const u8*)src;
+        u64 i = 0;
+        while (i + 8 <= n)
+        {
+            *(u64*)(d + i) = *(const u64*)(s + i);
+            i += 8;
+        }
+        while (i < n)
+        {
+            d[i] = s[i];
+            i++;
+        }
+    }
+
+    void* _ptrFromBlock(BlockHeader* block)
+    {
+        return (void*)((u8*)block + sizeof(BlockHeader));
+    }
+
+    BlockHeader* _nextBlock(BlockHeader* block)
+    {
+        u8* next = (u8*)block + self._blockSize(block);
+        return (BlockHeader*)next;
+    }
+
+    void _writeFooter(BlockHeader* block)
+    {
+        u64 sz = self._blockSize(block);
+        *(u64*)((u8*)block + sz - 8) = sz;
+    }
+
+    BlockHeader* _prevBlock(BlockHeader* block)
+    {
+        BlockHeader* prev = (BlockHeader*)((u8*)block - (block[-1].sizeAndFlags & ~3u));
+        return prev;
+    }
+
+    void _removeFree(FreeBlock* block)
+    {
+        u32 fli, sli;
+        self._getIndex(self._blockSize(&block->header), &fli, &sli);
+        FreeBlock* prev = block->prev;
+        FreeBlock* next = block->next;
+        if (prev != null) prev->next = next;
+        else self.freeLists[fli][sli] = next;
+        if (next != null) next->prev = prev;
+        if (self.freeLists[fli][sli] == null)
+        {
+            self.sliBitmap[fli] &= ~(1u << sli);
+            if (self.sliBitmap[fli] == 0)
+                self.fliBitmap &= ~(1u << fli);
+        }
+    }
+
+    void _insertFree(BlockHeader* block)
+    {
+        u32 fli, sli;
+        u64 blockSize = self._blockSize(block);
+        self._getIndex(blockSize, &fli, &sli);
+        FreeBlock* fb = (FreeBlock*)block;
+        fb->prev = null;
+        fb->next = self.freeLists[fli][sli];
+        if (fb->next != null) fb->next->prev = fb;
+        self.freeLists[fli][sli] = fb;
+        self.sliBitmap[fli] |= 1u << sli;
+        self.fliBitmap |= 1u << fli;
+    }
+
+    BlockHeader* _findSuitableBlock(u64 size, u32* outFli, u32* outSli)
+    {
+        self._getIndex(size, outFli, outSli);
+        u32 fli = *outFli;
+        u32 sli = *outSli;
+
+        u32 sliMap = self.sliBitmap[fli] & (~0u << sli);
+        if (sliMap != 0)
+        {
+            *outSli = self._lsbIndex(sliMap);
+            return (BlockHeader*)self.freeLists[*outFli][*outSli];
+        }
+
+        u32 fliMap = self.fliBitmap & (~0u << (fli + 1));
+        if (fliMap == 0) return null;
+
+        *outFli = self._lsbIndex(fliMap);
+        sliMap = self.sliBitmap[*outFli];
+        if (sliMap == 0) return null;
+        *outSli = self._lsbIndex(sliMap);
+        return (BlockHeader*)self.freeLists[*outFli][*outSli];
+    }
+
+    void* alloc(u64 size)
+    {
+        if (size == 0) return null;
+        u64 aligned = (size + BLOCK_ALIGN - 1u) & ~(BLOCK_ALIGN - 1u);
+        if (aligned < MIN_BLOCK_SIZE) aligned = MIN_BLOCK_SIZE;
+        u64 needSize = aligned + sizeof(BlockHeader);
+        if (needSize < aligned) return null;
+
+        u32 fli, sli;
+        BlockHeader* block = self._findSuitableBlock(needSize, &fli, &sli);
+        if (block == null) return null;
+
+        self._removeFree((FreeBlock*)block);
+        u64 blockSize = self._blockSize(block);
+        u64 remaining = blockSize - needSize;
+
+        if (remaining >= MIN_BLOCK_SIZE + sizeof(BlockHeader))
+        {
+            block->sizeAndFlags = needSize | BLOCK_USED | (block->sizeAndFlags & BLOCK_PREV_USED);
+            self._writeFooter(block);
+            BlockHeader* next = (BlockHeader*)((u8*)block + needSize);
+            next->sizeAndFlags = remaining | BLOCK_PREV_USED;
+            self._writeFooter(next);
+            self._insertFree(next);
+        }
+        else
+        {
+            block->sizeAndFlags = blockSize | BLOCK_USED | (block->sizeAndFlags & BLOCK_PREV_USED);
+            self._writeFooter(block);
+        }
+
+        BlockHeader* nextBlock = self._nextBlock(block);
+        if ((u8*)nextBlock < (u8*)self.heapEnd)
+            nextBlock->sizeAndFlags |= BLOCK_PREV_USED;
+
+        return self._ptrFromBlock(block);
+    }
+
+    void free(void* ptr)
+    {
+        if (ptr == null) return;
+        if (ptr < self.heapStart || ptr >= self.heapEnd) return;
+
+        BlockHeader* block = self._blockFromPtr(ptr);
+        block->sizeAndFlags &= ~BLOCK_USED;
+
+        BlockHeader* prev = null;
+        if ((block->sizeAndFlags & BLOCK_PREV_USED) == 0)
+        {
+            prev = self._prevBlock(block);
+            if (prev != null && (prev->sizeAndFlags & BLOCK_USED) == 0)
+            {
+                self._removeFree((FreeBlock*)prev);
+                u64 combined = self._blockSize(prev) + sizeof(BlockHeader) + self._blockSize(block);
+                prev->sizeAndFlags = combined | (prev->sizeAndFlags & BLOCK_PREV_USED);
+                self._writeFooter(prev);
+                block = prev;
+            }
+        }
+
+        BlockHeader* next = self._nextBlock(block);
+        if ((u8*)next < (u8*)self.heapEnd && (next->sizeAndFlags & BLOCK_USED) == 0)
+        {
+            self._removeFree((FreeBlock*)next);
+            u64 combined = self._blockSize(block) + sizeof(BlockHeader) + self._blockSize(next);
+            block->sizeAndFlags = combined | (block->sizeAndFlags & BLOCK_PREV_USED);
+            self._writeFooter(block);
+            next = self._nextBlock(block);
+        }
+
+        if ((u8*)next < (u8*)self.heapEnd)
+            next->sizeAndFlags &= ~BLOCK_PREV_USED;
+
+        self._insertFree(block);
+    }
+
+    void* realloc(void* ptr, u64 newSize)
+    {
+        if (ptr == null) return self.alloc(newSize);
+        if (newSize == 0) { self.free(ptr); return null; }
+        if (ptr < self.heapStart || ptr >= self.heapEnd) return null;
+
+        BlockHeader* block = self._blockFromPtr(ptr);
+        u64 oldSize = self._blockSize(block) - sizeof(BlockHeader);
+
+        if (oldSize >= newSize)
+        {
+            u64 alignedNew = (newSize + BLOCK_ALIGN - 1u) & ~(BLOCK_ALIGN - 1u);
+            if (alignedNew < MIN_BLOCK_SIZE) alignedNew = MIN_BLOCK_SIZE;
+            u64 excess = oldSize - alignedNew;
+            if (excess >= MIN_BLOCK_SIZE + sizeof(BlockHeader))
+            {
+                block->sizeAndFlags = (alignedNew + sizeof(BlockHeader)) | BLOCK_USED | (block->sizeAndFlags & BLOCK_PREV_USED);
+                self._writeFooter(block);
+                u8* splitAt = (u8*)block + alignedNew + sizeof(BlockHeader);
+                BlockHeader* split = (BlockHeader*)splitAt;
+                split->sizeAndFlags = excess | BLOCK_PREV_USED;
+                self._writeFooter(split);
+                self._insertFree(split);
+                self._nextBlock(split)->sizeAndFlags &= ~BLOCK_PREV_USED;
+            }
+            return ptr;
+        }
+
+        void* newPtr = self.alloc(newSize);
+        if (newPtr == null) return null;
+        self._memcpy(newPtr, ptr, oldSize);
+        self.free(ptr);
+        return newPtr;
+    }
+
+    u64 getHeapSize(const self*)
+    {
+        return self->heapSize;
+    }
+
+    u64 getFreeSize(const self*)
+    {
+        u64 total = 0;
+        for (u32 fli = 0; fli < FLI_COUNT; fli++)
+        {
+            if (self->sliBitmap[fli] == 0) continue;
+            for (u32 sli = 0; sli < SLI_COUNT; sli++)
+            {
+                FreeBlock* fb = self->freeLists[fli][sli];
+                while (fb != null)
+                {
+                    total += self->_blockSize(&fb->header);
+                    fb = fb->next;
+                }
+            }
+        }
+        return total;
+    }
+
+    mman.Allocator allocator()
+    {
+        mman.Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _tlsfWrapAlloc;
+        a.free = _tlsfWrapFree;
+        a.realloc = _tlsfWrapRealloc;
+        return a;
+    }
+}
+
+void* _tlsfWrapAlloc(void* ctx, u64 size)
+{
+    if (!ctx) return null;
+    return ((Tlsf*)ctx)->alloc(size);
+}
+
+void _tlsfWrapFree(void* ctx, void* ptr)
+{
+    if (!ctx || !ptr) return;
+    ((Tlsf*)ctx)->free(ptr);
+}
+
+void* _tlsfWrapRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (!ctx) return null;
+    return ((Tlsf*)ctx)->realloc(ptr, newSize);
+}

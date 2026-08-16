@@ -1,0 +1,502 @@
+Chapter 1
+
+Foundation and Philosophy
+
+The "Why" Before the "How"
+
+Every language was created to solve a problem. Before we write a single line of Coral — before we memorize a single grammar rule — we should understand what Coral is for and why it exists. This is not a ceremonial opening, either. It is the most practical thing in this book. When you understand why a feature exists, you do not have to memorize it. You can predict it.
+
+Think about it this way. A reference manual tells you what a language looks like. A good textbook tells you why it looks that way. And the difference shows up the moment you meet something new: the person who memorized a rule gets stuck, while the person who understands a rule can guess the rest. Coral was designed so that the why and the what are the same thing. Read this chapter carefully, and the rest of the book will feel less like studying and more like remembering.
+
+1.1 The Origin
+
+Coral began as an itch. The person who created it loved C — loved the simplicity of it, the honesty, the way the language stepped out of the way and let the machine be the machine. They loved C++ too, for a while, and for a real reason: the idea of taking C and adding structure, methods, and generics on top of it was deeply appealing. C gave you the machine. C++ tried to give you the machine plus the tools to build large software without losing your sanity.
+
+But as C++ grew, something got lost. The very features meant to make the language productive became the things that made it painful. Templates were supposed to be a powerful generalization mechanism; they turned into a cathedral of metaprogramming, where one line of ordinary-looking code could instantiate megabytes of compiled machinery and produce error messages that read like ancient scripture. Namespaces, overload resolution, implicit conversions, the preprocessor, multiple inheritance, exception specifications, the most vexing parse — each feature alone was a reasonable idea, but together they piled up into a language that was slow to compile, exhausting to learn, and strangely hard to predict.
+
+The new languages that promised to fix all this had their own problem. Rust and Zig, whatever their technical merits, were alien to someone who thought in C. The syntax, the idioms, the whole way of expressing even the most basic program demanded that you abandon everything you knew and learn a new way of thinking about computation. Rust's borrow checker is genuinely brilliant, but the cost of admission — the ceremony required before you can write a linked list, the fundamental break from C-style thinking — made it hard for exactly the people it was built to help: the C programmers who needed safety most.
+
+So Coral was created to answer a specific question: could a language keep everything that makes C great, add the modern features that make large-scale systems programming productive, provide genuine safety guarantees, and do all of it without forcing its users to abandon C-style thinking?
+
+That question became a constraint, and the constraint has shaped every feature that followed. A feature earns its place in Coral only if it passes three tests:
+
+    Does it preserve the C mental model? If learning Coral means unlearning how you think about memory and the machine, the feature is working against the language, not for it.
+    Does it refuse to hide machinery from the programmer? Nothing runs behind your back. If a cost exists, you can point at the source line that pays it.
+    Does it make its cost visible in the code? The price of a feature — a copy, an allocation, a dispatch, a check — should be written in the program, not concealed in some library.
+
+These are not vague aesthetic preferences. They are the constitution of the language. If you grasp these three tests, you can predict most of Coral before you read another page of this book.
+
+A few words on the name, since people ask. Coral was originally called Wall, a placeholder the author was never happy with. Coral was chosen partly at random, because it sounded like a real language name, and it stuck. There is no hidden acronym, no marketing story, no philosophy baked into the word itself. The philosophy is in the language, not the name.
+
+1.2 What It Means to Be a Systems Language
+
+Before we look at what Coral chooses to do, let's be precise about what kind of language it is. Coral is a systems programming language, and that phrase is loaded with meaning we should state plainly.
+
+A systems language is a language for writing the software that sits closest to the hardware: operating systems, device drivers, kernels, embedded firmware, game engines, databases, browsers, compilers, interpreters, network stacks, and high-performance libraries. What these programs share is that they must deal directly with the machine. They address memory at specific addresses. They control how data is laid out in structures and on disk. They talk to devices through registers and ports. And they must do all of this with performance that is both predictable and tight. A systems programmer cannot afford a layer of abstraction that hides what the machine is doing, because the whole job is to decide what the machine does.
+
+The first consequence of being a systems language is direct hardware access. A Coral program can allocate memory wherever it chooses, read and write specific addresses, lay out data byte by byte, and interact with the memory-mapped registers of hardware devices. Nothing stands between the program and the machine except the machine code the compiler generates. In an application language this kind of access is usually impossible, or requires contorting through an extension mechanism; in Coral, it is the default and the point.
+
+The second consequence is that there is no runtime waiting in the wings. An application language typically ships with a runtime: an interpreter, a virtual machine, a garbage collector, or at least a large support library that is always present and always busy, whether you use it or not. When a Coral program is built, the result is native machine code for the target architecture. There is no interpreter watching over the execution, no virtual machine translating bytecode, no garbage collector interrupting the program to reclaim memory. The program is the machine code, and nothing else runs underneath it.
+
+The third consequence is manual memory management. In an application language, memory is a background concern: you create objects, and the runtime decides when they disappear. In a systems language, memory is the programmer's responsibility. You decide where data lives — on the stack or on the heap. You decide when it is freed. This is more work, but it is also more power: you decide the layout, the allocation strategy, the lifetime. Coral keeps that responsibility with the programmer while adding tools — smart pointers, explicit error values, a choice of allocators — to keep the responsibility from becoming a source of bugs.
+
+The fourth consequence is predictable performance. Because there is no hidden machinery, the performance of a Coral program is essentially the performance of the code you wrote. Allocation happens when you allocate, and it uses the allocator you chose. A method call compiles to a function call, and if the compiler can prove which function it is, the call is dispatched directly or inlined. There are no garbage collection pauses, no JIT warm-up, no hidden allocations inside innocent-looking operations. You get what you write. This is the property that systems programmers rely on for real-time rendering, for audio pipelines, for firmware that must respond within microseconds, and for a database where a single hidden allocation per query would destroy throughput.
+
+An application language answers the question "who is in charge?" with: the runtime, most of the time. A systems language answers it with: you are. Coral is unambiguously in the second camp. Everything else in this chapter, and in this book, is a consequence of that commitment.
+
+1.3 The Problem Coral Solves
+
+The clearest way to understand Coral is to understand what it refuses to do.
+
+It refuses to abandon C's syntax. Coral keeps C-style type-first declarations. You write the type before the name. You declare variables as they are, with the same mental model of the machine that C gave you: fixed-width integers, explicit pointers, real arrays, manual memory management. If you can read C, you can read most Coral code on sight.
+
+It refuses to abandon manual control. Coral has no garbage collector, no hidden runtime that manages your memory for you. Memory is allocated explicitly and freed explicitly, or handled through smart pointer types that make ownership explicit in the type system. The programmer remains in control of layout, of allocation, of every byte.
+
+It refuses to abandon the standard library as a place where you learn the language. Coral ships a standard library written in Coral, and it is a real standard library: collections, strings, text processing, filesystem, networking, concurrency, math, cryptography, platform abstractions. You do not need external dependencies to build real software.
+
+And yet it refuses to accept the costs that historically came with those choices.
+
+It adds methods to C-style structs, so that data and the operations on that data live together, as in C++ or Rust, but without introducing classes, inheritance, virtual dispatch, or the entire hierarchy machinery that C++ built on top.
+
+It adds generics, designed so that the compiler fully monomorphizes them at compile time. A generic function is not a runtime dispatch mechanism. It is a compile-time template that generates concrete, specialized code for each type it is used with. This gives you the performance of hand-written C for every instantiation, and it lets the compiler catch type errors before the program ever runs.
+
+It adds traits, so that different types can share a common interface and be used polymorphically without inheriting from a common base class. A trait is a contract. Any type can implement a trait. Any code written against a trait works with any type that implements it. This is the modern way to get polymorphism: you define what a type can do, not what a type is.
+
+It adds compile-time evaluation and conditional compilation, so that code that is only valid on certain platforms, or code that computes constants at compile time, is expressed in the language itself, not in a preprocessor bolted on the side. C's preprocessor was a workaround — a text manipulation layer separate from the language. Coral puts this capability in the language, where it can be checked, reasoned about, and type-safe.
+
+It adds a module system, so that large programs are composed of files that explicitly declare what they import, and the compiler can verify those relationships, instead of relying on textual inclusion, header guards, and the preprocessor's include mechanism.
+
+It adds Result and option types for error handling and for the absence of values, instead of exceptions and instead of null. This is one of the most important philosophical decisions in the language, and it deserves its own discussion, which follows below.
+
+1.4 Why Not Exceptions
+
+C++ chose exceptions as its error mechanism. Coral deliberately rejects them. This is not a stylistic preference; it is a fundamental design decision that shapes how every program in Coral is written.
+
+Exceptions are invisible control flow. When a function can throw, the call graph of your program is no longer a simple tree of calls and returns. It contains hidden paths: any call can abort mid-execution and unwind arbitrarily far up the stack, skipping over intermediate functions that never declared they could be bypassed. This makes it very hard to reason about resource cleanup (what happens to the file handle opened in frame three when an exception thrown in frame eight unwinds through it?), hard to reason about performance (exception handling code is generated even on paths that never throw), and hard to debug, because the failure is reported far from the place that caused it.
+
+Coral uses explicit error values. A function that can fail returns a Result, a type that carries either a successful value or an error value. Nothing is thrown. Nothing unwinds the stack invisibly. The caller must handle the result, either by checking it directly or by explicitly propagating it. This makes control flow visible: every potential failure is a value you can see, match on, and handle.
+
+The shape of this pattern matches what you actually get from the standard library. With the book's usual `mod std = import("std*")` in effect, parsing text is done the way the std does it — the library provides parse functions that take a string view and an "did it work?" pointer. Let's wrap one in our own Result-returning helper:
+
+    pub std.Result<u64, std.strView> parse_count(std.strView text)
+    {
+        bool ok = false;
+        u64 value = std.parseU64(text, &ok);
+        if (!ok)
+        {
+            return std.Result<u64, std.strView>::err("the text is not a number");
+        }
+        return std.Result<u64, std.strView>::ok(value);
+    }
+
+And here is the call site, where the failure is handled visibly, at the point where the program can actually respond to it:
+
+    var result = parse_count("42");
+    if (result.isOk())
+    {
+        std.print("parsed the count\n");
+    }
+    else
+    {
+        std.print("the count was invalid\n");
+    }
+
+The failure is not a side channel. It is a value that flows through the same type system as everything else, and the if statement (or a switch, or a chained map) is the place where the program chooses what each outcome means. The reader of this code can see every path, because every path is written.
+
+This is not to say Coral is error-prone. It is the opposite. By making failure explicit, Coral forces you to confront it at the point where you can do something about it, instead of letting it propagate to some distant handler. The standard library is written this way throughout: functions that can fail return Result, and the error is always part of the signature, visible to the reader.
+
+1.5 The Target User
+
+Coral is a language for system programmers. More specifically, it is for the C programmer who wants safety without learning a new way to think. And it is for the person learning systems programming who finds modern languages too hard to enter.
+
+Consider the C programmer. They know pointers. They know that an array index is arithmetic. They know that memory is a resource that must be managed. They write correct, working software, but they live in constant awareness of the dangers: buffer overflows, use-after-free, double-free, data races. Every modern C program is a tightrope walk. The C programmer does not want to be told to abandon their mental model; they want a safety net under that model. Coral is that net. It keeps the model, and adds the safety: bounds-checked abstractions where they are wanted, strong typing, Result-based error handling, smart pointers that make ownership a visible, spelled-out decision instead of a habit, and the Drop trait, which makes the release automatic for the types that implement it — injected by the compiler at the end of every scope where a value of the type dies.
+
+Consider the learner. Systems programming is traditionally the most punishing entry point into programming. C has no safety rails, and its standard library is minimal, so the beginner must either learn with constant crashes or use an enormous library ecosystem like C++ or rely on the forgiving but opaque behavior of a language like Python. The newer systems languages, whatever their virtues, present a syntax and a set of concepts that are a barrier: the beginner must master lifetimes and ownership before they can write their second program. Coral offers the C-like path: readable, familiar, small — and then it grows into the safety machinery as your understanding grows. It is a language that can be taught in small steps.
+
+Coral is also positioned for a specific kind of programmer: the game developer who wants systems-level control, but does not want the inheritance-heavy class hierarchy of traditional object-oriented game code. Modern game development has been moving away from deep inheritance trees for years, toward data-oriented design: structures of arrays, components, composition over inheritance. Coral's structs, methods, traits, and explicit memory model fit that style of programming directly. There is no virtual method table forced on you, no implicit dynamic dispatch, no GC pauses in the middle of a frame. You get what you write.
+
+Coral also works for a team adopting it incrementally. A C-style program can be written in Coral using only the features that C programmers already know: structs, functions, manual memory. That program is Coral the day it is written; nothing requires adopting generics, traits, or the smart pointer machinery before the team is ready. The safety machinery can be introduced file by file, as understanding and need grow. A language that demanded everything at once would recreate the very barrier it was built to remove.
+
+1.6 Paradigm Orientation
+
+Coral is primarily an imperative, procedural language in the C tradition. Program execution is a sequence of statements operating on mutable state. This is the paradigm that matches the machine, and Coral does not pretend otherwise.
+
+On top of that imperative core, Coral layers:
+
+Structured data with behavior. Structs can contain methods. The receiver is explicit, named self, and is passed like any other parameter. There is no hidden this pointer injected by the runtime; a method call is a function call where the receiver is the first argument. This keeps the C mental model intact: a method is just a function whose first parameter is a struct. And because of that, the performance characteristics are obvious. There is no vtable, no dispatch indirection, no hidden copying — unless the code explicitly uses those mechanisms.
+
+Let's look at the shape of this in real source. The standard library writes methods inside the struct body. Here is a rectangle, with a method that decides whether a point lies inside it — short and sweet, matching how the std defines such things:
+
+    pub struct Rect
+    {
+        f64 left;
+        f64 right;
+        f64 bottom;
+        f64 top;
+
+        pub bool contains(f64 x, f64 y)
+        {
+            return x >= self.left && x <= self.right &&
+                   y >= self.bottom && y <= self.top;
+        }
+    }
+
+The receiver, self, is a parameter like x and y, only implicit: the compiler passes the receiver as the first argument, and no machinery is hidden in the call. Calling rect.contains(1.5, 2.0) costs exactly what a function call costs. Nothing more.
+
+Generic programming. Generics let you write a data structure or algorithm once and use it with any type. The vec type, the hash map, the set, the sorting algorithm: all are generic, all are compiled separately for each type they are instantiated with. This is ad-hoc polymorphism: the same source text works for many types, and the compiler generates a specialized version for each. We will see a lot of this in the chapters on functions and data structures.
+
+Trait-based polymorphism. Traits provide the interface polymorphism that object-oriented languages get from inheritance, but through composition rather than a type hierarchy. A trait declares a set of methods. A type implements a trait by providing those methods. A function that accepts a trait-typed value can accept any type implementing that trait. This is a subtle but important distinction: in an inheritance language, a type must be a kind of the base class. In Coral, a type simply must be capable of the operations the trait declares. Capability, not ancestry.
+
+A trait is written as a plain declaration of the operations it requires:
+
+    trait Shape
+    {
+        f64 area();
+        f64 perimeter();
+    }
+
+Any type that provides these operations implements the trait. A type's implementation is given in an implementation block that names both the type and the trait — Circle::Shape — and there the methods are written with the receiver passed explicitly. From then on, the type can be used anywhere the trait is expected, without being forced into a hierarchy it does not belong to.
+
+Functional-style data manipulation. The collections library provides higher-order operations — mapping, filtering, folding, iterating — over generic containers. Function pointers are first-class, so callbacks and function-as-value patterns are available. But Coral does not impose a functional style. These tools are available when they clarify the code, not mandatory at all times.
+
+So Coral is multi-paradigm in a specific, deliberate way: imperative at the core, with structured data and generic and trait-based polymorphism layered on top, and functional-style collection operations available as tools. It is multi-paradigm the way C++ wanted to be, but without the kitchen-sink accumulation of mutually interfering features. Every paradigm in Coral has a clear role, and the roles do not fight each other.
+
+1.7 A First Program
+
+Time to see what Coral actually looks like. The smallest complete program, the hello program of the tradition:
+
+    mod std = import("std*");
+
+    i32 main()
+    {
+        std.print("Hello from Coral.\n");
+        return 0;
+    }
+
+Let's read it the way the language wants to be read.
+
+The first line imports the standard library. `mod std = import("std*")` brings the whole of it in under the single name `std` — `print` included — so the call is `std.print`. Coral has no magical built-in print; printing is a function in the standard library's I/O module, imported like any other module and called like any other function. The string carries its own newline in the examples here; the library also offers newline-suffixed variants, and we will meet them, plus the stderr versions, in the standard library chapter.
+
+i32 is the return type: this program produces a 32-bit signed integer. main is the name — the entry point the system starts with when the program runs. The parentheses are empty; this main takes no arguments. (The startup code that calls main actually passes argc and argv, and Coral tolerates a main that ignores them.) The body is a block. The program returns 0, and the operating system reads that as the exit status: zero means "everything went fine."
+
+That is the whole program, and it is worth noticing what is not here. There is no framework, no initialization routine, no hidden wrapper around your main, no runtime ceremony between the source and the machine code. The program begins where it begins and ends where it ends. Even the smallest program demonstrates the philosophy: what you write is what runs.
+
+Here is a slightly larger program that does some real work. It sums the integers from zero to a limit — a methodical, step-by-step C-style loop, which we'll dissect properly in the control flow chapter:
+
+    i32 sum_to(i32 limit)
+    {
+        i32 total = 0;
+        i32 i = 0;
+        while (i <= limit)
+        {
+            total = total + i;
+            i = i + 1;
+        }
+        return total;
+    }
+
+i32 declares a local variable: the type comes first, the name second, exactly like C. total accumulates the running sum, i counts upward, and the function returns the result. Every piece of this function is visible. The counter, the accumulator, the exit condition — all of it is written down, and none of it is generated behind the scenes.
+
+A main function can call it:
+
+    mod std = import("std*");
+
+    i32 sum_to(i32 limit)
+    {
+        i32 total = 0;
+        i32 i = 0;
+        while (i <= limit)
+        {
+            total = total + i;
+            i = i + 1;
+        }
+        return total;
+    }
+
+    i32 main()
+    {
+        i32 result = sum_to(100);
+        std.print("the sum is", result, "\n");
+        return 0;
+    }
+
+print is variadic: each argument is formatted according to its actual type. The integer result is converted to text at the point of printing — no format string, no manual conversion, no hidden state needed to get it there — and the final argument, the newline, is formatted like any other.
+
+Two points before moving on. First, these programs are intentionally small because they illustrate structure, not because Coral is small; the standard library chapter will show that the same plain style scales to real systems. Second, this walkthrough is the reading method the book will use throughout: read the types, then the flow, then the details. That is the order in which Coral itself presents information.
+
+1.8 Type-First: The Shape of a Coral Program
+
+Coral is often described as type-first, and the phrase is worth unpacking, because it is visible in every line of the language. In many languages a declaration leads with the name: you write the name, then a colon and the type, or you write the name and let the compiler infer the type. Coral leads with the type. A field is declared as the type, then the name. A function declaration leads with its return type, then the name, then any angle-bracket type parameters. Reading Coral, the very first word you encounter for any declaration tells you the most important thing about it: what it is, or what it produces.
+
+Why does this order matter? Because types are contracts, and the contract is the thing you most need to know when you read unfamiliar code. When you scan a Coral file, the types line up on the left of the page, and a skim of that column gives you the shape of the program: a handle here, a length there, a function that produces a configuration. You can read the structure before you read the details. In a name-first language you must read each declaration through to its type before you know what you are looking at, and a page of names alone tells you almost nothing.
+
+A struct field:
+
+    pub struct Circle
+    {
+        f64 radius;
+        f64 center_x;
+        f64 center_y;
+    }
+
+A function:
+
+    pub u32 clamp(u32 value, u32 low, u32 high)
+    {
+        if (value < low)
+        {
+            return low;
+        }
+        if (value > high)
+        {
+            return high;
+        }
+        return value;
+    }
+
+Read the signature out loud: produces u32, named clamp, takes three u32 arguments. The type comes first because it is the fact you need first. The function name tells you what the operation is called; the return type tells you what it gives you back, which is the more fundamental fact.
+
+Notice there is no fn keyword. A function is a declaration whose body is a block, and the leading return type already identifies it as a function the moment you see the parentheses that follow the name. The word fn would add nothing that the reader does not already know from the shape of the line.
+
+Generics follow the same rule and use the same type-first spirit. Functions with type parameters spell them with the marker style the standard library uses, as in this identity from the test suite:
+
+    pub T identity!<T>(T value)
+    {
+        return value;
+    }
+
+The signature reads: produces T, named identity, parameterized over T. And the constraint comes before the name, because the constraint is what a reader needs to know first:
+
+    pub f64 total_area!<Shape T>(vec.vec<T> shapes)
+    {
+        f64 total = 0.0;
+        for (u64 i = 0u; i < shapes.len; i = i + 1u)
+        {
+            total = total + shapes.at(i).area();
+        }
+        return total;
+    }
+
+Any type that implements Shape — the circle, the rectangle, the polygon — can be passed into this function, and each call to area resolves to the right implementation for that type.
+
+Methods are bound to structs inside the struct body, so that the operations on data live beside the data, in the same type-first convention:
+
+    Circle
+    {
+        pub f64 diameter()
+        {
+            return self.radius + self.radius;
+        }
+    }
+
+(Or, equivalently for Coral's parser, as an attached block — but the standard library always writes methods inside the struct, so we will too.)
+
+The receiver, self, is available inside every method without ceremony. A static method — one that belongs to the type but does not operate on a particular instance — is called with the type name and a double colon, exactly as the standard library does:
+
+    var total = std.vec<u64>::withCap(4);
+
+The type is still named first, the operation second.
+
+The practical consequence of type-first syntax is that the compiler-enforced contract and the human-facing contract line up. When the type checker rejects a program, it is enforcing the information the reader sees on the page. The syntax, the semantics, and the documentation of a Coral program are one, and that is the point.
+
+1.9 You Get What You Write: The Cost Model
+
+A language is a set of promises about what your code will do. Every language makes hidden promises, and the most important question about any language is which of its behaviors are visible and which are concealed. Coral's answer is deliberately extreme: you get what you write. Everything the program does is either written in the source, or it is a plain optimization that cannot change behavior. Nothing is added silently.
+
+Consider the application languages first, to see what the alternative looks like. In a garbage-collected language, the innocent act of creating an object can trigger a collection pause later, at a moment you never chose, measured in milliseconds, invisible in the source that caused it. A modern chain of higher-order operations can allocate dozens of intermediate objects, each invisible, each paid for on some other line. In a language with hidden operator overloading, an addition can be a function call that allocates, copies, and deletes, all inside two characters. These costs exist; the question is whether the source lets you see them. In Coral they do not exist, because the machinery that would produce them does not exist.
+
+A method call in Coral is a function call. There is no virtual table inserted unless you choose a mechanism that requires one. A struct assignment copies what you ask it to copy. An allocation happens where the allocation is written, and it uses the allocator you named. Bounds that can be verified at compile time are verified at compile time; comptime evaluation runs during the build, and checks the compiler can prove happen then, not at runtime. There is no garbage collector to pause, no hidden runtime to warm up, no hidden lock inside a data structure you did not ask for.
+
+This honesty has a price, and Coral expects you to understand it, because the price is also visible. Generic functions are monomorphized: the compiler generates a specialized copy for every type combination the program actually uses. The speed of hand-written code comes with the code-size cost of hand-written code. This is not a hidden tax; it is a decision you can see in the generated output and control by choosing what you instantiate. A systems language does not hide its costs from you, because you are the person who has to pay them.
+
+The compiler's job in this model is verification and translation, not reinterpretation. The compiler checks the types, checks the conversions and the generic instantiations, checks the comptime assertions, and then generates machine code that does what the source says. When it optimizes, it preserves the meaning of the program; it never quietly changes the meaning. The contract between the programmer and the compiler is simple: the programmer decides what the program does, and the compiler makes it fast. Neither side is allowed to surprise the other.
+
+This is the deep reason behind the design decisions throughout this chapter. Errors are values because a thrown exception is invisible control flow, a cost you did not write. Memory is explicit because an automatic collector is invisible behavior, a cost you did not write. Casts are explicit because an implicit conversion is a silent reinterpretation, a decision you did not write. The cost model is not an economic theory; it is a rule about honesty: every decision the program makes should be a decision you can point to in the source.
+
+1.10 Memory Model and Execution Model
+
+Coral has explicit memory management. The programmer decides where data lives.
+
+The stack is used for local variables, function arguments, and return addresses. Stack allocation is fast, scoped, and automatic: when a scope exits, its stack memory is reclaimed. This is the default and preferred place for temporary data.
+
+The heap is used for data whose lifetime exceeds the current scope. Allocation is explicit. The standard library provides an allocator abstraction, so you can choose how heap memory is obtained: the default system allocator, a two-level segregated fit allocator for real-time, bounded-latency allocation, a fixed-size pool for high-performance repeated allocation of identical objects, or custom allocators you define. The allocator interface is a struct of function pointers, and any type that provides the same interface can be used anywhere the standard library expects an allocator.
+
+Smart pointer types express ownership in the type system. A smart pointer owns its pointee and frees it when the pointer is destroyed. A shared pointer allows multiple owners and frees the pointee when the last owner is destroyed. These types make it possible to write safe code with explicit lifetimes without sprinkling manual free calls throughout the program.
+
+Coral's safety does not come from an ownership checker that refuses programs; it comes from structure and honesty. The type system refuses the conversions and calls that do not make sense, and rejects them at compile time. The ownership rules are written by the program — who owns what, and who frees it — and the language makes every one of those decisions visible, the way the smart pointers above make ownership a spelled-out type rather than a habit. What cannot be proven at compile time is checked at runtime: the containers' bounds are asserted on every access, and shared state is protected by locks whose pairing is visible in the code. None of this is a promise the compiler keeps for you; each piece is a tool the program applies, and applies deliberately. That is the whole design: the checks the compiler can prove are compile-time, the checks it cannot are library asserts and your own structure, and every check is something you can point to in the source.
+
+When you genuinely need raw pointer arithmetic or an unsafe cast, Coral lets you mark code that suspends the usual safety expectations. The standard library uses such markings internally — the low-level machinery of an allocator or a network stack cannot be written without them. The standard library is written to be safe, and the unsafe code inside it is contained, reviewed, and tested. The language does not forbid unsafe code; it makes the unsafe visible, contained, and exceptional rather than the default. You will see this show up as a small attribute at the top of the most low-level std files, a deliberate, documented mark rather than a quiet default.
+
+Coral compiles to native code. There is no interpreter, no virtual machine, no JIT in the ordinary deployment path. The compiler generates native machine code for the target architecture. The supported targets include the major architectures in use today: x86, x86_64, ARM, ARM64, RISC-V, PowerPC, and others. This makes Coral suitable for everything from desktop applications to embedded targets.
+
+Execution is eager and deterministic. Statements run in the order written. Function calls happen when they appear in the code. There is no lazy evaluation, no hidden concurrency, no garbage collection pauses. The program does what the source code says, in the order the source code says. This determinism is essential for systems programming, where reasoning about the exact behavior of code is often a correctness requirement.
+
+1.11 Type System Theory
+
+Coral is statically typed. Every expression has a type known at compile time, and the compiler carries types through the whole pipeline, generating C that the platform's C compiler then type-checks before any machine code is produced. This is the source of Coral's safety and of its ability to generate tight code: type errors simply cannot survive to the final binary.
+
+Coral is strongly typed. Implicit conversions are restricted to well-defined widening operations, and everything else must be done explicitly with a cast. This is a deliberate contrast with C, where the type system is full of implicit conversion traps that silently discard information or reinterpret values.
+
+The primitive types are explicit and fixed-width. Signed integers from 8 to 64 bits, unsigned integers from 8 to 64 bits, 32-bit and 64-bit floating point, booleans, and characters. The width is in the type name: i8, i16, i32, i64, u8, u16, u32, u64, f32, f64. There is no hidden platform-dependent integer width; if you write u32, you get exactly 32 bits. This is crucial for systems programming, where data layout must be precise, and for portability, where the same code must behave identically on every platform.
+
+The explicit cast is the counterpart of strong typing. When a value must change width or interpretation, the code says so:
+
+    u32 total = 260u;
+    u8 low_byte = (u8)total;
+
+The cast is written where the narrowing happens. The compiler does not insert it, does not hide it, and does not warn you about a decision you never made. If total exceeds the range of u8, the truncation is your choice, made visibly, on the line where it occurs.
+
+Composite types are built from these primitives: structs, which group named fields; arrays and vectors, which are contiguous sequences of elements; enums, which name a set of values; and pointers, which hold addresses. Fixed-size arrays carry their size in the type, so the compiler knows the extent of an array, which is the foundation of bounds safety.
+
+Coral uses type inference where it is unambiguous. Local variable declarations can use the var keyword, letting the compiler deduce the type from the initializer:
+
+    var count = 4u;
+
+The reader sees the initializer and therefore the type. This reduces ceremony without hiding information: the type is still known at compile time, and no global inference engine hides a type that would surprise you three pages later. The inference is local and explicit, not a Hindley-Milner-style inference engine.
+
+The distinct keyword creates new types from existing ones. A distinct type is a new, separate type with no implicit conversion to or from its underlying type. This lets you model domain concepts as real types: a file handle is not an integer, a socket is not an integer, even though they are both integers underneath. The compiler enforces the distinction, catching the classic C bug of passing the wrong integer to the wrong function. Here are two examples straight from the standard library, where a file and a socket are declared distinct from i32:
+
+    pub distinct File = i32;
+    pub distinct TcpSocket = i32;
+    pub distinct Dir = void*;
+
+Related but different is typedef, which creates a new name for an existing type:
+
+    typedef u64 nanoseconds;
+
+The two are easy to confuse and behave very differently. nanoseconds is exactly a u64, and any code that needs a u64 accepts it freely; the typedef exists purely for readability. A distinct type is a genuinely new type: a File and a TcpSocket, both declared distinct from i32, are not interchangeable, and the compiler rejects passing one where the other is expected at compile time, rather than at a debugging session.
+
+Generic types can have both type parameters and compile-time value parameters. A generic array type can be parameterized by element type and by length: the length is part of the type. Here is how the standard library defines its fixed array — real source:
+
+    pub struct arr!<T, N>
+    {
+        T data[N];
+
+        pub u64 count() { return N; }
+    }
+
+This is more than syntactic sugar; it means the compiler can generate specialized code for arrays of any specific size, and can check bounds against a length it knows at compile time. In fact, the std's semaphores use exactly this:
+
+    arr.arr<void*, 8> impl;   // from std/concurrent/semaphore.crl, where the field backs a sem_t
+
+Variadic generics allow a function to accept an arbitrary number of arguments of arbitrary types, as in the print family of functions, where each argument is formatted according to its actual type. Section 1.7 met the plain member of the family. Its newline-suffixed sibling, which the standard library's own logger uses, is declared like this in std/io/ios.crl:
+
+    pub void nprint<T...>(T... args)
+    {
+        for (var arg : args)
+        {
+            _fprintOne(1, arg);
+        }
+        _fprintNewline(1);
+    }
+
+And how it is used in the standard library's own logger:
+
+    mod ios = import("std/io/ios.crl");
+    ios.neprint("[", label, "][", self.name.asView(), "] ", msg);
+
+Nullable values are not hidden in the type system the way they are in C, where any pointer can be null and dereferencing it is undefined behavior. Coral provides an option type — spelled option, with a lowercase o, like the rest of the std's lowercase types — which explicitly represents the presence or absence of a value, and the compiler can verify that you have handled the absence case before you use the value. Combined with Result for fallible operations, this gives Coral the safety guarantees that modern languages advertise, without a garbage collector or a radical syntax.
+
+Coral's type system is the mechanism by which the language is safe and fast at the same time. Static strong typing, explicit widths, bounds-carrying arrays, distinct types, generics that monomorphize, and option and Result for absence and failure: these give the compiler the information it needs to generate tight native code while simultaneously rejecting, at compile time, the classes of bugs that would crash a C program at runtime.
+
+1.12 The Standard Library
+
+A systems language is only as useful as its standard library, because a systems programmer does not want to assemble their own collection library, string library, and networking stack from scratch every time. Coral ships a comprehensive standard library, written in Coral itself.
+
+Collections: growable vectors (vec), fixed-size arrays (arr), hash maps (hashmap) and tree maps (map), sets, linked lists, deques, queues, priority queues, ring buffers, bit sets, tries, trees, caches, and sorting and iteration helpers. Each is generic, so it works with any element type, and each is written to use the allocator abstraction, so you control its memory behavior.
+
+Text: a growable UTF-8 string type (String), string views (strView), a formatting system, string utilities, UTF-8 encoding and decoding, and parsers for the major data formats — JSON, XML, CSV, TOML, INI — plus regular expressions, UUIDs, and URI handling.
+
+I/O and system interaction: standard input and output, filesystem operations, buffered and binary file I/O, sockets and networking, process spawning and control, environment variables, path manipulation, temporary files, terminal control, logging, and command execution.
+
+Concurrency: threads, mutexes, read-write locks, semaphores, condition variables, signals, and a thread pool.
+
+Math: common math functions, random number generation, vec2/vec3/vec4, matrices, and complex numbers.
+
+Cryptography: SHA-256, HMAC, AES, CRC, base64, hex encoding, and a Bloom filter.
+
+Platform: a centralized set of libc extern declarations, operating system and architecture detection, and endianness handling.
+
+This standard library is one of the things that makes Coral practical rather than aspirational. It is also a demonstration of the language: the standard library is written in Coral, in the same style that this textbook teaches, using the same features you will learn. When you learn how the vector type is implemented, you are learning how to write real Coral.
+
+The standard library is not a separate world from the language. It is written in Coral, in the same style, and it is the most demanding and most public test of the philosophy. If the type system could not express a safe collection, or the explicit memory model could not support a network stack, the standard library would be where it showed. Because the standard library exists, is written in the language, and is safe, it proves that Coral's rules are sufficient for real systems — which is precisely the standard this chapter has held the language to.
+
+1.13 Compilation and Tooling
+
+Coral compiles to native code. The compiler is self-hosted: it is written in Coral. This is a statement about the language's maturity, and it has practical consequences. A self-hosted compiler exercises the language on the hardest possible problem — a compiler — which means the language and standard library are tested by their own development.
+
+Compilation is a pipeline: the source is lexed into tokens, parsed into a syntax tree, monomorphized (generics instantiated to concrete types), lowered through an intermediate representation, optimized, and then generated into native machine code for the target platform. Along the way Coral produces C, and hands it to the platform's C compiler to finish the job of turning it into a binary — a pragmatic choice that keeps Coral portable while still compiling to real machine code.
+
+Conditional compilation is a language feature, expressed with flag blocks. A block in real source looks like this:
+
+    flag (platform)
+    {
+    LINUX:
+        std.print("building for Linux\n");
+    WINDOWS:
+        std.print("building for Windows\n");
+    default:
+        std.print("building for something else\n");
+    }
+
+The flag block is not a text-replacement hack. It is parsed by the compiler and evaluated against the target platform and the build flags you pass on the command line. Code inside a false branch is not merely skipped; it is compiled out, and the reader can see exactly the conditions under which each line of the program exists. The startup code in lib/start is a tour de force of this style — dozens of nested flag blocks selecting the right boot sequence for each platform and architecture.
+
+Compile-time evaluation, the comptime mechanism, lets the compiler reason about types and values during compilation. The standard library leans on it for type dispatch: the printing machinery that decides how to format each argument is a comptime block that checks the concrete type of the value and picks the right formatter:
+
+    comptime
+    {
+        if (T == i8)  { _fprintI8(fd, (i8)val); return; }
+        if (T == u8)  { _fprintU8(fd, (u8)val); return; }
+        if (T == i32) { _fprintI32(fd, (i32)val); return; }
+        if (T == f64) { _fprintF64(fd, (f64)val); return; }
+        if (T == string.strView) { _fprintBytes(fd, ((string.strView)val).ptr,
+                                      ((string.strView)val).len); return; }
+        // ... and so on for every type print can handle
+    }
+
+This is metaprogramming with the type system and control flow of the language itself — not the textual tricks of a preprocessor. Because generics monomorphize first, by the time the comptime block runs, T is a concrete type, known and checkable.
+
+Error reporting is designed for real use: errors include file, line, and column, a source snippet pointing at the offending code, and related locations when the compiler wants to show you where something was defined. The compiler reports errors in batches rather than stopping at the first one, and it recovers from errors to find more, so you can fix many problems in one pass.
+
+1.13.1 The Build Pipeline
+
+How do you actually build a Coral program? You invoke the compiler and point it at your entry source. The minimal command, the one you will use ten thousand times:
+
+    python3 py/main.py -o build/myprog myprog.crl
+
+That compiles myprog.crl — lexing, parsing, monomorphizing, generating C, and invoking the system C compiler to produce a native binary called build/myprog. A few of the flags you will grow to love:
+
+    -S                    parse and bind only, no code generation (great for a quick check)
+    --keep-c              keep the generated C around so you can read exactly what Coral produced
+    -I <dir>              add a directory to the module search path
+    --flags=platform=LINUX,ARCH=x86_64,ENDIAN=little
+                          set the compile-time flags that flag blocks test against
+    --cc / --cflags       choose the C compiler and flags used for the final step
+    -o <path>             where to put the output
+
+That last one deserves a moment, because it is where the philosophy shows its teeth. The flags you pass on the command line — platform, architecture, endianness, anything else your code declares — are the same flags the flag blocks in your source test. The compiler ensures the two are consistent. In C and C++, a large project's build command is a wall of defines and include paths that must be reproduced exactly or the build silently changes behavior. In Coral, the flags that matter are visible in the source, in the conditional blocks themselves. You do not have to reverse-engineer a build command to understand what a program is compiled with; you read it.
+
+1.13.2 The Whole Toolchain
+
+Taken together, the pieces form a coherent whole. The compiler compiles, checks, and reports precise diagnostics. The flag mechanism makes configuration a first-class language feature, selected at the command line and tested in your source. The generated C is there when you want to see it. And because the compiler and standard library share the same front end and the same philosophy, the system does not have the seams that plague most toolchains, where the build system, the editor integration, and the compiler each live in a different world.
+
+A Coral programmer's workflow looks like this: write the program in an editor, invoke the compiler on your entry file, read the diagnostics if something is wrong, and iterate. If it compiles, you ship. Flags that select targets, features, or configuration are declared in the source, chosen on the command line, and the compiler keeps everything consistent. The whole pipeline, from the first keystroke to the final binary, is one language.
+
+1.14 The Value Proposition
+
+Putting this all together, here is the compact statement of what Coral is.
+
+Coral is a systems programming language for people who think in C. It keeps the C mental model — type-first declarations, explicit pointers, manual memory, a plain and honest syntax — and adds the modern machinery that large-scale systems programming demands: methods, generics that compile to specialized code, traits for capability-based polymorphism, smart pointers for explicit ownership, explicit Option and Result values instead of null and exceptions, a real standard library written in the language, and a compiler that shows you exactly what it does.
+
+It is small enough to learn in steps, honest enough that the costs are always visible, and complete enough to write real systems without reaching for anything outside the language.
+
+That was the foundation. Each chapter that follows is a consequence of the choices in this one. The next chapter, on syntax and semantics, will take the type-first declarations you met here and open them up — every kind of value, every kind of statement, every subtlety — and we will build real programs as we go.
+
+Exercises
+
+    1. Write hello from scratch. Create a file that prints "Hello from Coral." using a module import, and build it with the -o flag. Run the result. (If you are on a machine with the compiler in py/, the command is the one in section 1.13.1.)
+    2. Modify the summing program to count only even numbers. Keep it in the same plain while-loop style.
+    3. Find the flag blocks in lib/start/startup_templates.crl and map out what happens on your platform when you compile with --flags=platform=LINUX,ARCH=x86_64,ENDIAN=little. Which boot sequence gets compiled in?
+    4. Read the top of any three files in lib/std (say vec.crl, ios.crl, and string.crl). Identify the import lines, the structs, and one static factory method each. Bring any one of those types into a tiny program of your own and print something with it.
+    5. Why does this chapter claim exceptions are "invisible control flow"? Argue the counterpoint for two minutes in writing, then explain to a friend why Coral chooses explicit error values anyway.
+

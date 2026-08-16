@@ -1,0 +1,998 @@
+Chapter 3
+
+Operators and Expressions
+
+The Hidden Complexity
+
+Operators look like the simplest part of a language. Everyone knows what a plus sign does; you learned it in elementary school. But look closer and you will find that operators are where a language's deepest semantics hide, because every operator is a small contract: a defined behavior for a specific combination of types, a defined order of evaluation, a defined result for edge cases. A programmer who does not know the contract of the modulo operator with negative operands, or the difference between arithmetic and logical right shift, or how equality works for structs as opposed to integers, will write code that is wrong in ways that are extremely hard to see. Not loudly wrong, not crash-wrong, but quietly wrong: the kind of wrong that passes tests, survives review, and reveals itself at two in the morning during an incident. This chapter makes those contracts explicit, so that the two-in-the-morning surprises never get a chance.
+
+Coral's operators are the C operators. This is deliberate, and it follows from the philosophy of the previous chapters: a C programmer reading Coral should be able to predict what an expression does before being told. The operators behave the way the hardware behaves, and the language does not insert hidden behavior between your expression and the machine's operation. But Coral also adds structure that C does not have, most importantly in the type system, and that structure changes how operators interact with composite types. Understanding both the operator semantics and their interaction with types is the subject of this chapter.
+
+3.1 The Program Is a Bundle of Operations
+
+A program is a bundle of operations. Before any syntax, before any cleverness, that is what it is: a group of small, well-defined actions, arranged in the order you chose, that together produce the result you want. And you already know how to do this. You do it every time you figure out what a purchase costs after tax, how many pages your document will print on, or whether you can make rent this month. You know what each operation does, you know the answer you want, and the only question is which operations to combine — and in what order. Programming is that same habit, with the operations written down.
+
+That sentence is this chapter in a paragraph. Every operator is one small operation with a fixed, knowable behavior. The chapter's job is to give you the exact contract of each one — its limits, its edge cases, its surprises — so that when you bundle them, the result is the one you wanted, predictably, every time.
+
+The rest of this section is practice: a handful of small, ordinary problems, each solved with a few operations. Read them slowly. The pattern underneath them is the pattern of every program you will ever write.
+
+First, the average of three test scores. Three assignments scored 6, 7, and 4 out of 10. The average is: add the three scores, then divide by the number of scores.
+
+    u64 a = 6;
+    u64 b = 7;
+    u64 c = 4;
+    u64 total = a + b + c;     // 17: one addition, then another
+    u64 avg = total / 3;       // 5: the total divided by the count
+
+Read the code and the recipe is visible. a + b + c is the total; total / 3 is the average. The first addition runs, the second addition runs, the division runs last — the order is the order you wrote, and nothing reorders itself. And notice the small surprise already: the true average of 6, 7, and 4 is five and two thirds, but the result is 5. The fraction was dropped because the numbers are whole numbers and the division is the whole-number division — a preview of the lesson of section 3.3, and a first taste of the chapter's promise: knowing exactly what each operation does means the surprise is no surprise at all.
+
+Second, the Fahrenheit temperature of a Celsius reading. The formula is the one the weather report uses: multiply by nine, divide by five, add thirty-two.
+
+    f64 c = 21.0;
+    f64 f = c * 9.0 / 5.0 + 32.0;    // 69.8
+
+    u64 cInt = 21;
+    u64 fInt = cInt * 9 / 5 + 32;     // 69
+
+The same formula, written twice, gives two different answers: 69.8 and 69. The operations are the same shape — multiply, divide, add — but the first runs on floating-point numbers and keeps the fraction, and the second runs on whole numbers and drops it. Nothing about the symbol tells you which division you get; the types decide, and the types are written in the declaration. The formula you typed is obeyed exactly; the difference comes from knowing what the operations do with each kind of number. That is the chapter's subject, on the table before you.
+
+Third, the monthly budget. The question is the old one: after rent, food, and transit, is there enough left to meet the savings goal?
+
+    u64 income  = 3200;
+    u64 rent    = 1400;
+    u64 food    = 520;
+    u64 transit = 210;
+
+    u64 left = income - rent - food - transit;      // 1070
+    if (left >= 500)
+        std.print("goal met: ", left, " left\n");
+    else
+        std.print("short this month: ", left, " left\n");
+
+Four subtraction operations and one comparison operation, placed in the order that matches the sentence "after rent, after food, after transit." The subtractions run left to right, exactly as written: (3200 - 1400) is 1800, minus 520 is 1280, minus 210 is 1070. Write the same operations in another order and you get a different number — (3200 - 1400) - (520 - 210) is 1490, which is a different budget — so the placement you choose is not decoration; it is the meaning. The comparison asks whether the remaining value is at least the goal, and the program takes one of two paths from the answer. A decision, in the end, is an operation like any other: it compares two values and produces true or false, and the program chooses what to do with that answer.
+
+Fourth, and this is the classic one: a stopwatch that has measured 8451 seconds since midnight, and needs to report the time as hours, minutes, and seconds.
+
+    u64 s = 8451;
+    u64 h = s / 3600;          // 2: whole hours
+    u64 m = (s % 3600) / 60;   // 20: whole minutes after the hours
+    u64 sec = s % 60;          // 51: seconds after the minutes
+
+Each line peels one unit off the running total. The hour peels off with a division by 3600. The minute needs two operations: the remainder (s % 3600) discards the whole hours, leaving the leftover seconds, and the division by 60 turns that leftover into whole minutes. The seconds are the final remainder by 60. Three lines, four operations, each picking out exactly one piece of the answer, and the pieces combine into the moment: two twenty and fifty-one. No single one of these operations is remarkable; the whole is, because it shows what a bundle of ordinary operations can do. This composition — divide, and take the remainder to isolate one unit — is one of the most repeated patterns in all of programming. It turns up in every ring buffer, every table that wraps around, every time a program must map a large count into a small repeating range.
+
+Fifth, a smaller decision, the kind embedded in a thousand programs: does this order fit the cart's budget?
+
+    u64 price = 39;
+    u64 count = 12;
+    u64 cart = 350;
+    if (price * count <= cart)
+        proceed_to_checkout();
+    else
+        warn("over budget");
+
+One multiplication, one comparison, one choice. The bundle is three operations, and every one of them is visible, ordinary, and chosen by you: how to compute the order total, how to compare it to the budget, what each outcome means.
+
+That last point is the one to carry into the chapter. In every example, you decided the operations — not the compiler, not the language, not a framework. You knew what add, subtract, divide, take-remainder, and compare do. You knew the answer you wanted. You combined the operations, in the order and the arrangement that produces the answer. The compiler's only say in the matter is to check that each operation is given values it can actually operate on — that you are not dividing a price by a name — and then to translate your bundle into machine instructions faithfully.
+
+Everything else in this chapter is the details of the operations: what each one does, on which types, at the edges. The edge cases are where the surprises live — the truncation above, the overflow of section 3.5, the division by zero of 3.4 — and reading them now is cheaper than discovering them at two in the morning. The bundle is your design; the contracts of the operations are the material you design with. The rest of the chapter goes through each operator family the same way: what it does, what it needs, what its limits are.
+
+3.2 What Is an Operator?
+
+An operator is an operation on values, written with a symbol. Where a function has a name, an operator has a glyph: the plus sign, the star, the ampersand. But the difference is only in the writing. Underneath, an operator is exactly a function of a fixed signature, a mapping from operand types to a result type, and the symbol is a promise that this mapping is so fundamental, so universally understood, that it deserves the shortest possible spelling. Addition, comparison, and masking are to a language what vowels are to an alphabet: they appear so often that a single character pays for itself.
+
+Every operator compiles to machine instructions. This is the deep fact of this chapter, and it is the reason Coral chooses the C operators. The plus operator is not an abstraction the compiler must simulate; it is a direct request for the processor's add instruction, operating on the registers that hold the operands and leaving its result in a register. The equality operator compiles to a compare instruction followed by a branch. Bitwise AND compiles to a single and instruction. Because operators are instructions, they have exactly the properties the instructions have: they are fast, they are defined on the machine's widths, and they behave the way the silicon behaves. Coral does not put anything between your expression and the hardware. When you write x + 1, you are, in the most literal sense, asking the machine to add.
+
+Operators come in three shapes by arity, the number of operands they take. A unary operator takes one operand: the unary minus, logical NOT, bitwise NOT, address-of, dereference, and the prefix and postfix increments. A binary operator takes two operands: the arithmetic, comparison, logical, and bitwise operators are all binary. A ternary operator takes three: the conditional expression is Coral's only ternary operator. Arity is part of an operator's identity, and reading an expression means reading its operators as little machines of one, two, or three inputs.
+
+The type-first principle extends to operators. Every operator has a contract stating what operand types it accepts and what result type it produces, and the compiler enforces the contract at compile time. Coral has no implicit conversions between distinct types, so an operator's operands must already be of the types the operator expects, or the code must convert them explicitly. Literals adapt to context, so a literal can take on the type of its surroundings, but two variables of different types never combine silently. This makes the contract real: what an operator does is fixed, its operands are checked, and nothing about an expression's meaning can change behind the reader's back. The rest of this chapter walks through each family of operators and states each contract plainly.
+
+An example makes the "little machines" claim concrete before the chapter moves on: the unit-price question from the grocery aisle. Two jars of the same thing sit side by side, one 300 grams for 460 cents, one 500 grams for 690 cents, and the question is which is the better buy. The question is a bundle of two small operations per jar:
+
+    u64 small = 460 * 100 / 300;   // 153 cents per 100 grams
+    u64 large = 690 * 100 / 500;   // 138 cents per 100 grams
+
+The first line multiplies the price by 100 to bring the unit to "cents per 100 grams," then divides by the size in grams; the second line is the same bundle for the other jar. Four operations in all — two multiplications, two divisions — each one an ordinary operation with a fixed, knowable result, each compiled to the machine's multiply and divide instructions. The answer falls out on its own: 153 against 138, so the large jar is the better buy, and the decision was made by two two-operator recipes arranged by you. No framework, no clever syntax, nothing hidden: the operators did the work, and the reader can check every step of the arithmetic in the line where it happens.
+
+Before moving on, the three arities in one place, because reading expressions means recognizing the shape by the number of operands. The unary operators stand alone with one operand, the binary operators join two, and the ternary operator — Coral's only one — chooses between two values with a condition:
+
+    u64 neg = -v;                // unary: one operand, the value v
+    bool inverse = !yes;         // unary: flips one bool
+    u64 sum = p + q;             // binary: two operands
+    bool ordered = p < q;        // binary: compares two
+    i32 sign = v < 0 ? -1 : 1;   // ternary: a condition and two values
+
+The first two lines are machines with one input; the middle two have two inputs; the last has three. The shape is part of the meaning: a unary operator can only reshape what it is given, a binary operator joins, and a ternary operator is a small decision standing inside an expression.
+
+3.3 The Arithmetic Operators
+
+The arithmetic operators are the four operations of elementary arithmetic plus the remainder operation. They are written with the conventional symbols.
+
+    +   addition
+    -   subtraction
+    *   multiplication
+    /   division
+    %   remainder (modulo)
+
+These operators come in two flavors depending on the types of their operands. Integer arithmetic operates on the integer types, i8 through u64. Floating-point arithmetic operates on f32 and f64. The distinction matters enormously, because integer division and floating-point division are different operations with different behaviors, and nothing about the symbol marks which one you are getting. You have to know the types.
+
+The compiler selects the arithmetic instruction from the operand types. Two integer operands select the integer add, subtract, multiply, or divide instruction; two float operands select the floating-point instruction. The two instruction families do not mix. Coral's strict typing means an integer cannot be added to a float in the same expression without an explicit conversion; the code must say whether the integer becomes a float or the float becomes an integer before the operation runs. The same symbols therefore express two different families of operations, and the type system is what keeps them apart.
+
+    i32 a = 7;
+    i32 b = 2;
+    i32 q = a / b;      // integer division: q is 3
+    i32 r = a % b;      // remainder: r is 1
+
+    f64 x = 7.0;
+    f64 y = 2.0;
+    f64 d = x / y;      // floating-point division: d is 3.5
+
+The two divisions use the same symbol, a slash, but they compile to different instructions and produce different values from the same digits. Look at the four results and the lesson writes itself. This is the first and most important lesson of the arithmetic operators: the operator is what the operand types make it. The slash does not divide; the slash is the request, and the types decide the response.
+
+Integer division divides one integer by another and produces an integer result, truncating toward zero. The expression 7 / 2 produces 3, not 3.5. The fractional part is discarded, not rounded. This is the behavior of the hardware's integer division instruction, and Coral keeps it. Integer division is used when a count must be divided into whole pieces: splitting a byte count into word counts, computing how many whole items fit into a region, dividing a capacity into segments. The standard library uses integer division constantly, and the results are always integer. When you compute how many pages a byte count needs, you are doing integer division; when the answer comes back 3 because twelve kilobytes make three four-kilobyte pages, truncation was exactly right.
+
+Truncation toward zero has a specific meaning for negative operands. The expression -7 / 2 produces -3, because -3 is the integer toward zero from -3.5. This is not the same as the floor of -3.5, which is -4. If your algorithm requires floor division, rounding down toward negative infinity, you must compute it yourself; the language gives you truncation, and the distinction is a classic source of subtle bugs when dividing signed values. The same rule applies to the sign of the divisor: 7 / -2 also produces -3, because the quotient's sign is determined by the signs of the operands in the ordinary way. The lesson to carry away: when you divide signed values and the operands might have different signs, decide explicitly whether truncation or flooring is what your algorithm wants, because the two diverge exactly there.
+
+Floating-point division divides one float by another and produces a float result. The expression 7.0 / 2.0 produces 3.5. Floating-point division is the IEEE 754 operation, with all the properties described in the previous chapter: the result is the nearest representable value to the true quotient, and division by zero produces a special IEEE value rather than a crash. The two division operators share a symbol, and the compiler decides which operation to emit from the types of the operands.
+
+The remainder operator, written with a percent sign, is defined for integers and for floats. Integer remainder computes the remainder of integer division. The expression 7 % 3 produces 1, because 7 divided by 3 is 2 with a remainder of 1. The sign of a remainder result follows the sign of the dividend, matching the truncation of division: -7 % 3 produces -1, and 7 % -3 produces 1. The relationship that holds for integer division is that a divided by b, times b, plus a modulo b, equals a. This invariant is the definition of a consistent division and remainder pair, and it is what makes the operators trustworthy. The sign rule follows directly from the invariant: because the division truncates toward zero, the remainder must carry the sign of the dividend for the equation to balance. If you have ever been burned by a language whose modulo follows the divisor's sign instead, you have felt why this contract matters.
+
+    i32 r1 = 7 % 3;     // 1
+    i32 r2 = -7 % 3;    // -1, follows the sign of the dividend
+    i32 r3 = 7 % -3;    // 1, the divisor's sign does not affect the result
+
+The standard library makes constant use of the remainder operator. The bitset type computes which machine word a bit index falls in with division, and which bit within that word with remainder: the word is index divided by 64, the offset is index modulo 64. The duration type splits a count of nanoseconds into seconds and leftover nanoseconds with division and remainder. The hash map distributes keys across its buckets with the remainder of the hash divided by the bucket count. The modulo operator is the workhorse of mapping a value into a fixed range, and it appears in every ring buffer, every circular index, every table that wraps around.
+
+Because division truncates, the standard library's counting code often needs division with a different rounding rule, and it builds the rule explicitly with arithmetic on top of the operators. Rounding up, computing how many whole units are needed to cover a quantity, is the ceiling of the quotient, and it is built from truncating division by adding one fewer than the divisor before dividing:
+
+    pub u64 divCeil(u64 n, u64 d)
+    {
+        return (n + d - 1) / d;
+    }
+
+    u64 pages = divCeil(byteCount, 4096);   // how many 4K pages hold the bytes
+
+Rounding to the nearest whole unit is the same idea with half the divisor added first:
+
+    pub u64 divRound(u64 n, u64 d)
+    {
+        return (n + d / 2) / d;
+    }
+
+    u64 avg = divRound(total, count);       // the count divided, rounded to nearest
+
+Both helpers depend on the addition not overflowing, which the caller ensures for the ranges involved, and both are exactly the kind of explicit construction the language prefers: the operator truncates, and any other rounding rule is written down rather than guessed. The beauty of these two helpers is that they are three tokens long and explain themselves; a comment would add nothing, and the library wisely adds none.
+
+Division and remainder also work as a pair to map a flat position into two coordinates, the way a table is stored as one array and read as rows and columns. A grid of 16 columns and 12 rows stores 192 cells; reading cell k means asking two questions with one division and one remainder:
+
+    u64 k = 175;
+    u64 cols = 16;
+    u64 row = k / cols;        // 10: which row — quotient by the row width
+    u64 colIndex = k % cols;   // 15: which column within it — the last one
+
+The pair is the inverse of the row-major formula cell = row * cols + col, and it appears in every image buffer, every tile map, every spreadsheet's internal storage. Division picks the unit, remainder picks the position within the unit — the same shape as the stopwatch in section 3.1, applied to two dimensions instead of three.
+
+3.4 Division by Zero
+
+Division and remainder by zero are undefined behavior in Coral, exactly as in C, because the hardware has no defined result for them. Integer division by zero has no meaningful answer, and the language does not invent one. On most hardware, integer division by zero raises a processor fault that terminates the program, which is the honest outcome: dividing by zero is a bug, and the program should not continue with a made-up result. Better a crash you can see than corruption you cannot.
+
+Because the behavior is undefined, no program may rely on it, and the code that divides must ensure the divisor is not zero when the divisor is not known to be safe. The guard is a comparison before the division:
+
+    if (divisor == 0) return 0;
+    u64 avg = total / divisor;      // safe: the zero case was handled above
+
+This pattern appears throughout the standard library: every division where the divisor could reach zero is preceded by a check, and the check is written where a reader can see it. The alternative, letting a zero divisor reach the hardware, turns a diagnosable bug into a crash at best and a wrong result at worst. The check costs one comparison, and one comparison is nothing compared to the debugging session it prevents.
+
+Floating-point division by zero is different. IEEE 754 defines it: a nonzero value divided by zero produces an infinity, and zero divided by zero produces NaN. These are defined results, and Coral follows IEEE 754. The distinction between the integer and floating behaviors is one more consequence of the difference between the two arithmetic systems, and it is worth internalizing: integer arithmetic has no answer for division by zero and says so; floating-point arithmetic has a value for it and returns it.
+
+A worked shape makes the guard concrete: the average of a list of measurements, where the list may be empty. An empty list has no average — there were no measurements to average — and the honest answer is to handle the case before the division runs:
+
+    u64 average(u64 sum, u64 count)
+    {
+        if (count == 0) return 0;   // no measurements: no division, no crash
+        return sum / count;
+    }
+
+The guard is one comparison placed one line above the division it protects, and the reader sees both halves of the decision together: the zero case is answered, and only the defined case reaches the slash. This exact shape — a guard, then a division — is the shape of defensive division throughout the standard library, wherever a divisor could be zero on a quiet Tuesday. The guard costs one comparison, the comparison costs nothing measured against the debugging session it prevents, and the function reads as the honest version of the arithmetic it performs.
+
+Division by zero also lurks where the divisor is a computation rather than a variable, and the guard then protects the expression, not the name. A throughput measurement divides work by elapsed time, and the elapsed time is zero whenever the measurement began and ended in the same instant:
+
+    u64 rateOf(u64 work, u64 seconds)
+    {
+        if (seconds == 0) return 0;   // no elapsed time: no defined rate
+        return work / seconds;
+    }
+
+The guard is the same comparison, one line above the division, whatever the divisor's shape — a parameter, a difference of timestamps, a computed count. The rule to internalize is to look at every division and ask what could make its right operand zero; the guard goes where the answer is yes. In this function the honest answer for "no elapsed time" is no rate at all, and the zero says so, instead of letting the division announce the bug as a crash.
+
+3.5 Overflow and Underflow
+
+Overflow is what happens when the result of an operation exceeds the range of the type that holds it. The previous chapter established that integer arithmetic in Coral is modular: it wraps around at the width of the type, in two's complement. This chapter makes the consequences explicit, because they appear in expressions.
+
+Adding one to the maximum value of a type wraps to the minimum value. Adding one to the unsigned maximum, U8_MAX which is 255, produces 0. Adding one to the signed maximum, INT8_MAX which is 127, produces -128. Every integer operation, addition, subtraction, multiplication, division, is performed on the full width of the operand types, and the result is truncated to that width. This is the behavior of the hardware, and it is deterministic and predictable: given the same operands, the same operation always produces the same wrapped result. Boring, yes, and deliberately so — predictability is the entire point.
+
+    u8 m = 255;
+    m += 1;     // m is now 0, wrapped
+    i8 s = 127;
+    s += 1;     // s is now -128, wrapped
+    u8 n = 0;
+    n -= 1;     // n is now 255, wrapped
+
+The wrapping is not a special case in the compiler; it is the natural shape of the machine's arithmetic. The processor's arithmetic unit computes the addition on a wider internal width and keeps the low eight bits of the result, and the type u8 is exactly a promise to keep those eight bits. The processor also reports the overflow to any code that asks, through a flag in the status register, but Coral does not read that flag implicitly. The wrapped result is the result, and a program that needs to know about the wrap must check the operands before the operation.
+
+There is no saturation. A saturating operation would clamp the result to the maximum value instead of wrapping. Coral does not do that; the result wraps, and if you need saturation you implement it, checking the operands and clamping explicitly. This is a systems language; it does not coddle your counters, it makes their behavior exact.
+
+There is no panic on integer overflow. Coral does not throw an exception when arithmetic overflows, and it does not trap. The wrapped result is the result. This is a deliberate consequence of the performance philosophy: checked arithmetic on every operation would slow every program for the sake of a check that most operations never need. The cost of this choice is that you must think about range, and the benefit is that your arithmetic is exactly as fast as the hardware. When range is a real risk, the code checks the operands before the operation, and the standard library does exactly this wherever a computation could exceed its type.
+
+The check-before pattern is easy to write for unsigned addition, because a wrapped addition is always smaller than either operand: the sum of two unsigned values is at least as large as each operand when it does not wrap. The standard library's counters exploit this to detect overflow as a side effect of the operation itself:
+
+    pub u64 checkedAdd(u64 a, u64 b)
+    {
+        u64 sum = a + b;
+        assert(sum >= a);   // false exactly when the addition wrapped
+        return sum;
+    }
+
+The assert fails if the addition wrapped, because a wrapped sum is smaller than the operand it came from. This is a compact, correct guard, and it is the shape of range management throughout the library: the language wraps, and the code that cares asks. Note the elegance: the check is not a reverse-engineered guess about whether the instruction happened to set a flag; it is arithmetic itself, and it cannot disagree with the hardware.
+
+A multiplication wraps too, and its check uses a different identity. A true product, divided by one of its factors, gives the other factor back; a wrapped product does not, which makes the division the detector-of-lies:
+
+    pub u64 checkedMul(u64 a, u64 b)
+    {
+        u64 p = a * b;
+        assert(a == 0 || p / a == b);   // false exactly when the multiply wrapped
+        return p;
+    }
+
+If p is the true product, p / a is exactly b and the assert passes, claiming nothing. If the multiply wrapped, p is the wrapped value, the division recovers a different quotient, and the assert fires. The division is safe because the assert's first clause excludes the one divisor — zero — that would make the check itself undefined. This is checkedAdd's sibling: the language wraps, and the check is arithmetic, not magic.
+
+Wrapping is also why a small counter in a long loop is a silent liar. A u8 counter that should march to 16 marches through 255 and zero on the way, because the type wraps at 255:
+
+    u8 counter = 250;
+    u64 rounds = 0;
+    while (counter != 16)      // intended: "until it reaches 16"
+    {
+        counter += 1;
+        rounds++;
+    }
+    // rounds is 22, not 10: the counter detoured through 254, 255, 0, and 1..15
+
+The loop terminates, which is exactly what makes the bug expensive: nothing crashes, nothing warns, the loop simply took the long way, and the length of the way depends on the wrap. Every increment behaved as defined; the lie is the type's range, chosen in the declaration — which is why range thinking is this chapter's habit, and the counter's type is chosen from the counter's range, not from the mood of the line.
+
+Underflow has two senses. In integer arithmetic, underflow is overflow in the negative direction, and it wraps identically: subtracting one from the minimum value wraps to the maximum value. In floating-point arithmetic, underflow is when a result is too small to be represented, and IEEE 754 handles it by producing a subnormal value or zero. Both behaviors are defined, deterministic, and predictable from the type.
+
+3.6 The Compound Arithmetic Operators
+
+Every arithmetic and bitwise operator has a compound assignment form, which combines the operation with assignment back to the left operand. The form is the operator followed by an equals sign, and the meaning is: compute the operation with the left operand as the first operand, then assign the result back to the left operand.
+
+    +=    -=    *=    /=    %=
+    &=    |=    ^=    <<=   >>=
+
+The statement x += 1 is exactly equivalent to x = x + 1. The compound form exists to make the common pattern of modifying a variable in place shorter and clearer, and it avoids repeating the variable name. The standard library uses these operators constantly, incrementing counters with +=, accumulating values with += and |=, advancing positions with +=, and the compound form is the idiomatic way to modify a variable in place. Read a page of the library and you will see a += somewhere on nearly every one.
+
+    u64 total = 0;
+    total += first;
+    total += second;
+    total += third;      // the three values accumulate into total
+
+    u32 flags = 0;
+    flags |= FLAG_READ;     // sets the read bit
+    flags |= FLAG_WRITE;    // sets the write bit without clearing the read bit
+
+The accumulation pattern is the heart of counting and summing, and the flag pattern is the heart of representing sets of options in a single word. In both, the compound operator reads the current value, computes, and writes back, and the reader does not have to scan twice for the variable name. The flag example is worth a second look: two lines, two operators, and the read bit survives the write because OR only ever turns bits on. That property, and not any ceremony, is what makes the flag word pattern safe.
+
+The rest of the compound family earns its living the same way, and three idioms complete the everyday set. Accumulating a product with *=, cycling an index with %=, and toggling a mode with ^= are as common as the sum and the OR:
+
+    u64 product = 1;
+    for (u64 i = 2; i <= 5; i++)
+        product *= i;           // 2, then 6, then 24, then 120
+
+    u64 slot = 0;
+    for (u64 i = 0; i < 20; i++)
+    {
+        slot++;
+        slot %= 8;              // the index cycles 0..7 forever, without an if
+    }
+
+    bool dark = false;
+    dark ^= true;               // flips: on, off, on...
+    dark ^= true;               // the toggle, two lines long, needs no if
+
+The %= is the ring-buffer step in one line — increment, then fold back into range — and the fold is visible exactly where the reader expects it. The ^= is the mode flip: one bit of state, changed by the one operator that cannot do anything but flip it. Note what each line names: the *= names multiplication, the %= names the ring, the ^= names the flip, and the compound form keeps the operator at the front of each idiom where the reading starts.
+
+Increment and decrement operators exist in both prefix and postfix forms, as described in the previous chapter. The prefix form evaluates to the new value of the variable after the change, and the postfix form evaluates to the old value before the change. When the result of the expression is unused, the two forms are identical, and the choice is stylistic. When the value is used, the forms mean different things, and the choice is semantic.
+
+    u32 i = 0;
+    u32 a = ++i;    // i becomes 1, a is 1: prefix yields the new value
+    u32 b = i++;    // b is 1, i becomes 2: postfix yields the old value
+
+The prefix and postfix forms differ in exactly one detail, the value the expression produces, and the choice between them is the choice of where in the expression the effect sits. The standard library's loops use the bare postfix form, i++, when the value is discarded, because it is the conventional spelling of "advance by one." Nobody thinks about it; the form filed itself away in muscle memory long ago.
+
+3.7 Expressions and Statements
+
+An expression is a combination of operators, operands, literals, and calls that produces a value. A statement is a unit of action that the program performs. The difference is the difference between producing and doing, and Coral keeps it sharp because the whole language is built on it.
+
+Every expression has a type and a value. The expression 3 + 4 has the integer type and the value 7. The comparison a == b has type bool. A function call is an expression whose value is the function's return value, and a call to a void function is an expression of type void. Operators are the glue that assembles values into larger values, and an expression is the composition of those operations. Expressions are the language's way of computing: they take values in and produce a value out, and they can be nested without limit.
+
+A statement is an action: an assignment, an if decision, a return, a loop. Some statements contain expressions. In the statement x = y + 1, the right-hand side y + 1 is an expression, and the assignment stores its value in x. In the statement if (a < b) compare(), the condition a < b is an expression, and the if statement decides which branch runs based on that value. Statements are where the values that expressions produce go to work; the expression answers "what is the value," and the statement answers "what does the program do." Keep the pair straight and the structure of every function becomes obvious at a glance.
+
+The bridge between the two is the expression statement: an expression followed by a semicolon, whose value is discarded. Almost every call to a void function is an expression statement, a call whose result nobody uses:
+
+    v.push(3);    // the call runs, the void value is discarded
+
+The same construction makes assignment a statement. The assignment x = 5 is itself an expression whose value is the assigned value, 5, and the semicolon discards that value. This is why assignment can also appear inside a larger expression:
+
+    i32 y = (x += 2);   // the assignment to x runs, then y receives the value
+
+The ability to nest an assignment inside an expression is occasionally useful, and it is exactly the kind of compactness the standard library avoids in favor of explicit statements. The rule of thumb is the language's rule: expressions produce, statements act, and a reader should be able to tell from the shape of a line which one it is.
+
+3.8 Side Effects and Evaluation Order
+
+A side effect is a change to the state of the program that outlasts the evaluation of the expression that caused it. The pure expression x + 1 has no side effect: it reads x, computes a value, and changes nothing. An assignment has a side effect: it changes a variable. An increment has a side effect, a decrement has a side effect, and a call to a function that modifies state has a side effect. Most programs are chains of side effects; the skill is making each one visible and intentional. A program full of invisible side effects is a program full of surprises, and surprise has no place in a systems language.
+
+Side effects matter because of evaluation order. When an expression contains several operations, the language must say, or deliberately not say, in what order the parts are evaluated. Coral's rule follows C's: the operands of a binary operator may be evaluated in any order, and the order is not specified. What is guaranteed is that each operand is fully evaluated before the operator applies, and that the operands of a single operator do not interleave.
+
+The consequence is a rule that prevents entire classes of bugs: never read and write the same variable in one expression, unless the read and the write are the two sides of one assignment. The classic mistake is an expression like this:
+
+    v = v + (v = v + 1);   // wrong: the result depends on an unspecified order
+
+The language does not say whether the right-hand v is read before or after the inner assignment runs, so the expression's result is not defined, and a different compiler, or a different optimization, may produce a different result. Coral programmers do not write such expressions, and the standard library never does, because the language does not make them meaningful. If you ever feel the urge to write one, the urge is telling you the code needs to be split into two statements, not made cleverer.
+
+Between statements the picture is simple. Each statement runs to completion, all of its side effects included, before the next statement begins. This sequencing is the foundation of the programming model: the order in which statements are written is the order in which their effects happen, and the only place order needs care is inside a single expression. The standard idiom follows directly: give each effect its own statement.
+
+    v = v + 1;      // one effect, clearly ordered
+    x = v;          // the next statement sees the updated v
+
+The increment and decrement operators are side effects that happen inside expressions, which is why the prefix and postfix forms exist. In the statement i++, the effect is the whole point and the value is discarded; in y = ++i, the expression both changes i and yields the new value. The two forms place the side effect before or after the value is taken, and choosing between them is choosing where in the expression the effect occurs. When the increment appears inside a larger expression, the surrounding expression must be written so that the order cannot be mistaken, which is another reason the library favors one effect per statement.
+
+The same rule covers function arguments. The arguments of a call form one expression, and their order of evaluation is likewise not specified, so two side effects on the same variable inside one call are the same trap as two inside one arithmetic expression:
+
+    f(n, ++n);      // not specified: does the first argument see the increment?
+
+The reader cannot know whether the first n is read before or after the second argument runs its increment, and neither can the compiler promise it. The fix is always the same shape: give each effect its own statement, in order, and take the values the call needs afterwards:
+
+    u64 before = n;     // one effect per statement, written in order
+    n += 1;
+    f(before, n);       // the two values the call needs, taken when they exist
+
+The three lines say exactly what the one line meant to say, with the order written down. Verbosity is the price of order, and Coral pays it gladly.
+
+3.9 The Comparison Operators
+
+The comparison operators compare two values and produce a bool. They are the equality operators and the relational operators.
+
+    ==    equal to
+    !=    not equal to
+    <     less than
+    <=    less than or equal to
+    >     greater than
+    >=    greater than or equal to
+
+For the integer types, the comparison operators compare numeric values. The result is true when the relationship holds and false otherwise. Comparisons between signed and unsigned values are performed carefully, because the two types interpret the same bits differently, and the compiler handles the conversion explicitly to avoid the classic bugs of mixed-sign comparison.
+
+    i32 a = 3;
+    i32 b = 4;
+    bool less = a < b;       // true
+    bool equal = a == b;     // false
+    bool different = a != b; // true
+
+The mixed-sign case deserves its own example, because the same bits mean different numbers depending on the type. An i32 holding -1 and a u32 holding 0u are different values, and comparing them without deciding which interpretation is meant would be a trap. Coral makes the interpretation explicit with a cast:
+
+    i32 s = -1;
+    u32 u = 0u;
+    bool same = ((u32)s == u);   // false: -1 as u32 is a huge unsigned value
+
+The cast states which type is being compared, and the comparison then has a single, defined meaning. This is Coral's answer to a whole class of C bugs: the mixed-sign comparison is never left to the compiler's default. In C this line would be a coin flip; in Coral it is a documented decision.
+
+The mixed-sign rule meets its most common victim in the loop condition. Comparing a signed loop counter against an unsigned length is a comparison between two interpretations, and the code must decide which one it means — the cast is the decision written down:
+
+    for (i32 i = 0; (u64)i < len; i++)
+        processRecord(&records[i]);   // (u64)i: the comparison is explicitly unsigned
+
+The cast states that the count is being compared as the unsigned value it is, and the loop then runs exactly len times. In Coral, omitting the cast is not a silent behavior change as it is in C — the strict type system refuses the undecided comparison and the code does not compile until the author picks an interpretation. The error is the gift: the loop condition cannot be blessed into production while its comparison means nothing.
+
+For the floating-point types, comparisons follow IEEE 754, and the behavior of NaN must be understood. Every relational comparison with a NaN operand produces false. The expression NaN < 3 is false, NaN > 3 is false, NaN == NaN is false. Only the not-equal comparison, NaN != NaN, is true. This follows from the definition of NaN as a value that is not equal to anything. The practical consequence is that a comparison chain that asks "is the result in this range" will correctly reject a NaN result, and a check for NaN itself must use the not-equal form or an explicit NaN test.
+
+    f64 r = total / count;                // may be NaN when count is zero
+    bool inRange = r > 0.0 && r <= 1.0;   // false when r is NaN
+    bool isNan = r != r;                  // true exactly when r is NaN
+
+The range check rejects NaN automatically, because each comparison is false, and the not-equal comparison, true only for NaN, is the standard NaN detector. A program that treats a NaN result as "out of range" behaves correctly without a special case. That is the sort of quiet elegance the language's designers seem to have seeded on purpose: the range check needs no extra clause, because NaN is already incapable of passing it.
+
+The comparison operators apply to primitive types directly. For composite types, structs, strings, and other aggregate values, the comparison operators do not automatically compare the contents. Coral does not define implicit equality for structs, because the correct meaning of equality for a composite type is a property of the type, not something the compiler can guess. The standard library provides explicit methods for this, and they are covered in the equality section below. The primitive comparison operators are the foundation, and composite comparison is built from them in the library.
+
+3.10 Value Equality and Reference Equality
+
+The distinction between value equality and reference equality is one of the most important concepts in programming, and Coral draws it with unusual clarity.
+
+Value equality asks whether two values are the same value: whether two integers hold the same number, whether two characters are the same byte. Primitive types have value equality. The expression a == b for two integers is true exactly when a and b hold the same number.
+
+Reference equality asks whether two references name the same object, as opposed to two different objects with the same contents. Two pointers to the same location are reference-equal. Two pointers to different locations are not, even if the values at those locations are identical. The distinction feels pedantic until the day it quietly eats a cache lookup, and then it feels like the most important distinction in programming.
+
+In Coral, the == operator on two pointers compares the addresses, the pointers themselves. This is reference equality, and it is the meaning of == for pointer types. To compare the contents of two objects that pointers refer to, you use the type's own comparison method, because only the type knows what "same contents" means. This is the sharp line Coral draws: == is identity for pointers, value equality for primitives, and neither is guessed for composite types.
+
+    i32 x = 5;
+    i32 y = 5;
+    i32* px = &x;
+    i32* py = &y;
+    i32* qx = &x;
+
+    bool valueEq = (x == y);     // true: the numbers 5 and 5 are equal
+    bool refEq = (px == py);     // false: two different objects, same contents
+    bool sameObj = (px == qx);   // true: both pointers name the same object
+
+The three comparisons show the full picture at once. The integers compare by their values, the pointers by their addresses, and the equality of the pointed-to contents is neither claimed nor denied by the pointer comparison. The contents live at different addresses, so the pointers differ, no matter how alike the objects at those addresses are. The object identity question and the content equality question are different questions, and the language keeps them separate so you have to ask the right one on purpose.
+
+The standard library's collections depend on this distinction being explicit. A hash map cannot compare its keys by pointer identity, because two keys with identical contents must be considered equal. The hash map therefore requires the caller to provide an equality function for the key type, a function that implements whatever equality means for that type. This is the custom equality protocol, and it is covered in the next section.
+
+3.11 Equality for Composite Types
+
+Composite types, structs and the library types built on them, do not have built-in ==. Coral provides no automatic member-by-member equality, because automatic equality is usually wrong: a struct with a pointer field would compare the pointers, not the pointed-to contents, and two logically identical objects would compare unequal. The language refuses to guess, and it provides the tools to define equality correctly.
+
+The library types implement equality as methods. The string view type provides an equals method that compares lengths and bytes, returning true when two views hold the same text. It provides a compare method that returns a negative number, zero, or a positive number, ordering the views lexicographically, which is a stronger contract than equality because it also supports ordering. The duration type provides an eq method and a compare method for the same reason. This is the pattern: a type that supports equality provides a method that implements it, and code that needs equality calls that method.
+
+    std.strView a = std.strView::fromCstr("coral");
+    std.strView b = std.strView::fromCstr("coral");
+    bool sameText = a.equals(b);      // true: same length, same bytes
+    bool sameObject = (a.ptr == b.ptr);   // false unless both views share storage
+
+The example shows why the method exists. The two views are equal as text even though they may point at different buffers; only the equals method, which compares lengths and bytes rather than pointers, can say so. The pointer comparison in the second line is a reference comparison, and it answers a different question. If Coral had simply said "structs compare field by field," this example would answer the wrong question, silently. Insisting the type define equality is Coral's way of insisting that "equal" mean what you mean.
+
+The pattern is worth internalizing because it appears throughout the standard library. Compare the library's own code: the string's find method does not compare with ==; it calls memcmp and tests the result against zero. The contains method does not use ==; it calls the find method and tests its result against a sentinel. Equality for composite types is always a method call, and the method is named to say exactly what it does.
+
+3.12 The Comparison Protocol
+
+For types that support ordering, not just equality, Coral uses a consistent protocol based on the compare method. A compare method returns a negative integer when the first value is less than the second, zero when they are equal, and a positive integer when the first is greater than the second. This is a single method that answers all six comparison questions, and the standard library builds its ordering and sorting on top of it.
+
+The string view's compare method follows this protocol: it compares byte ranges with memcmp, and if the common prefix is equal, the shorter string is less. The duration's compare method compares seconds first and nanoseconds second, which gives a total order over durations. The sort algorithms of the collections library sort according to this protocol, and the standard library's tree and priority queue types use it to maintain order. When you write a type that must be sortable or ordered, you implement the same protocol, and your type plugs into every standard algorithm that orders values. There is no registration ceremony, no interface to declare; the algorithm only knows how to ask "which comes first," and your compare method answers.
+
+Consuming the protocol is a matter of testing the sign of the result:
+
+    i32 order = a.compare(b);
+    bool aFirst = order < 0;     // a sorts before b
+    bool equal = order == 0;     // a and b are equivalent
+    bool aLast = order > 0;      // a sorts after b
+
+    strView smaller = a.compare(b) <= 0 ? a : b;   // the minimum by the protocol
+
+The sign test replaces the six relational operators: one method call, three possible results, and any comparison question answered by comparing the result against zero or its negation. This is why the protocol is so useful to the algorithms: a sort needs to know "which comes first," and the compare method answers it directly, once, per pair.
+
+This protocol is the answer to the question of how operators compose into algorithms. The primitive operators provide the individual comparisons, the compare method aggregates them into a total order for a composite type, and the algorithms consume the total order. The design is explicit at every level, and there is no hidden ordering rule that could surprise you.
+
+3.13 The Logical Operators and Short-Circuit Evaluation
+
+The logical operators combine bool values and produce bool values. They are the operators of boolean logic, and their semantics were introduced in the previous chapter.
+
+    &&    logical AND
+    ||    logical OR
+    !     logical NOT
+
+The two binary operators are short-circuiting, and this is a guarantee of the language. In the expression a AND b, a is evaluated first. If a is false, the result of the whole expression is false, and b is not evaluated at all. In a OR b, if a is true, the result is true, and b is not evaluated. Short-circuiting is not an optimization the compiler may choose to apply; it is the defined behavior of the operators, and code is written to rely on it.
+
+The machine picture makes the guarantee concrete. The compiler emits the first operand's code, then a conditional branch: for AND, the branch skips the second operand when the first is false; for OR, it skips when the first is true. The second operand's code physically may not run. Because the guarantee is part of the operator, the compiler is not free to hoist the second operand's evaluation, and the programmer may depend on the fact that a function call on the right-hand side runs only when it must.
+
+The short-circuit behavior is what makes chained conditions safe. The standard pattern is to test a precondition before a riskier operation in the same condition:
+
+    if (self->ptr != null && self->ptr[0] == 'x') ...
+
+The first comparison runs, and only if the pointer is not null is the second comparison, which dereferences the pointer, allowed to run. If && did not short-circuit, the dereference would happen even for a null pointer. The operators' guarantee is what makes this code correct, and Coral programmers write such combined conditions freely. This single line is why short-circuit matters more than any textbook sentence can say: it is a null-safety guard folded into an ordinary condition.
+
+The null guard has a sibling that protects reads instead of dereferences — the bound test that must run before an index is used. The search loop is where both shapes meet in one condition:
+
+    u64 i = 0;
+    while (i < n && data[i] != target)   // the bound test guards the read
+        i++;
+    bool found = i < n;                  // false means the loop ran off the end
+
+The && guarantees the read of data[i] happens only after the bound test answered true, so the loop never reads past the end even when the target is nowhere — the last read, and only the last read, may legally touch data[n-1]. Two guarantees in one line: the left side decides whether the right side may run. This is the shape of every hand-written bounds-checked search, and the standard library's collections build their checked access on exactly this foundation.
+
+Short-circuiting also guards computations that would be invalid or wasteful. The classic example is a division guarded by its denominator, and the same shape appears whenever a fallback is expensive:
+
+    u32 count = 0;
+    bool safe = count != 0 && (10 / count) > 2;   // the division never runs at 0
+
+    bool ready = checkFastPath() || checkSlowPath();   // slow path runs only when needed
+
+In both examples, the right-hand operand is evaluated only when the left-hand operand leaves the outcome undecided. The guarantee turns the conditional structure of the expression into control flow, and it is safe to place an operation on the right that must not run in the skipped case.
+
+The logical operators operate only on bool values. They are not bitwise operators, and they do not accept integers. To combine conditions you use the logical operators; to combine bit patterns you use the bitwise operators; the two families are distinct and do not mix.
+
+3.14 The Ternary Operator
+
+The conditional expression, written with a question mark and a colon, is the language's expression-level if. It evaluates one of two expressions based on a bool condition, and it produces a value.
+
+    condition ? valueIfTrue : valueIfFalse
+
+The condition is evaluated first. If it is true, the expression evaluates to the second operand; if false, to the third. The other branch is not evaluated, so the ternary operator shares the short-circuit property of the logical operators: only one of the two value branches is ever evaluated. This makes it safe to use a branch that would be invalid in the other case.
+
+The ternary operator is an expression, so it can appear anywhere a value is expected: in an assignment, in a function argument, inside a larger expression. The standard library uses it for choosing between two values:
+
+    u64 newCap = self.cap > 0 ? self.cap * 2 : 4;
+
+This says: if the current capacity is positive, double it; otherwise, use four. The two branches are values of the same type, and the whole expression has that type. The ternary operator is Coral's way of choosing a value conditionally without an if statement, and it is used wherever the choice is short enough to fit on a line.
+
+Because the branches are full expressions, the ternary composes. A three-way choice nests two ternaries, reading from the outside in:
+
+    i32 sign = value < 0 ? -1 : (value > 0 ? 1 : 0);
+
+The condition decides between -1 and a second ternary, and the second ternary decides between 1 and 0. The parentheses make the grouping visible, which matters because the conditional operator associates to the right. Coral's strict typing applies to the branches as well: both branches must have the same type, and the compiler checks the match, so a ternary can never silently pick between an integer and a string.
+
+The same nesting composes the two helpers every systems program writes by hand at least once — the smaller of two values, and the clamp that squeezes a value into a range:
+
+    u64 smaller = a < b ? a : b;                  // the minimum of two
+    i32 clamped = v < lo ? lo : (v > hi ? hi : v);   // v, kept inside [lo, hi]
+
+The clamp is two ternaries read from the outside in: the outer one picks lo when v is too small, the inner one picks hi when v is too big, and v itself when it is already inside. The nested shape is the standard spelling of a bounded value — a frame index kept within a table's size, a signal value kept within sensor limits, a volume kept between 0 and 100 — and because both branches are values, the whole expression is a value that can be assigned, compared, or passed on the same line.
+
+Because only the chosen branch is evaluated, a branch with a side effect is safe. In the expression flag ? enable() : disable(), only one of the two calls runs. This is the same guarantee as short-circuit evaluation, applied to a value selection, and it is part of why the ternary can appear inside expressions where an if statement cannot.
+
+The ternary operator is not a substitute for if in general. It is for choosing a value. An if statement is for choosing a sequence of actions. The distinction is the same as everywhere in Coral: expressions produce values, statements perform actions, and each is used for its purpose.
+
+3.15 Null Coalescing
+
+Coral handles the possibility of a missing value with the Option type, not with a hidden null, and the pattern of providing a default for a missing value has a corresponding idiom.
+
+The Option type is a container that holds either a value or nothing. The library provides methods to inspect an Option: a method to test whether it holds a value, a method to extract the value when it is present, and a method to provide a default value when it is absent. The default-value method is the coalescing operation: it returns the contained value if present, and the given default otherwise.
+
+    u64 count = std.opt.unwrapOr(0);
+
+This is Coral's equivalent of the null-coalescing operator found in other languages. It is a method rather than an operator, which is consistent with the language's approach to composite types: the operation is defined by the type that owns the value. The meaning is exactly the coalescing semantics: use the value if there is one, otherwise use the default. The unwrapOr method makes the fallback explicit and visible, and it is the standard way to consume an optional value that has a sensible default. The type does the work, and the language stays out of the way.
+
+A subtlety follows from unwrapOr being a method rather than an operator: its argument is an ordinary argument, evaluated before the call. If the default is the result of an expensive computation, that computation runs whether or not the Option holds a value, because there is no short-circuit between the argument and the method. The two forms show the difference:
+
+    u64 a = cached.unwrapOr(0);                  // a constant default: free either way
+    u64 b = cached.unwrapOr(computeDefault());   // computeDefault always runs
+
+When the default is cheap, the method form is perfect. When the default is expensive, the code arranges to compute it only when needed, guarding it with a test of whether the Option holds a value. This is the same lesson as everywhere in Coral: a method call has the semantics of a method call, and the evaluation of its arguments is a visible, predictable fact. Explicitness means there is nothing to deduce, and also nothing to be surprised by.
+
+The method form covers the everyday case with one line. A program that reads its settings from a config file meets the pattern constantly: the port number may or may not be present in the file, and the default fills the gap:
+
+    u64 port = config.lookup("port").unwrapOr(8080);   // the file's value, or the default
+
+The lookup returns an option, because the file may not contain the key and the possibility is written into the type, and the unwrapOr supplies the fallback in the same breath. A missing setting is not a crash, and it is not a special case strewn through the code; it is one method call whose name says what happens in both cases. The value, when present, is the file's; the default is the backup; and the line reads exactly that.
+
+3.16 The Bitwise Operators
+
+The bitwise operators treat integers as bit patterns. They are the raw operations of the machine on individual bits, and they are fundamental to systems programming.
+
+    &     bitwise AND
+    |     bitwise OR
+    ^     bitwise XOR (exclusive OR)
+    ~     bitwise NOT (complement)
+    <<    left shift
+    >>    right shift
+
+Bitwise AND, written with a single ampersand, produces a result with a 1 in each bit position where both operands have a 1. It is the masking operator: it can clear selected bits of a value, test whether specific bits are set, and extract fields from a packed value. Bitwise OR, a single vertical bar, produces a 1 where either operand has a 1. It is the setting operator: it can set selected bits without disturbing the others. Bitwise XOR produces a 1 where exactly one operand has a 1. It is the toggling operator: XORing a value with a mask flips the masked bits. Bitwise NOT flips every bit of its single operand.
+
+A worked example makes each operation visible on the same two bit patterns. In hexadecimal, each digit is four bits, so a byte is two digits:
+
+    u8 a = 0x3C;    // binary 0011 1100
+    u8 b = 0x0F;    // binary 0000 1111
+
+    u8 and_ = a & b;     // 0x0C, binary 0000 1100: bits set in both
+    u8 or_ = a | b;      // 0x3F, binary 0011 1111: bits set in either
+    u8 xor_ = a ^ b;     // 0x33, binary 0011 0011: bits set in exactly one
+    u8 not_ = ~a;        // 0xC3, binary 1100 0011: every bit flipped
+
+Read each result against the two source patterns. The AND keeps the bits where both sources have 1s, the OR keeps every bit either source has, the XOR keeps the bits the sources disagree on, and the NOT inverts the whole pattern. The four operators are complete in the sense that any combination of the input bits can be produced from them, which is why they are the raw material of every bit-level algorithm.
+
+The distinction between the single-character bitwise operators and the double-character logical operators cannot be overemphasized. The bitwise operators combine bits and produce an integer; the logical operators combine bools and produce a bool. Writing a double ampersand where a single ampersand belongs, or vice versa, is a different operation entirely, and the type checker will reject the mistake when it can see that the operands are not bools, catching at compile time a class of bugs that C silently accepts. That one-character slop is a whole class of legendary C bugs, and Coral's type system simply refuses to let it compile.
+
+The standard library's use of the bitwise operators is everywhere and worth reading as a demonstration. The bitset type stores one bit per element and manipulates individual bits with exactly these operations: setting a bit with OR and a mask, clearing a bit with AND and a complemented mask, toggling a bit with XOR and a mask, testing a bit with AND and a comparison against zero. The endian module swaps bytes with shifts and masks alone. The countOnes method of the bitset clears the lowest set bit repeatedly with the trick value AND (value minus one), counting the bits in a machine word. Every one of these is a direct application of the bitwise operators to a real problem, and reading the bitset module is an education in bit manipulation.
+
+3.17 Shift Operators
+
+The shift operators move the bits of a value left or right.
+
+    <<    left shift
+    >>    right shift
+
+A left shift moves every bit of the left operand leftward by the number of positions given by the right operand, filling the vacated low-order bits with zeros. Left shift by n is equivalent to multiplication by 2 to the power n, as long as no bits are shifted out of the type's width. The bitset type shifts a 1 into position to build its masks: 1 shifted left by the bit offset produces a mask with a single bit set at that offset.
+
+A right shift has two behaviors, one for each signedness of the left operand. For an unsigned value, a right shift is a logical shift: it moves every bit rightward and fills the vacated high-order bits with zeros. Right shift by n is equivalent to division by 2 to the power n for unsigned values. For a signed value, a right shift is an arithmetic shift: it moves the bits rightward and fills the vacated high-order bits with copies of the sign bit. An arithmetic shift preserves the sign of a negative value, which is why signed right shift acts like division for signed values while keeping the sign correct. The standard library's byte-swap functions use only unsigned shifts and masks, which keeps every shift logical and every result defined.
+
+The two right shifts are easy to see on the same eight bits. The bit pattern 11111000, read as a signed value, is -8, and read as an unsigned value, it is 248. Shifting each two places right produces different results, because each type fills the vacated high bits differently:
+
+    i8 neg = -8;              // binary 1111 1000
+    i8 ar = neg >> 2;         // -2: arithmetic shift, sign bits fill in
+
+    u8 pos = 0xF8;            // the same eight bits, but unsigned
+    u8 lg = pos >> 2;         // 0x3E, binary 0011 1110: logical shift, zeros fill in
+
+The signed result keeps its sign bit pattern, staying negative and near -2, which is exactly division by four with the sign preserved. The unsigned result drops its high bits and becomes 62, exactly division by four with zeros filled in. The same hardware instruction set has both forms, and Coral selects the one that matches the type of the left operand. If you have ever wondered why right shift behaves differently on each side of a signedness bug, this example is the whole answer.
+
+Shifts are also the standard way to build masks and extract fields. To isolate the third byte of a 32-bit value, shift it right by sixteen places and mask the low eight bits; to build a mask with a single bit at position n, shift a 1 left by n:
+
+    u32 thirdByte = (x >> 16) & 0xFF;    // the byte in bits 16..23
+    u32 mask = 1u << 12;                 // a 1 at bit 12
+
+The shift moves the field into the low position, and the mask discards everything above it. The two operations, shift and mask, are the universal mechanism for packing and unpacking fields, and they appear wherever a value stores several smaller values in one word.
+
+The shift count must be within the width of the left operand. Shifting by an amount equal to or greater than the width of the type is undefined behavior, because the hardware's behavior for such a shift is undefined. The practical rule is to shift only by amounts between zero and the width of the value minus one, and the standard library observes this rule, building every mask so that the shift amount is bounded. When code computes a shift amount that could reach the width, it guards the shift, as the bitset's all method does when it handles the remainder word specially. The guard is a comparison that bounds the count before the shift runs:
+
+    u32 shifted = (n < 32) ? (x << n) : 0;   // never shifts by 32 or more
+
+3.18 Bit Manipulation Patterns
+
+A handful of bit-manipulation patterns appear again and again in systems code, and they appear throughout the Coral standard library. Learning them as patterns makes reading and writing such code much faster, the way a musician learns chord shapes rather than playing each chord from first principles. These four are the root chords.
+
+Set a bit. To set bit n of a value, OR the value with a mask that has a 1 at position n. The mask is 1 shifted left by n.
+
+    flags = flags | (1 << n);
+    flags |= (1 << n);
+
+Clear a bit. To clear bit n, AND the value with the complement of the mask. The complement has a 1 everywhere except at position n.
+
+    flags = flags & ~(1 << n);
+    flags &= ~(1 << n);
+
+Toggle a bit. To flip bit n, XOR the value with the mask.
+
+    flags ^= (1 << n);
+
+Test a bit. To test whether bit n is set, AND the value with the mask and compare against zero. The result is nonzero exactly when the bit is set.
+
+    (flags & (1 << n)) != 0
+
+These four patterns are the bitset module in miniature: its set, clear, toggle, and test methods are exactly these four patterns, each operating on a machine word. Mastering them means the bitset module, and every piece of code that reads or writes flags and masks, is instantly readable.
+
+Clear the lowest set bit. The expression value AND (value minus one) clears the lowest set bit of a value, leaving all other bits unchanged. The bitset's countOnes method uses this in a loop to count the set bits in a word, removing one bit per iteration until the value is zero.
+
+Check whether a value is a power of two. A value is a power of two exactly when it is nonzero and value AND (value minus one) is zero, because a power of two has exactly one bit set, and clearing it leaves zero.
+
+Build a mask of the low n bits. Shifting 1 left by n and subtracting 1 produces a mask with the low n bits set. The bitset's all method uses this to test whether the remainder word has exactly its low bits set. The mask (1 << n) - 1 is the standard way to mask a value down to its low n bits, and it appears throughout the library.
+
+The mask-and-shift pattern extracts and replaces a field inside a packed value. A packed value stores several smaller values side by side in one word; extracting one field is shifting it into the low position and masking off the rest, and replacing it is clearing the field and ORing in a shifted, masked value.
+
+    u32 packed = 0xAABBCCDD;
+    u32 red = (packed >> 24) & 0xFF;      // 0xAA: shift the field low, mask it
+    u32 green = (packed >> 16) & 0xFF;    // 0xBB
+    u32 blue = (packed >> 8) & 0xFF;      // 0xCC
+
+    packed = (packed & ~(0xFFu << 8)) | ((newBlue & 0xFF) << 8);   // replace the blue byte
+
+The reads are shift then mask, and the write is the inverse: clear the old field with a complemented mask, then OR the new field into the cleared position. The whole operation, a read-modify-write of one field inside a word, is three operators applied in a fixed order, and it is the same order used by image decoders, protocol parsers, and every place a compact record is stored as a word.
+
+The alignment helper rounds a value up to a multiple of a power of two, and it combines the mask pattern with addition. Adding one less than the alignment rounds any value up to the next boundary; clearing the low bits with a complement of the mask lands exactly on the boundary:
+
+    pub u64 alignUp(u64 x, u64 align)
+    {
+        return (x + align - 1) & ~(align - 1);
+    }
+
+    u64 buf = 1000;
+    u64 aligned = alignUp(buf, 64);   // 1024, the next multiple of 64
+
+The pattern requires align to be a power of two, which is the common case for buffer and segment alignments, and it is how allocators round requested sizes up to their alignment classes. The subtraction, the addition, the AND, and the NOT are each an ordinary operator, and the pattern is their composition.
+
+The bitset toggle pattern inverts a range of bits in a loop, and it shows the test and toggle patterns working together. Toggling every even bit of a machine word exercises XOR with a fresh mask each iteration:
+
+    u64 bits = 0;
+    for (u64 i = 0; i < 64; i += 2)
+        bits ^= (1u << i);   // toggle the even-numbered bits on
+
+    bool evenSet = (bits & (1u << 4)) != 0;   // true: bit 4 was toggled on
+
+The loop builds a mask for each position with a shift and applies it with XOR, and the test afterwards confirms a single bit's state with AND and a comparison. Between them, the four core patterns appear again: shift to build, XOR to toggle, AND to test.
+
+3.19 The Address and Dereference Operators
+
+Pointers are fundamental to Coral, and their operators are the C pointer operators, with the same meanings.
+
+    &     address of
+    *     dereference
+    ->    member access through pointer
+    .     member access
+
+The address-of operator, a single ampersand, produces a pointer to its operand. Taking the address of a variable produces a pointer that names that variable, and the pointer can be passed to functions that need to modify the caller's value. The standard library's methods take explicit self parameters, and the address-of operator is how a caller passes the receiver: v.push(value) passes the address of the vector so the method can modify it.
+
+The two operators are exact inverses at the machine level. Address-of loads the address of a location into a register; dereference loads or stores through that address. Passing the address of a variable to a function gives the function a name for the caller's memory, and the dereference inside the function reaches it:
+
+    pub void increment(u64* p)
+    {
+        (*p) += 1;   // modify the caller's variable through the pointer
+    }
+
+    u64 n = 0;
+    increment(&n);   // n is now 1
+
+The call passes the address, the function dereferences it to reach the variable, and the compound operator stores the incremented value back through the pointer. The reader can follow the whole transaction: the ampersand creates the pointer, the star uses it, and the effect lands in the caller's variable.
+
+The address and dereference pair is the whole mechanics of the swap — the classic first function of pointer lessons — and reading it is reading the two operators in their purest use:
+
+    pub void swap(u64* a, u64* b)
+    {
+        u64 t = *a;     // dereference: read what a names
+        *a = *b;        // dereference on both sides: copy and store
+        *b = t;
+    }
+
+Every line is one dereference with a purpose: the first reads the caller's first value into a temporary, the second copies the caller's second value into the caller's first slot, the third copies the temporary into the caller's second slot. The function never sees the values — it sees addresses, and the addresses are enough. This is why the operator exists: giving a function the caller's memory to work on, with the star as the door it walks through.
+
+The dereference operator, a single asterisk, accesses the object that a pointer names. Dereferencing a null pointer is a bug, and Coral's safety machinery is built to prevent it. The member-access-through-pointer operator, an arrow, combines dereference and member access: p->field is equivalent to (*p).field. The standard library uses both, with the arrow appearing whenever a method body accesses a field through its self pointer, as in self->len or self->ptr.
+
+The equivalence of the arrow and the star-plus-dot is exact, and code may use either spelling:
+
+    Buffer b;
+    Buffer* pb = &b;
+    b.len = 4;          // dot: direct field access on the value
+    pb->len = 8;        // arrow: field access through the pointer
+    (*pb).len = 12;     // dereference, then dot: exactly the arrow above
+
+The three assignments reach the same field, and the arrow is simply the shorter spelling of the third line. The dot and the arrow are the same operation seen from two sides: the dot for a value, the arrow for a pointer to a value, and the compiler rejects a dot on a pointer or an arrow on a value, keeping the two views distinct.
+
+The member access operator, a dot, accesses a field of a struct value. It is used when the struct is a value or a reference, and the distinction between the dot and the arrow is the same as in C: the dot for direct values, the arrow for pointers. The receiver conventions of Coral make the distinction visible throughout the library, with methods that take self by pointer using the arrow and methods that take self by value using the dot. One look at a method body tells you whether it receives its object by pointer or by value, and the body tells it with a single character.
+
+3.20 Subscript and Casting
+
+The subscript operator accesses an element of an array or a pointer to a contiguous sequence.
+
+    array[index]
+
+Subscripting a pointer is equivalent to pointer arithmetic followed by dereference: array[index] is *(array + index). This is the C model, and it is what makes subscripting fast and simple. The standard library's collections expose their storage as contiguous sequences, and their access methods use subscripting internally. The safety of subscripting is enforced by the collection's own checks: the vector's access methods assert the index is in range before returning the element, and the string's at method does the same. The primitive subscript is raw; the library builds checked access on top of it.
+
+    u8* bytes = raw;        // a pointer into some contiguous storage
+    u8 third = bytes[2];    // the same as *(bytes + 2), the third byte
+
+The subscript takes the pointer, adds the index scaled by the element size, and dereferences the result. Because the element size is known from the pointer's type, the indexing is automatic: a pointer to u8 advances one byte per index, and a pointer to a larger element type advances by that element's size per index. The compiler does the multiplication for you, invisibly, every time — which is precisely why naive code can overrun a buffer when the index is wrong, and why the library's checked methods exist.
+
+Two-dimensional storage is the same subscript composed: a width-by-height image held as one flat array is indexed by row and column with one multiplication and one addition — the row-major formula from section 3.3, in its forward direction:
+
+    u64 idx = row * width + col;     // the flat position of the cell
+    u8 pixel = pixels[idx];          // the same access the GPU makes
+
+And a pointer into the same storage walks it. Subscript is pointer arithmetic in disguise, and the walk is the loop that sums a whole array, one dereference per stop:
+
+    u64 total = 0;
+    for (const u64* p = data; p < data + n; p++)
+        total += *p;
+
+The pointer advances one element per step — the compiler's scaling for u64 — and the dereference reads what it names at each stop. Subscript, pointer arithmetic, and dereference are one mechanism with three spellings, and the three spellings appear in the same program constantly: the flat index for random access, the pointer walk for scans.
+
+Casting converts a value from one type to another. Coral supports the C-style cast, where the target type appears in parentheses before the expression.
+
+    (u64)value
+    (i32)value
+    (T*)pointer
+
+A cast is an explicit, deliberate type conversion. It is how a value is converted when the compiler's implicit conversions do not apply, and it is the signal that the programmer is taking responsibility for the conversion. Casting between integer types reinterprets or converts the numeric value to the target width. Casting between a pointer and an integer, or between unrelated pointer types, is an unsafe operation that is permitted only where the language's safety rules allow it, and it is exactly the kind of operation that lives in an unsafe context. The language's philosophy is that casts are visible and deliberate, never hidden.
+
+    u32 x = 300;
+    u8 b = (u8)x;     // 44: the value is truncated to eight bits
+    u32 back = (u32)b;   // 44: the byte widens back to the same value
+
+The narrowing cast keeps the low eight bits of 300, which are 44, and the widening cast restores the same value, because 44 fits in a byte. The widening is not a zeroing of new bits in the abstract; it is a specific machine operation, either zero extension or sign extension, and the next section describes the two cases in detail.
+
+3.21 Sign Extension and Zero Extension
+
+Widening a value to a larger integer type must decide what to do with the new high-order bits. Coral makes the decision from the type of the source value, and the two cases are worth knowing exactly because they are two different machine instructions.
+
+Zero extension fills the new high-order bits with zeros. It is what happens when an unsigned value is widened. The value 250 as a u8, binary 11111010, widened to u16 becomes 0000000011111010, which is still 250. The unsigned value's magnitude is unchanged, because an unsigned value's leading bits were zero in its own representation, and copying the value into a wider field adds only more zeros.
+
+Sign extension fills the new high-order bits with copies of the value's sign bit. It is what happens when a signed value is widened. The value -2 as an i8, binary 11111110, widened to i16 becomes 1111111111111110, which is still -2. Sign extension exists to preserve the value: a negative two's-complement number copied into a wider field must fill the high bits with ones, or it would stop being negative. Without sign extension, -2 would become 254.
+
+    i8 s = -2;
+    i16 widened = (i16)s;       // sign-extended: still -2
+
+    u8 u = 250;
+    u16 widenedU = (u16)u;      // zero-extended: still 250
+
+The two cases are visible in the cast results. The signed -2, widened, keeps its ones in the high bits and its meaning as -2; the unsigned 250, widened, gains zeros and keeps its meaning as 250. The same instruction family on the hardware does both, and the compiler chooses the instruction from the signedness of the source type.
+
+The reason the type system matters here is that the two sources can hold the same bits. The eight-bit pattern 11111110 means -2 as an i8 and 254 as a u8, and widening it produces different sixteen-bit patterns, one meaning -2 and the other meaning 254. Only the type says which one is intended, and Coral's strict typing guarantees the type is always present. The bitset module reads and writes individual bytes and reconstructs wider values from them with exactly these operations: loading a signed byte and sign-extending it, or an unsigned byte and zero-extending it, so that the value read back equals the value stored.
+
+The case that makes the difference real is the sensor read. A temperature sensor reports its reading through one signed byte, in tenths of a degree, and the byte arrives on the bus as an unsigned value; 0xFE is the encoding of minus two degrees, and it must not become 254 on its way to the math:
+
+    u8 rawByte = readSensor();         // 0xFE, as the bus delivered it
+    i8 signed = (i8)rawByte;           // -2: the same bits, read as signed
+    i16 tenths = (i16)signed;          // sign-extended: still -2, now in sixteen bits
+
+Two casts and the meaning survives end to end. The first re-reads the bits as the signed value they encode, and the second widens it, filling the new high bits with copies of the sign bit so the value stays -2. Write the widening cast from the unsigned byte instead and 0xFE becomes 254 — a temperature error of twenty-five and a half degrees that no runtime check would ever catch, because no check is involved: the expression computed a different number and said so nowhere. The type of the source is the whole story: the same byte, widened, is -2 or 254, and only the signedness of the cast says which.
+
+Narrowing is the opposite, and it has no such choice: casting a wider value to a narrower type keeps the low-order bits and discards the rest. The value 300 cast to u8 is 44. Narrowing is the truncation described in the casting section, and it is the reason mixed-width arithmetic must be reasoned about field by field. The rule to remember is that widening preserves meaning, by sign extension for signed values and zero extension for unsigned values, and narrowing preserves bits.
+
+3.22 The Sizeof Operator
+
+The sizeof operator answers a question every systems program asks: how many bytes does this value occupy. Its operand is a type or an expression, and its result is an unsigned integer constant computed at compile time. There is no runtime cost: the compiler knows the sizes of all types, and the result is baked into the program.
+
+    u64 size = sizeof(u64);      // 8 on a machine with 64-bit words
+    u64 byteSize = sizeof(u8);   // 1 by definition
+    u64 ptrSize = sizeof(u8*);   // 8 on a 64-bit machine
+
+The results are constants of the target machine, which is exactly what systems code needs: the size of a pointer, the size of an integer type, the size of a struct, all fixed when the program is built. Because the value is a constant, it can be used where a constant is required, in array-length arithmetic, in the sizing of an allocation, in computations that must be decided at compile time.
+
+The standard library uses sizeof to convert a count of bytes into a count of elements, which is how a buffer's capacity is computed from its storage:
+
+    u64 count = sizeof(storage) / sizeof(u8);   // the number of bytes the buffer holds
+
+When the operand is an array, sizeof gives the whole array's size in bytes, and dividing by the element size gives the element count. When the operand is a pointer, sizeof gives the pointer's own size, not the size of what it points at, a distinction that trips the unwary and that the library's own code observes carefully. The classic trip: you pass an array to a function, the array decays to a pointer, and your carefully written sizeof division suddenly reports the pointer size, not the array size. The library sidesteps it by carrying lengths explicitly.
+
+The operator pays for itself in buffer sizing, where the question is exactly "how many bytes." A renderer keeps its recent sample points in a fixed buffer and must size the buffer ahead of time; the size of one point comes from its type, and the buffer is the count times the size:
+
+    struct Vec2 { f64 x; f64 y; }
+    u64 samples = 1000;
+    u64 bufferBytes = samples * sizeof(Vec2);   // room for 1000 points
+
+The sizeof is a compile-time constant, so the multiplication is computed before the program runs, and the buffer is reserved with exactly the size the type requires. Change Vec2 later — lengthen a field, add a third coordinate — and the sizing line stays correct without being touched, because it asks the type its size instead of remembering a magic number. The operator is the one way to ask, the answer is always current, and the reader sees the arithmetic of the allocation in the line where the allocation is decided.
+
+The strict type system keeps sizeof honest. A type's size is a fixed fact of the type, not of any particular value, and the compiler can answer the question for any complete type. Because sizes are part of the layout contract, sizeof is the operator that bridges the value world of expressions and the layout world of memory, and it appears wherever the two must meet.
+
+3.23 Operator Precedence
+
+Operator precedence determines how an expression with multiple operators is grouped. Precedence is the grammar of expressions: it decides whether a + b * c means (a + b) * c or a + (b * c). Coral's precedence rules are C's rules, and they are the rules that any C or C++ programmer already knows. Knowing them precisely prevents the classic expression bugs, and it is the difference between reading code correctly and misreading it.
+
+The precedence levels, from highest to lowest:
+
+    parentheses                ( )     grouping, highest
+    postfix                    []  .  ->  ++  --
+    unary                      !  ~  -  *  &  ++  --
+    cast                       (T)x
+    multiplicative             *  /  %
+    additive                   +  -
+    shift                      <<  >>
+    relational                 <  <=  >  >=
+    equality                   ==  !=
+    bitwise AND                &
+    bitwise XOR                ^
+    bitwise OR                 |
+    logical AND                &&
+    logical OR                 ||
+    conditional                ? :
+    assignment                 =  +=  -=  ...  lowest
+
+Reading this table from the top, the unary and postfix operators bind tightest, then the arithmetic operators, then the comparisons, then the bitwise operators, then the logical operators, then the conditional, then assignment. A few consequences are worth stating because they cause the most bugs.
+
+Multiplication and division bind more tightly than addition and subtraction, so a + b * c is a + (b * c), and the multiplication happens first. This is the mathematical convention, and it is why the table is often summarized as "multiplication before addition." The shift operators bind more tightly than the relational and equality operators, so x << 1 == y is (x << 1) == y. The bitwise AND, XOR, and OR operators sit between equality and logical AND, in the order AND then XOR then OR, so a & b == c is grouped as a & (b == c), which is a common surprise: equality binds more tightly than bitwise AND. The logical operators bind looser than all the comparison and bitwise operators, so conditions composed of comparisons are grouped correctly.
+
+The surprises in the table are where parentheses earn their keep. Two examples are worth remembering, because both mislead readers who trust the order of the characters on the line:
+
+    bool t = a & b == c;     // grouped as a & (b == c): a bitwise AND of a bool comparison
+    i32 v = x << 1 == y;     // grouped as (x << 1) == y: the shift happens before the test
+
+The first groups as a & (b == c), because equality outranks bitwise AND, and it is rarely what the author meant. The second groups as (x << 1) == y, because the shift outranks equality, and it is usually what the author meant. Neither needs to be remembered from the table; both need to be recognized as ambiguous on the page and parenthesized when the intent is not obvious.
+
+A third surprise is the most expensive in real code, because the shape looks right and is wrong. Testing whether a flag bit is set means masking first and comparing the masked result against zero — and the comparison must be parenthesized, because equality binds tighter than bitwise AND:
+
+    bool has = (flags & FLAG_HIGH) != 0;   // correct: compare the result of the mask
+
+    bool broken = flags & FLAG_HIGH != 0;  // groups as flags & (FLAG_HIGH != 0)
+
+The unparenthesized line groups as flags & (FLAG_HIGH != 0): a bitwise AND of an integer with a comparison's result. In C that compiles — the comparison is 0 or 1, and the flags are silently masked with 0 or 1 — and the bug lives, blessed by tests that happen to use flag positions whose low bits are set. In Coral it is a type error, and the error is the gift: flags & bool cannot compile, so the author is forced to write the parentheses and thereby say what the mask is compared against. The unit of safety is not the memory of the rank ordering; it is the shape the author was forced to write.
+
+The correct response to the precedence table is not to memorize it and rely on it, but to know it well enough to recognize when an expression is ambiguous to the reader, and to add parentheses when clarity demands them. Coral, like C, leaves the grouping visible: parentheses always override precedence, and code that a reader might misread should say what it means with parentheses even when the precedence would produce the same grouping. Parentheses cost one keystroke each; a confused reviewer costs an afternoon.
+
+3.24 Associativity
+
+Associativity determines how operators of the same precedence group when they appear together.
+
+The arithmetic operators + and -, and * and /, are left-associative. The expression a - b - c is grouped as (a - b) - c, and a / b / c is (a / b) / c. This matches the mathematical convention of evaluating left to right, and it produces the natural behavior for a sequence of additions or a chain of subtractions. The distinction matters for subtraction and division, where the order changes the result, and it is the reason that a - b - c means what a C programmer expects.
+
+    i32 a = 10;
+    i32 b = 4;
+    i32 c = 3;
+    i32 r = a - b - c;   // (10 - 4) - 3 = 3, not 10 - (4 - 3) = 9
+
+The left grouping gives 3, and the right grouping would give 9. The difference is exactly the difference between subtracting the group and subtracting in sequence, and left-associativity is the rule that makes a chain of subtractions a sequence of subtractions.
+
+Chains of divisions and remainders wear the same left-associative grouping, and the same numeral traps. 100 divided by 10 divided by 2 is 5, not 20, and a chain of remainders is a chain of reductions where each step takes the previous step's remainder:
+
+    u64 v = 100 / 10 / 2;   // (100 / 10) / 2 = 5, not 100 / (10 / 2) = 20
+    u64 r = 97 % 15 % 10;   // (97 % 15) % 10 = 7 % 10 = 7, not 97 % (15 % 10) = 2
+
+The right grouping of the second line would be 97 % (15 % 10) = 97 % 5 = 2 — two different answers from the same digits, and only the grouping rule says which one the code means. Left-associativity is what makes a chain of operators read left to right, like the sentence it is.
+
+The assignment operators are right-associative. The expression a = b = c assigns c to b, then assigns b to a, so all three variables end up equal. The conditional operator associates right as well. The unary operators apply right to left, so -!x is -( !x ), the negation of the logical NOT.
+
+    a = b = c;   // c is assigned to b, then b is assigned to a: all three become c
+
+The chain works because assignment is an expression whose value is the assigned value, so the inner assignment produces a value the outer assignment can consume. Right-associativity chains the assignments in the only order that makes sense, and the result is the C model the language shares.
+
+The practical summary is: left-associative for the arithmetic and shift and comparison operators, right-associative for assignment and the conditional. The standard library's code depends on the left-associativity of arithmetic, and it uses assignment chains rarely, preferring explicit statements, so the associativity rules rarely need to be remembered in anger.
+
+3.25 Operator Overloading
+
+Coral does not have user-defined operator overloading. The operators have fixed meanings for the built-in types, and those meanings cannot be changed. A struct cannot redefine what + does, and a class of code cannot give a custom meaning to ==. This is a deliberate design decision, and it is one of the places where Coral parts company with C++ and with languages that allow rich operator overloading.
+
+The reason is control. Operator overloading in C++ and similar languages is a source of enormous hidden complexity: a + that is not addition, a == that is not equality, a << that is not a shift. Reading code with overloaded operators requires knowing the types of every operand and the definitions of every overload, and a small change in the type of one operand can silently change the meaning of an expression. The cost of this power, in readability, in compilation complexity, in the sheer size of the language, is real, and Coral declines to pay it.
+
+The consequence is that operations on composite types are methods, and the methods are named. Addition is add, comparison is compare, equality is eq or equals, and the names say what the operations do. The Duration type's addition is an add method, not an overloaded plus. The string's equality is an equals method, not an overloaded ==. The library's hash map takes an equality function, not an overloaded operator. Every one of these is explicit, and none of them can surprise a reader who does not know the type.
+
+This is the resolution rule in full: operators are fixed for primitive types, and composite types use named methods. There is no third category, no way to attach an operator to a struct, no overloading, no hidden dispatch. The design is consistent with the type-first principle from the previous chapter. Types are explicit, so the operations on them are explicit, and the language never lets an operator mean something you did not write down.
+
+3.26 Operator Overloading as a Tradeoff
+
+It is worth being precise about what Coral gives up by not allowing operator overloading, because a textbook that only praises the decision is not honest.
+
+The arithmetic operators on composite mathematical types cannot be used. A vector type cannot make u + v add two vectors with a plus sign. A matrix type cannot make a * b multiply two matrices with an asterisk. A rational type cannot make a / b divide with a slash. Code that manipulates such types writes u.add(v) and a.mul(b) instead, which is more verbose, and for numerical code that is a real cost.
+
+    Vector3 u;
+    Vector3 v;
+    Vector3 w = u.add(v);   // addition is a named method, not a plus sign
+
+The example shows the whole trade in one line: the operation is spelled out, and the reader sees exactly what is happening, at the price of a few extra characters and the loss of the arithmetic notation. For code that is a stream of vector and matrix operations, the difference in density is genuine. Nobody reading this book is being lied to about it; the cost is real, and so is the reason for paying it.
+
+The compensation is in the library and the language's idioms. The standard library's vector and matrix types provide add, sub, mul, and the component operations as methods, and the method names make the operations explicit and unambiguous. The verbosity of a few extra characters is the price of a language where an expression always means exactly what the operators say it means, and where no library can redefine the language's operators in ways that surprise. For a systems language, where code is read many times and modified by many people, the tradeoff is deliberate and, in Coral's design, correct.
+
+The design also keeps the language small. Every operator has one meaning, every operator has one set of rules, and the operator chapter of a Coral reference fits on a page. The reader of Coral code does not need to know the operator history of every type on every line. The mental load is on the types, not on the symbols.
+
+3.27 A Worked Example: The Frame Header
+
+This chapter's tools rarely arrive one at a time; a real function uses a handful of them in one breath, and reading such a function is the final exercise. Here is a small one from the video world: a frame header that packs an image's three color bytes into a single 32-bit word, and the code that unpacks and verifies it. Everything this chapter taught is in this one structure.
+
+First, packing: three bytes into one word, each shifted into its own eight-bit field:
+
+    u32 pack(u8 r, u8 g, u8 b)
+    {
+        return ((u32)r << 16) | ((u32)g << 8) | (u32)b;
+    }
+
+The casts widen the bytes to the word's arithmetic, the shifts place each byte in its field, and the ORs join the fields — the write direction of the mask-and-shift section. One packed value now travels where three would have, and the word's layout is the three lines' business.
+
+Second, unpacking — the read direction, shift then mask, three lines of the same recipe:
+
+    u8 red   = (u8)((px >> 16) & 0xFF);   // the field in bits 16..23
+    u8 green = (u8)((px >> 8)  & 0xFF);   // the field in bits 8..15
+    u8 blue  = (u8)(px & 0xFF);           // the field in bits 0..7
+
+Each line shifts its field into the low position and masks away everything above it, and the narrowing cast keeps the low eight bits on the way back — the truncation of the casting section, doing exactly the job it was defined for. What went out as three bytes comes back as three bytes.
+
+Third, verification: a checksum folded from the three fields, so a corrupted word is caught at the receiving end. The XOR operator, which mixes the fields and can be recomputed to check them, is the checksum's raw material:
+
+    u8 fold(u32 px)
+    {
+        return (u8)(((px >> 16) ^ (px >> 8) ^ px) & 0xFF);
+    }
+
+The shifts align the three fields, the XORs mix them, and the mask keeps the low byte. The comparison afterwards is the equality operator doing its honest job: equal bits, or not — and the "or not" is detected before a single corrupted pixel is drawn.
+
+Fourth, the frame's bookkeeping, where the remaining operators of the chapter take their turns. The display index cycles around a small ring of slots with a remainder, the show speed is a guarded division, and the on-screen flag is a compound flip:
+
+    u64 slot = frame % SLOTS;                       // the ring position
+    u64 rate = renderSeconds == 0 ? 0 : frames / renderSeconds;   // guarded rate
+    busy ^= true;                                   // the toggle between two states
+
+The remainder makes the ring, the conditional guards the division, the compound XOR toggles — section after section of this chapter, each doing its one small thing in a line a reader can check.
+
+Fifth, the whole header validated at once, every guard in the chapter wearing the same uniform:
+
+    bool valid = header.checksum == fold(header.word) &&
+                 (header.word & 0xFF000000) == 0;
+
+The right side masks the reserved high byte and compares the result against zero — the parenthesized comparison of the precedence section, in full glory — and the && chains the two checks so the second runs only if the first passed. The line reads left to right as a sentence.
+
+No operator in this function is remarkable; the whole is, because a frame header is, like every bundled value, the sum of the certainty each operator brings. The casts say which width is meant, the shifts and masks say where each field lives, the XOR says the word is whole, the remainder says the ring holds, the condition says the rate is defined, and the comparison says the word arrived intact. That is what this chapter was for: the certainty, operator by operator, that an ordinary-looking bundle of symbols does exactly what the reader believes.
+
+Chapter 3 Summary
+
+Coral's operators are C's operators, with the same symbols and the same hardware-level semantics, and the compiler picks the operation from the operand types. Every operator is a contract, and it compiles to machine instructions with no hidden behavior.
+
+Integer division truncates toward zero; floating-point division follows IEEE 754. The remainder operator matches division, with the sign of the dividend, and division by zero is undefined for integers but defined for floats. Rounding rules other than truncation are built explicitly, as in the library's divCeil and divRound helpers.
+
+Integer arithmetic wraps at the type width with no saturation and no panic. Range must be managed by the code, as the standard library does, checking operands before operations that could exceed their type.
+
+The compound assignment operators combine an operation with an assignment back to the left operand, and the prefix and postfix forms of increment and decrement differ in the value they produce.
+
+Expressions produce values and statements perform actions. The operands of an operator may be evaluated in any order, so a single expression must not read and write the same variable; between statements, effects are fully sequenced.
+
+The comparison operators produce bools for primitives. NaN comparisons are always false, and pointer comparison with == is reference equality, not content equality.
+
+Composite types have no built-in ==. Equality and ordering are explicit methods: equals for equality, compare for a total order, and the comparison protocol of negative, zero, positive is what sorting and the ordered collections consume.
+
+The logical operators && and || are short-circuiting guarantees, and the ternary operator shares the guarantee by evaluating only the chosen branch.
+
+Null-coalescing is the Option type's unwrapOr method: use the value if present, otherwise the default. The default argument is an ordinary argument, evaluated before the call.
+
+The bitwise operators treat integers as bit patterns. Shifts are logical for unsigned values and arithmetic for signed values, and shift counts must stay within the type width.
+
+The four core bit patterns are set, clear, toggle, and test a bit, and they compose the bitset module. Clearing the lowest set bit, power-of-two tests, low-bit masks, mask-and-shift field extraction, alignment rounding, and toggling ranges round out the repertoire.
+
+The address and dereference operators, member access through dot and arrow, subscript, and casting are the C pointer and conversion operations, with unsafe casts confined to unsafe contexts.
+
+Widening preserves meaning: signed values are sign-extended and unsigned values are zero-extended, while narrowing truncates to the low-order bits. The sizeof operator reports a type's size in bytes as a compile-time constant.
+
+Precedence follows C, from postfix and unary down through arithmetic, comparison, bitwise, logical, conditional, and assignment. Associativity is left for arithmetic and right for assignment and the conditional. The ambiguous shapes — a masked comparison, a shifted comparison — are parenthesized on sight, and the flag test spells its comparison explicitly.
+
+The chapter's worked example, the frame header, shows the family gathered: casts and shifts and masks pack and unpack fields, XOR folds a checksum, the remainder cycles a ring, the guarded division computes a rate, and the ternary and the short-circuit AND make the one-line decisions. Every operator is a small certainty, and a bundle of certainties is a program.
+
+Coral has no operator overloading. Operators are fixed for primitives, and composite types use named methods: add, compare, eq, equals. The tradeoff is verbosity for numerical code in exchange for absolute clarity and a small language.
+
+

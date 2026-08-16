@@ -1,0 +1,390 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+mod string = import("std/text/string.crl");
+mod vec = import("std/collections/vec.crl");
+
+pub struct XmlAttribute
+{
+    string.String name;
+    string.String value;
+
+    void dispose()
+    {
+        self.name.free();
+        self.value.free();
+    }
+}
+
+pub enum XmlNodeType
+{
+    Element,
+    Text,
+    Comment,
+    CData,
+}
+
+pub struct XmlNode
+{
+    XmlNodeType type;
+    string.String tag;
+    string.String text;
+    vec.vec<XmlAttribute> attrs;
+    vec.vec<XmlNode> children;
+
+    static XmlNode element(string.strView tag)
+    {
+        XmlNode n;
+        n.type = XmlNodeType::Element;
+        n.tag = string.String::fromView(tag);
+        n.text = string.String::new();
+        n.attrs = vec.vec<XmlAttribute>::new();
+        n.children = vec.vec<XmlNode>::new();
+        return n;
+    }
+
+    static XmlNode text(string.strView content)
+    {
+        XmlNode n;
+        n.type = XmlNodeType::Text;
+        n.tag = string.String::new();
+        n.text = string.String::fromView(content);
+        n.attrs = vec.vec<XmlAttribute>::new();
+        n.children = vec.vec<XmlNode>::new();
+        return n;
+    }
+
+    void dispose()
+    {
+        self.tag.free();
+        self.text.free();
+        for (u64 i = 0; i < self.attrs.count(); i++)
+            self.attrs.atPtr(i)->dispose();
+        for (u64 i = 0; i < self.children.count(); i++)
+            self.children.atPtr(i)->dispose();
+        self.attrs.dispose();
+        self.children.dispose();
+    }
+
+    bool hasAttr(string.strView name)
+    {
+        for (u64 i = 0; i < self.attrs.count(); i++)
+        {
+            if (self.attrs.at(i).name.asView().equals(name)) return true;
+        }
+        return false;
+    }
+
+    string.strView getAttr(string.strView name)
+    {
+        for (u64 i = 0; i < self.attrs.count(); i++)
+        {
+            if (self.attrs.at(i).name.asView().equals(name))
+                return self.attrs.at(i).value.asView();
+        }
+        return string.strView::empty();
+    }
+
+    XmlNode* firstChild(string.strView tagName)
+    {
+        for (u64 i = 0; i < self.children.count(); i++)
+        {
+            if (self.children.at(i).tag.asView().equals(tagName))
+                return self.children.atPtr(i);
+        }
+        return null;
+    }
+}
+
+struct _XmlParser
+{
+    const u8* data;
+    u64 len;
+    u64 pos;
+    bool error;
+
+    void skipSpace()
+    {
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos];
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
+            self.pos++;
+        }
+    }
+
+    u8 peek()
+    {
+        self.skipSpace();
+        if (self.pos >= self.len) return 0;
+        return self.data[self.pos];
+    }
+
+    u8 next()
+    {
+        self.skipSpace();
+        if (self.pos >= self.len) return 0;
+        return self.data[self.pos++];
+    }
+
+    bool expect(u8 ch)
+    {
+        if (self.next() != ch) { self.error = true; return false; }
+        return true;
+    }
+
+    string.String parseName()
+    {
+        u64 start = self.pos;
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos];
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == ':')
+                self.pos++;
+            else break;
+        }
+        if (self.pos == start) { self.error = true; return string.String::new(); }
+        return string.String::fromView(string.strView::fromParts(self.data + start, self.pos - start));
+    }
+
+    string.String parseQuotedString()
+    {
+        string.String s = string.String::new();
+        u8 quote = self.next();
+        if (quote != '"' && quote != '\'') { self.error = true; return s; }
+        while (self.pos < self.len)
+        {
+            u8 c = self.data[self.pos++];
+            if (c == quote) return s;
+            if (c == '&')
+            {
+                u64 ampPos = self.pos - 1;
+                u64 entStart = self.pos;
+                while (self.pos < self.len && self.data[self.pos] != ';') self.pos++;
+                if (self.pos >= self.len) { self.error = true; return s; }
+                self.pos++;
+                strView ent = strView::fromParts(self.data + entStart, self.pos - entStart - 1);
+                if (ent.equals(strView::fromCstr("lt"))) s.pushChar('<');
+                else if (ent.equals(strView::fromCstr("gt"))) s.pushChar('>');
+                else if (ent.equals(strView::fromCstr("amp"))) s.pushChar('&');
+                else if (ent.equals(strView::fromCstr("quot"))) s.pushChar('"');
+                else if (ent.equals(strView::fromCstr("apos"))) s.pushChar('\'');
+                else
+                {
+                    for (u64 i = ampPos; i < self.pos; i++)
+                        s.pushChar((char)self.data[i]);
+                }
+            }
+            else s.pushChar((char)c);
+        }
+        self.error = true;
+        return s;
+    }
+
+    XmlNode parseElement()
+    {
+        XmlNode node = XmlNode::element(string.strView::empty());
+        if (!self.expect('<')) { node.dispose(); return XmlNode::element(string.strView::empty()); }
+
+        if (self.peek() == '?')
+        {
+            self.pos++;
+            while (self.pos + 2 < self.len)
+            {
+                if (self.data[self.pos] == '?' && self.data[self.pos + 1] == '>')
+                {
+                    self.pos += 2;
+                    return node;
+                }
+                self.pos++;
+            }
+            self.error = true;
+            return node;
+        }
+
+        if (self.peek() == '!')
+        {
+            self.pos++;
+            if (self.pos + 2 < self.len && self.data[self.pos] == '-' && self.data[self.pos + 1] == '-')
+            {
+                self.pos += 2;
+                while (self.pos + 2 < self.len)
+                {
+                    if (self.data[self.pos] == '-' && self.data[self.pos + 1] == '-' && self.data[self.pos + 2] == '>')
+                    {
+                        self.pos += 3;
+                        return node;
+                    }
+                    self.pos++;
+                }
+                self.error = true;
+                return node;
+            }
+            self.error = true;
+            return node;
+        }
+
+        string.String tagName = self.parseName();
+        if (self.error) { tagName.free(); node.dispose(); return XmlNode::element(string.strView::empty()); }
+        node.tag.free();
+        node.tag = tagName;
+
+        while (self.pos < self.len)
+        {
+            self.skipSpace();
+            u8 c = self.peek();
+            if (c == '/' || c == '>') break;
+            XmlAttribute attr;
+            attr.name = self.parseName();
+            if (self.error) { node.dispose(); attr.name.free(); return XmlNode::element(string.strView::empty()); }
+            if (self.next() != '=') { self.error = true; node.dispose(); attr.name.free(); return XmlNode::element(string.strView::empty()); }
+            attr.value = self.parseQuotedString();
+            if (self.error) { node.dispose(); attr.name.free(); attr.value.free(); return XmlNode::element(string.strView::empty()); }
+            node.attrs.push(attr);
+        }
+
+        if (self.peek() == '/')
+        {
+            self.pos++;
+            if (!self.expect('>')) { node.dispose(); return XmlNode::element(string.strView::empty()); }
+            return node;
+        }
+
+        if (!self.expect('>')) { node.dispose(); return XmlNode::element(string.strView::empty()); }
+
+        while (self.pos < self.len)
+        {
+            self.skipSpace();
+            if (self.pos >= self.len) break;
+            if (self.data[self.pos] == '<' && self.pos + 1 < self.len && self.data[self.pos + 1] == '/')
+            {
+                self.pos += 2;
+                string.String endTag = self.parseName();
+                if (self.error) { endTag.free(); node.dispose(); return XmlNode::element(string.strView::empty()); }
+                bool match = endTag.equals(node.tag.asView());
+                endTag.free();
+                if (!match) { self.error = true; node.dispose(); return XmlNode::element(string.strView::empty()); }
+                self.skipSpace();
+                if (!self.expect('>')) { node.dispose(); return XmlNode::element(string.strView::empty()); }
+                return node;
+            }
+            if (self.data[self.pos] == '<')
+            {
+                XmlNode child = self.parseElement();
+                if (self.error) { node.dispose(); child.dispose(); return XmlNode::element(string.strView::empty()); }
+                node.children.push(child);
+            }
+            else
+            {
+                string.String text = string.String::new();
+                while (self.pos < self.len && self.data[self.pos] != '<')
+                {
+                    u8 c = self.data[self.pos++];
+                    if (c == '&')
+                    {
+                        u64 ampPos = self.pos - 1;
+                        u64 entStart = self.pos;
+                        while (self.pos < self.len && self.data[self.pos] != ';') self.pos++;
+                        if (self.pos >= self.len)
+                        {
+                            text.free();
+                            self.error = true;
+                            node.dispose();
+                            return XmlNode::element(string.strView::empty());
+                        }
+                        self.pos++;
+                        string.strView ent = string.strView::fromParts(self.data + entStart, self.pos - entStart - 1);
+                        if (ent.equals(string.strView::fromCstr("lt"))) text.pushChar('<');
+                        else if (ent.equals(string.strView::fromCstr("gt"))) text.pushChar('>');
+                        else if (ent.equals(string.strView::fromCstr("amp"))) text.pushChar('&');
+                        else
+                        {
+                            for (u64 i = ampPos; i < self.pos; i++)
+                                text.pushChar((char)self.data[i]);
+                        }
+                    }
+                    else text.pushChar((char)c);
+                }
+                if (!text.isEmpty())
+                    node.children.push(XmlNode::text(text.asView()));
+                text.free();
+            }
+        }
+        self.error = true;
+        node.dispose();
+        return XmlNode::element(string.strView::empty());
+    }
+}
+
+pub bool parseXml(string.strView input, XmlNode* out)
+{
+    _XmlParser p;
+    p.data = (const u8*)input.ptr;
+    p.len = input.len;
+    p.pos = 0;
+    p.error = false;
+    *out = p.parseElement();
+    return !p.error;
+}
+
+pub string.String serializeXml(XmlNode* node)
+{
+    string.String out = string.String::new();
+    _serialize(node, &out);
+    return out;
+}
+
+void _serialize(XmlNode* node, string.String* out)
+{
+    if (node->type == XmlNodeType::Text)
+    {
+        string.String escaped = _escapeXml(node->text.asView());
+        out->appendView(escaped.asView());
+        escaped.free();
+        return;
+    }
+    out->pushChar('<');
+    out->appendView(node->tag.asView());
+    for (u64 i = 0; i < node->attrs.count(); i++)
+    {
+        out->pushChar(' ');
+        out->appendView(node->attrs.at(i).name.asView());
+        out->pushView(string.strView::fromParts("=\"", 2));
+        string.String escaped = _escapeXml(node->attrs.at(i).value.asView());
+        out->appendView(escaped.asView());
+        escaped.free();
+        out->pushChar('"');
+    }
+    if (node->children.count() == 0 && node->text.isEmpty())
+    {
+        out->pushView(string.strView::fromCstr("/>"));
+        return;
+    }
+    out->pushChar('>');
+    if (!node->text.isEmpty())
+    {
+        string.String escaped = _escapeXml(node->text.asView());
+        out->appendView(escaped.asView());
+        escaped.free();
+    }
+    for (u64 i = 0; i < node->children.count(); i++)
+        _serialize(node->children.atPtr(i), out);
+    out->pushView(string.strView::fromCstr("</"));
+    out->appendView(node->tag.asView());
+    out->pushChar('>');
+}
+
+string.String _escapeXml(string.strView s)
+{
+    string.String out = string.String::new();
+    for (u64 i = 0; i < s.len; i++)
+    {
+        u8 c = s.ptr[i];
+        if (c == '<') out.appendView(string.strView::fromCstr("&lt;"));
+        else if (c == '>') out.appendView(string.strView::fromCstr("&gt;"));
+        else if (c == '&') out.appendView(string.strView::fromCstr("&amp;"));
+        else if (c == '"') out.appendView(string.strView::fromCstr("&quot;"));
+        else out.pushChar((char)c);
+    }
+    return out;
+}

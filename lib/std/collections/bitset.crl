@@ -1,0 +1,168 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+
+pub struct bitset
+{
+    u64* words;
+    u64 numBits;
+    u64 numWords;
+
+    static bitset new(u64 numBits)
+    {
+        bitset b;
+        b.numWords = (numBits + 63) / 64;
+        b.numBits = numBits;
+        b.words = mman.alloc<u64>(b.numWords);
+        for (u64 i = 0; i < b.numWords; i++) b.words[i] = 0;
+        return b;
+    }
+
+    void dispose()
+    {
+        if (self.words != null) { mman.dealloc<u64>(self.words);
+            self.words = null; }
+        self.numBits = 0;
+        self.numWords = 0;
+    }
+
+    u64 count() { return self.numBits; }
+    u64 wordCount() { return self.numWords; }
+
+    void set(u64 bit)
+    {
+        assert(bit < self.numBits);
+        u64 word = bit / 64;
+        u64 off = bit % 64;
+        self.words[word] |= (1u << off);
+    }
+
+    void clear(u64 bit)
+    {
+        assert(bit < self.numBits);
+        u64 word = bit / 64;
+        u64 off = bit % 64;
+        self.words[word] &= ~(1u << off);
+    }
+
+    void toggle(u64 bit)
+    {
+        assert(bit < self.numBits);
+        u64 word = bit / 64;
+        u64 off = bit % 64;
+        self.words[word] ^= (1u << off);
+    }
+
+    bool test(u64 bit)
+    {
+        assert(bit < self.numBits);
+        u64 word = bit / 64;
+        u64 off = bit % 64;
+        return (self.words[word] & (1u << off)) != 0;
+    }
+
+    void _maskPadding()
+    {
+        u64 remaining = self.numBits % 64;
+        if (remaining > 0)
+            self.words[self.numWords - 1] &= (1u << remaining) - 1;
+    }
+
+    void setAll()
+    {
+        for (u64 i = 0; i < self.numWords; i++)
+            self.words[i] = 0xFFFFFFFFFFFFFFFF;
+        self._maskPadding();
+    }
+
+    void clearAll()
+    {
+        for (u64 i = 0; i < self.numWords; i++)
+            self.words[i] = 0;
+    }
+
+    u64 countOnes()
+    {
+        u64 total = 0;
+        for (u64 i = 0; i < self.numWords; i++)
+        {
+            u64 v = self.words[i];
+            u64 remaining = self.numBits % 64;
+            if (i == self.numWords - 1 && remaining > 0)
+                v &= (1u << remaining) - 1;
+            while (v != 0) { total++; v &= v - 1; }
+        }
+        return total;
+    }
+
+    u64 countZeros()
+    {
+        u64 total = 0;
+        for (u64 i = 0; i < self.numWords; i++)
+        {
+            u64 v = ~self.words[i];
+            u64 remaining = self.numBits % 64;
+            if (i == self.numWords - 1 && remaining > 0)
+                v &= (1u << remaining) - 1;
+            while (v != 0) { total++; v &= v - 1; }
+        }
+        return total;
+    }
+
+    bool any()
+    {
+        for (u64 i = 0; i < self.numWords; i++)
+            if (self.words[i] != 0) return true;
+        return false;
+    }
+
+    bool none()
+    {
+        return !self.any();
+    }
+
+    bool all()
+    {
+        u64 fullWords = self.numBits / 64;
+        for (u64 i = 0; i < fullWords; i++)
+            if (self.words[i] != 0xFFFFFFFFFFFFFFFF) return false;
+        u64 remaining = self.numBits % 64;
+        if (remaining > 0)
+        {
+            u64 mask = (1u << remaining) - 1;
+            if (self.words[fullWords] != mask) return false;
+        }
+        return true;
+    }
+
+    void and(bitset* other)
+    {
+        assert(self.numBits == other->numBits);
+        for (u64 i = 0; i < self.numWords; i++)
+            self.words[i] &= other->words[i];
+        self._maskPadding();
+    }
+
+    void or(bitset* other)
+    {
+        assert(self.numBits == other->numBits);
+        for (u64 i = 0; i < self.numWords; i++)
+            self.words[i] |= other->words[i];
+        self._maskPadding();
+    }
+
+    void xor(bitset* other)
+    {
+        assert(self.numBits == other->numBits);
+        for (u64 i = 0; i < self.numWords; i++)
+            self.words[i] ^= other->words[i];
+        self._maskPadding();
+    }
+
+    void not()
+    {
+        for (u64 i = 0; i < self.numWords; i++)
+            self.words[i] = ~self.words[i];
+        self._maskPadding();
+    }
+}

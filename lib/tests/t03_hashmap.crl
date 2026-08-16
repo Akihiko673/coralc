@@ -1,0 +1,29 @@
+mod hashmap = import("std/collections/hashmap.crl");
+mod option = import("std/data/option.crl");
+
+u64 hashNum(u64 x)
+{
+    return x;
+}
+
+bool eqNum(u64 a, u64 b)
+{
+    return a == b;
+}
+
+i32 main()
+{
+    hashmap.hashmap<u64, u64> m = hashmap.hashmap<u64, u64>::new(hashNum, eqNum);
+    m.insert(42, 1337);
+    m.insert(7, 99);
+    option.option<u64> v = m.get(42);
+    if (!v.some) return 1;
+    if (v.value != 1337) return 2;
+    if (!m.contains(7)) return 3;
+    if (m.contains(999)) return 4;
+    if (m.count() != 2) return 5;
+    m.remove(42);
+    if (m.contains(42)) return 6;
+    if (m.count() != 1) return 7;
+    return 0;
+}

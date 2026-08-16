@@ -1,0 +1,39 @@
+flag (ARCH) {
+x86_64:
+    u64 step()
+    {
+        return 1;
+    }
+arm64:
+    u64 step()
+    {
+        return 2;
+    }
+default:
+    u64 step()
+    {
+        return 3;
+    }
+}
+
+flag (TUNING) {
+fast:
+    u64 scale()
+    {
+        return 10;
+    }
+default:
+    u64 scale()
+    {
+        return 20;
+    }
+}
+
+i32 main()
+{
+    u64 s = step();
+    if (s != 1) return 1;
+    u64 sc = scale();
+    if (sc != 20) return 2;
+    return 0;
+}

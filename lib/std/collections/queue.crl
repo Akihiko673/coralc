@@ -1,0 +1,21 @@
+mod deque = import("std/collections/deque.crl");
+
+pub struct queue<T>
+{
+    deque<T> inner;
+
+    static queue<T> new()
+    {
+        queue<T> q;
+        q.inner = deque<T>::new();
+        return q;
+    }
+
+    void dispose() { self.inner.dispose(); }
+    u64 count() { return self.inner.count(); }
+    bool isEmpty() { return self.inner.isEmpty(); }
+    void enqueue(T val) { self.inner.pushBack(val); }
+    T dequeue() { return self.inner.popFront(); }
+    T peek() { return self.inner.front(); }
+    void clear() { self.inner.clear(); }
+}

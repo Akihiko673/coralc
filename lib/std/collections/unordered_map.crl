@@ -1,0 +1,64 @@
+mod hashmap = import("std/collections/hashmap.crl");
+mod vec = import("std/collections/vec.crl");
+mod option = import("std/data/option.crl");
+
+pub struct unordered_map<K, V>
+{
+    hashmap.hashmap<K, V> inner;
+
+    static unordered_map<K, V> new(u64(K) hf, bool(K, K) ef)
+    {
+        unordered_map<K, V> m;
+        m.inner = hashmap.hashmap<K, V>::new(hf, ef);
+        return m;
+    }
+
+    void dispose() { self.inner.dispose(); }
+    u64 count() { return self.inner.count(); }
+    bool isEmpty() { return self.inner.count() == 0; }
+
+    void insert(K key, V value)
+    {
+        self.inner.insert(key, value);
+    }
+
+    option.option<V> get(K key)
+    {
+        return self.inner.get(key);
+    }
+
+    V* getPtr(K key)
+    {
+        return self.inner.getPtr(key);
+    }
+
+    bool contains(K key)
+    {
+        return self.inner.contains(key);
+    }
+
+    void remove(K key)
+    {
+        self.inner.remove(key);
+    }
+
+    void clear()
+    {
+        self.inner.clear();
+    }
+
+    vec<K> keys()
+    {
+        return self.inner.keys();
+    }
+
+    vec<V> values()
+    {
+        return self.inner.values();
+    }
+
+    void each(void(K, V) fn)
+    {
+        self.inner.each(fn);
+    }
+}

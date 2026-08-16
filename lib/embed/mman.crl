@@ -1,0 +1,1004 @@
+@[no_warn_unsafe]
+
+extern u8 _heapStart;
+extern u8 _heapEnd;
+extern u8 _stackTop;
+
+u8* heapStart() { return &_heapStart; }
+u8* heapEnd() { return &_heapEnd; }
+u64 stackTop() { return (u64)&_stackTop; }
+
+u64 totalHeapBytes()
+{
+    return (u64)(heapEnd() - heapStart());
+}
+
+bool isHeapPtr(void* ptr)
+{
+    u8* p = (u8*)ptr;
+    return p >= heapStart() && p < heapEnd();
+}
+
+inline void criticalEnter()
+{
+    flag (ARCH) {
+    x86_64:
+        asm { cli }
+    x86:
+        asm { cli }
+    arm64:
+        asm { msr daifset, #0x2 }
+    arm32:
+        asm {
+            mrs r0, cpsr
+            orr r0, r0, #0x80
+             msr cpsr_c, r0
+        }
+    riscv64:
+        asm { csrrci x0, mstatus, 0x8 }
+    riscv32:
+        asm { csrrci x0, mstatus, 0x8 }
+    // someone complete this part, powerpc, mips and a proper default shit.
+    // thogh, on second thought, if you are bulding on bare metal, then you
+    // should specify flags
+    default:
+        return;
+    }
+}
+
+inline void criticalExit()
+{
+    flag (ARCH) {
+    x86_64:
+        asm { sti }
+    x86:
+        asm { sti }
+    arm64:
+        asm { msr daifclr, #0x2 }
+    arm32:
+        asm {
+            mrs r0, cpsr
+            bic r0, r0, #0x80
+            msr cpsr_c, r0
+        }
+    riscv64:
+        asm { csrrsi x0, mstatus, 0x8 }
+    riscv32:
+        asm { csrrsi x0, mstatus, 0x8 }
+    default:
+        return;
+    }
+}
+
+pub struct Allocator
+{
+    void* ctx;
+    void*(void* ctx, u64 size, u64 align) alloc;
+    void(void* ctx, void* ptr) free;
+    void*(void* ctx, void* ptr, u64 newSize, u64 align) realloc;
+    u64(const void* ctx) used;
+    u64(const void* ctx) avail;
+}
+
+pub struct BumpAllocator
+{
+    u8* base;
+    u8* ptr;
+    u64 cap;
+    u64 highWater;
+
+    void init(u8* base, u64 cap)
+    {
+        self.base = base;
+        self.ptr = base;
+        self.cap = cap;
+        self.highWater = 0;
+    }
+
+    void initFromHeap()
+    {
+        self.init(heapStart(), totalHeapBytes());
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _bumpAlloc;
+        a.free = _bumpFree;
+        a.realloc = _bumpRealloc;
+        a.used = _bumpUsed;
+        a.avail = _bumpAvail;
+        return a;
+    }
+
+    void reset()
+    {
+        self.ptr = self.base;
+    }
+
+    u64 currentUsed(const self*)
+    {
+        return (u64)(self->ptr - self->base);
+    }
+}
+
+void* _bumpAlloc(void* ctx, u64 size, u64 align)
+{
+    BumpAllocator* alloc = (BumpAllocator*)ctx;
+    if (align == 0) align = 1;
+    u64 addr = (u64)alloc->ptr;
+    u64 mask = align - 1;
+    if ((addr & mask) != 0) addr = (addr + mask) & ~mask;
+    u8* aligned = (u8*)addr;
+    u64 needed = (u64)(aligned - alloc->ptr) + size;
+    if (alloc->currentUsed(alloc) + needed > alloc->cap) return null;
+    alloc->ptr = aligned + size;
+    if (alloc->currentUsed(alloc) > alloc->highWater) alloc->highWater = alloc->currentUsed(alloc);
+    return (void*)aligned;
+}
+
+void _bumpFree(void* ctx, void* ptr)
+{
+    (void)ctx; (void)ptr;
+}
+
+void* _bumpRealloc(void* ctx, void* ptr, u64 newSize, u64 align)
+{
+    (void)ptr;
+    return _bumpAlloc(ctx, newSize, align);
+}
+
+u64 _bumpUsed(const void* ctx)
+{
+    const BumpAllocator* alloc = (const BumpAllocator*)ctx;
+    return alloc->currentUsed(alloc);
+}
+
+u64 _bumpAvail(const void* ctx)
+{
+    const BumpAllocator* alloc = (const BumpAllocator*)ctx;
+    return alloc->cap - alloc->currentUsed(alloc);
+}
+
+pub struct StackAllocator
+{
+    u8* base;
+    u8* ptr;
+    u64 cap;
+
+    void init(u8* buffer, u64 cap)
+    {
+        self.base = buffer;
+        self.ptr = buffer;
+        self.cap = cap;
+    }
+
+    void initFromStack(u64 reserveBytes)
+    {
+        u64 stackCurrent = (u64)&self;
+        u64 limit = stackCurrent - reserveBytes;
+        if (limit < (u64)heapEnd()) limit = (u64)heapEnd();
+        self.init((u8*)limit, stackTop() - limit);
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _stackAlloc;
+        a.free = _stackFree;
+        a.realloc = _stackRealloc;
+        a.used = _stackUsed;
+        a.avail = _stackAvail;
+        return a;
+    }
+
+    void reset()
+    {
+        self.ptr = self.base;
+    }
+
+    u64 currentUsed(const self*)
+    {
+        return (u64)(self->ptr - self->base);
+    }
+}
+
+void* _stackAlloc(void* ctx, u64 size, u64 align)
+{
+    StackAllocator* alloc = (StackAllocator*)ctx;
+    u64 addr = (u64)alloc->ptr;
+    u64 mask = align - 1;
+    if ((addr & mask) != 0) addr = (addr + mask) & ~mask;
+    u8* aligned = (u8*)addr;
+    u64 needed = (u64)(aligned - alloc->ptr) + size;
+    if (alloc->currentUsed(alloc) + needed > alloc->cap) return null;
+    alloc->ptr = aligned + size;
+    return (void*)aligned;
+}
+
+void _stackFree(void* ctx, void* ptr)
+{
+    (void)ctx; (void)ptr;
+}
+
+void* _stackRealloc(void* ctx, void* ptr, u64 newSize, u64 align)
+{
+    (void)ptr;
+    return _stackAlloc(ctx, newSize, align);
+}
+
+u64 _stackUsed(const void* ctx)
+{
+    const StackAllocator* alloc = (const StackAllocator*)ctx;
+    return alloc->currentUsed(alloc);
+}
+
+u64 _stackAvail(const void* ctx)
+{
+    const StackAllocator* alloc = (const StackAllocator*)ctx;
+    return alloc->cap - alloc->currentUsed(alloc);
+}
+
+pub struct FreeListAllocator
+{
+    void* head;
+    u8* pool;
+    u64 blockSize;
+    u64 blockCount;
+    u64 usedCount;
+
+    void init(u8* pool, u64 blockSize, u64 blockCount)
+    {
+        self.blockSize = blockSize < sizeof(void*) ? sizeof(void*) : blockSize;
+        self.blockCount = blockCount;
+        self.pool = pool;
+        self.usedCount = 0;
+        self.head = null;
+        for (u64 i = blockCount; i > 0; i--)
+        {
+            void* block = (void*)(pool + (i - 1) * self.blockSize);
+            *(void**)block = self.head;
+            self.head = block;
+        }
+    }
+
+    void initFromHeap(u64 blockSize, u64 blockCount)
+    {
+        u64 total = blockSize * blockCount;
+        if (total > totalHeapBytes())
+        {
+            self.init(null, 0, 0);
+            return;
+        }
+        self.init(heapStart(), blockSize, blockCount);
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _flAlloc;
+        a.free = _flFree;
+        a.realloc = _flRealloc;
+        a.used = _flUsed;
+        a.avail = _flAvail;
+        return a;
+    }
+
+    void* allocBlock()
+    {
+        return _flAlloc((void*)self, self.blockSize, 1);
+    }
+
+    void freeBlock(void* block)
+    {
+        _flFree((void*)self, block);
+    }
+}
+
+void* _flAlloc(void* ctx, u64 size, u64 align)
+{
+    FreeListAllocator* alloc = (FreeListAllocator*)ctx;
+    (void)size; (void)align;
+    if (alloc->head == null) return null;
+    criticalEnter();
+    void* block = alloc->head;
+    alloc->head = *(void**)block;
+    alloc->usedCount++;
+    criticalExit();
+    return block;
+}
+
+void _flFree(void* ctx, void* ptr)
+{
+    FreeListAllocator* alloc = (FreeListAllocator*)ctx;
+    if (ptr == null) return;
+    criticalEnter();
+    *(void**)ptr = alloc->head;
+    alloc->head = ptr;
+    alloc->usedCount--;
+    criticalExit();
+}
+
+void* _flRealloc(void* ctx, void* ptr, u64 newSize, u64 align)
+{
+    (void)ctx; (void)newSize; (void)align;
+    return ptr;
+}
+
+u64 _flUsed(const void* ctx)
+{
+    const FreeListAllocator* alloc = (const FreeListAllocator*)ctx;
+    return alloc->usedCount * alloc->blockSize;
+}
+
+u64 _flAvail(const void* ctx)
+{
+    const FreeListAllocator* alloc = (const FreeListAllocator*)ctx;
+    return (alloc->blockCount - alloc->usedCount) * alloc->blockSize;
+}
+
+pub const u64 SLAB_BUCKET_COUNT = 8;
+pub const u64 SLAB_BUCKET_SIZES[SLAB_BUCKET_COUNT] = { 8, 16, 32, 64, 128, 256, 512, 1024 };
+
+pub struct SlabAllocator
+{
+    FreeListAllocator buckets[SLAB_BUCKET_COUNT];
+    u8* pool;
+    u64 poolSize;
+    BumpAllocator large;
+
+    void init(u8* pool, u64 poolSize)
+    {
+        self.pool = pool;
+        self.poolSize = poolSize;
+        u64 perBucket = poolSize / SLAB_BUCKET_COUNT;
+        for (u64 i = 0; i < SLAB_BUCKET_COUNT; i++)
+        {
+            u64 blockSize = SLAB_BUCKET_SIZES[i];
+            u64 blockCount = perBucket / blockSize;
+            self.buckets[i].init(pool + i * perBucket, blockSize, blockCount);
+        }
+        u64 largeBase = SLAB_BUCKET_COUNT * perBucket;
+        self.large.init(pool + largeBase, poolSize - largeBase);
+    }
+
+    void initFromHeap()
+    {
+        self.init(heapStart(), totalHeapBytes());
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _slabAlloc;
+        a.free = _slabFree;
+        a.realloc = _slabRealloc;
+        a.used = _slabUsed;
+        a.avail = _slabAvail;
+        return a;
+    }
+}
+
+u64 _slabBucketIndex(u64 size)
+{
+    for (u64 i = 0; i < SLAB_BUCKET_COUNT; i++)
+        if (size <= SLAB_BUCKET_SIZES[i]) return i;
+    return SLAB_BUCKET_COUNT;
+}
+
+void* _slabAlloc(void* ctx, u64 size, u64 align)
+{
+    SlabAllocator* alloc = (SlabAllocator*)ctx;
+    (void)align;
+    u64 bucket = _slabBucketIndex(size);
+    if (bucket < SLAB_BUCKET_COUNT)
+        return _flAlloc((void*)&alloc->buckets[bucket], size, align);
+    return _bumpAlloc((void*)&alloc->large, size, align);
+}
+
+void _slabFree(void* ctx, void* ptr)
+{
+    SlabAllocator* alloc = (SlabAllocator*)ctx;
+    if (ptr == null) return;
+    for (u64 i = 0; i < SLAB_BUCKET_COUNT; i++)
+    {
+        u8* bucketBase = alloc->buckets[i].pool;
+        u8* bucketEnd = bucketBase + alloc->buckets[i].blockCount * alloc->buckets[i].blockSize;
+        u8* p = (u8*)ptr;
+        if (p >= bucketBase && p < bucketEnd)
+        {
+            _flFree((void*)&alloc->buckets[i], ptr);
+            return;
+        }
+    }
+}
+
+void* _slabRealloc(void* ctx, void* ptr, u64 newSize, u64 align)
+{
+    SlabAllocator* alloc = (SlabAllocator*)ctx;
+    u64 oldBucket = SLAB_BUCKET_COUNT;
+    for (u64 i = 0; i < SLAB_BUCKET_COUNT; i++)
+    {
+        u8* bucketBase = alloc->buckets[i].pool;
+        u8* bucketEnd = bucketBase + alloc->buckets[i].blockCount * alloc->buckets[i].blockSize;
+        u8* p = (u8*)ptr;
+        if (p >= bucketBase && p < bucketEnd)
+        {
+            oldBucket = i;
+            break;
+        }
+    }
+    u64 newBucket = _slabBucketIndex(newSize);
+    if (oldBucket < SLAB_BUCKET_COUNT && newBucket <= oldBucket) return ptr;
+    void* newPtr = _slabAlloc(ctx, newSize, align);
+    if (newPtr != null && ptr != null)
+    {
+        u64 copySize = oldBucket < SLAB_BUCKET_COUNT ? SLAB_BUCKET_SIZES[oldBucket] : newSize;
+        u64 minSize = copySize < newSize ? copySize : newSize;
+        if (oldBucket == SLAB_BUCKET_COUNT)
+        {
+            // Large (bump) region, the old allocation size is not tracked,
+            // so bound the copy by the remaining pool space
+            u8* poolEnd = alloc->pool + alloc->poolSize;
+            u64 availAfterPtr = (u64)(poolEnd - (u8*)ptr);
+            if (minSize > availAfterPtr) minSize = availAfterPtr;
+        }
+        u8* dst = (u8*)newPtr;
+        u8* src = (u8*)ptr;
+        for (u64 i = 0; i < minSize; i++) dst[i] = src[i];
+        _slabFree(ctx, ptr);
+    }
+    return newPtr;
+}
+
+u64 _slabUsed(const void* ctx)
+{
+    const SlabAllocator* alloc = (const SlabAllocator*)ctx;
+    u64 total = _bumpUsed((void*)&alloc->large);
+    for (u64 i = 0; i < SLAB_BUCKET_COUNT; i++)
+        total += _flUsed((void*)&alloc->buckets[i]);
+    return total;
+}
+
+u64 _slabAvail(const void* ctx)
+{
+    const SlabAllocator* alloc = (const SlabAllocator*)ctx;
+    u64 total = _bumpAvail((void*)&alloc->large);
+    for (u64 i = 0; i < SLAB_BUCKET_COUNT; i++)
+        total += _flAvail((void*)&alloc->buckets[i]);
+    return total;
+}
+
+pub struct StaticPool<T, u64 N>
+{
+    T storage[N];
+    void* freeList;
+    u64 used;
+
+    void init()
+    {
+        self.used = 0;
+        self.freeList = null;
+        for (u64 i = N; i > 0; i--)
+        {
+            void* block = (void*)&self.storage[i - 1];
+            *(void**)block = self.freeList;
+            self.freeList = block;
+        }
+    }
+
+    T* alloc()
+    {
+        if (self.freeList == null) return null;
+        void* block = self.freeList;
+        self.freeList = *(void**)block;
+        self.used++;
+        return (T*)block;
+    }
+
+    void free(T* ptr)
+    {
+        if (ptr == null) return;
+        *(void**)ptr = self.freeList;
+        self.freeList = (void*)ptr;
+        self.used--;
+    }
+
+    bool isFull(const self*) { return self->freeList == null; }
+    bool isEmpty(const self*) { return self->used == 0; }
+    u64 capacity() { return N; }
+    u64 available(const self*) { return N - self->used; }
+}
+
+pub BumpAllocator DEFAULT_EMBEDDED_ALLOCATOR;
+pub Allocator* EMBEDDED_ALLOC = DEFAULT_EMBEDDED_ALLOCATOR.allocator(&DEFAULT_EMBEDDED_ALLOCATOR);
+
+Allocator* _embeddedAlloc()
+{
+    if (DEFAULT_EMBEDDED_ALLOCATOR.cap == 0)
+        DEFAULT_EMBEDDED_ALLOCATOR.initFromHeap();
+    return EMBEDDED_ALLOC;
+}
+
+pub T* ealloc<T>(u64 count)
+{
+    if (count == 0) return null;
+    return (T*)_embeddedAlloc()->alloc(_embeddedAlloc()->ctx, sizeof(T) * count, alignof(T));
+}
+
+pub void edealloc<T>(T* ptr)
+{
+    _embeddedAlloc()->free(_embeddedAlloc()->ctx, (void*)ptr);
+}
+
+pub T* erealloc<T>(T* ptr, u64 newCount)
+{
+    if (newCount == 0) { edealloc<T>(ptr); return null; }
+    return (T*)_embeddedAlloc()->realloc(_embeddedAlloc()->ctx, (void*)ptr,
+                                         sizeof(T) * newCount, alignof(T));
+}
+
+pub u64 eused() { return _embeddedAlloc()->used(_embeddedAlloc()->ctx); }
+pub u64 eavail() { return _embeddedAlloc()->avail(_embeddedAlloc()->ctx); }
+
+// ── TLSF (Two-Level Segregated Fit) Allocator ──
+// Constants
+pub const u64 TLSF_FLI_MAX = 30;
+pub const u64 TLSF_SLI_COUNT = 4;
+pub const u64 TLSF_BLOCK_HEADER_SIZE = 16;
+pub const u64 TLSF_MIN_BLOCK_SIZE = 32;
+pub const u64 TLSF_FLI_OFFSET = 4;
+pub const u64 TLSF_BLOCK_FREE = 1;
+pub const u64 TLSF_BLOCK_PREV_FREE = 2;
+
+pub struct TlsfBlockHeader
+{
+    u64 sizeAndFlags; // size with low 2 bits, bit0=free, bit1=prev_free
+    u64 prevPhysSize; // size of preceding physical block (0 if first)
+}
+
+pub struct TlsfAllocator
+{
+    u8* pool;
+    u64 poolSize;
+    u32 flBitmaps; // bitmap of non-empty FLI bins
+    u32 slBitmaps[TLSF_FLI_MAX]; // per-FLI bitmap of non-empty SLI bins
+    TlsfBlockHeader* freeLists[TLSF_FLI_MAX * TLSF_SLI_COUNT];
+    u64 usedBytes;
+    TlsfBlockHeader* sentinel;
+
+    void init(u8* pool, u64 poolSize)
+    {
+        self.pool = pool;
+        self.poolSize = poolSize;
+        self.usedBytes = 0;
+        self.flBitmaps = 0;
+        for (u64 i = 0; i < TLSF_FLI_MAX; i++) self.slBitmaps[i] = 0;
+        for (u64 i = 0; i < TLSF_FLI_MAX * TLSF_SLI_COUNT; i++) self.freeLists[i] = null;
+
+        // Setup sentinel block at pool start
+        self.sentinel = (TlsfBlockHeader*)pool;
+        self.sentinel->sizeAndFlags = TLSF_BLOCK_HEADER_SIZE;
+        self.sentinel->prevPhysSize = 0;
+        // First real block after sentinel
+        TlsfBlockHeader* first = _tlsfBlockAt(self.sentinel, TLSF_BLOCK_HEADER_SIZE);
+        first->sizeAndFlags = (poolSize - TLSF_BLOCK_HEADER_SIZE) | TLSF_BLOCK_FREE;
+        first->prevPhysSize = 0;
+        _tlsfInsertBlock(self, first);
+    }
+
+    void initFromHeap()
+    {
+        self.init(heapStart(), totalHeapBytes());
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _tlsfAlloc;
+        a.free = _tlsfFree;
+        a.realloc = _tlsfRealloc;
+        a.used = _tlsfUsed;
+        a.avail = _tlsfAvail;
+        return a;
+    }
+}
+
+u64 _tlsfAlignUp(u64 val, u64 align)
+{
+    u64 mask = align - 1;
+    return (val + mask) & ~mask;
+}
+
+u64 _tlsfFli(u64 size)
+{
+    // Find first level index (floor log2)
+    u64 v = size >> TLSF_FLI_OFFSET;
+    u64 fli = 0;
+    if (v >= 0x10000) { fli += 16; v >>= 16; }
+    if (v >= 0x100) { fli += 8; v >>= 8; }
+    if (v >= 0x10) { fli += 4; v >>= 4; }
+    if (v >= 0x4) { fli += 2; v >>= 2; }
+    if (v >= 0x2) { fli += 1; }
+    return fli;
+}
+
+u64 _tlsfSli(u64 size, u64 fli)
+{
+    // Find second level index within the FLI bin
+    u64 binSize = (u64)1 << (fli + TLSF_FLI_OFFSET);
+    u64 step = binSize / TLSF_SLI_COUNT;
+    u64 offset = size - binSize;
+    return offset / step;
+}
+
+u64 _tlsfMappingInsert(u64 size, u64* fli, u64* sli)
+{
+    if (size < TLSF_MIN_BLOCK_SIZE) size = TLSF_MIN_BLOCK_SIZE;
+    *fli = _tlsfFli(size);
+    *sli = _tlsfSli(size, *fli);
+    return size;
+}
+
+u64 _tlsfListIndex(u64 fli, u64 sli)
+{
+    return fli * TLSF_SLI_COUNT + sli;
+}
+
+TlsfBlockHeader* _tlsfBlockAt(TlsfBlockHeader* block, u64 offset)
+{
+    u8* addr = (u8*)block;
+    return (TlsfBlockHeader*)(addr + offset);
+}
+
+u64 _tlsfBlockSize(TlsfBlockHeader* block)
+{
+    return block->sizeAndFlags & ~(u64)3;
+}
+
+bool _tlsfBlockIsFree(TlsfBlockHeader* block)
+{
+    return (block->sizeAndFlags & TLSF_BLOCK_FREE) != 0;
+}
+
+bool _tlsfBlockPrevFree(TlsfBlockHeader* block)
+{
+    return (block->sizeAndFlags & TLSF_BLOCK_PREV_FREE) != 0;
+}
+
+void _tlsfMarkAsFree(TlsfBlockHeader* block)
+{
+    block->sizeAndFlags |= TLSF_BLOCK_FREE;
+}
+
+void _tlsfMarkAsUsed(TlsfBlockHeader* block)
+{
+    block->sizeAndFlags &= ~TLSF_BLOCK_FREE;
+}
+
+void _tlsfMarkPrevFree(TlsfBlockHeader* block)
+{
+    block->sizeAndFlags |= TLSF_BLOCK_PREV_FREE;
+}
+
+void _tlsfClearPrevFree(TlsfBlockHeader* block)
+{
+    block->sizeAndFlags &= ~TLSF_BLOCK_PREV_FREE;
+}
+
+TlsfBlockHeader* _tlsfNextBlock(TlsfBlockHeader* block)
+{
+    return _tlsfBlockAt(block, _tlsfBlockSize(block));
+}
+
+TlsfBlockHeader* _tlsfPrevBlock(TlsfBlockHeader* block)
+{
+    u64 prevSize = block->prevPhysSize;
+    u8* addr = (u8*)block;
+    return (TlsfBlockHeader*)(addr - prevSize);
+}
+
+void _tlsfRemoveFromFreeList(TlsfAllocator* t, TlsfBlockHeader* block)
+{
+    u64 fli, sli;
+    _tlsfMappingInsert(_tlsfBlockSize(block), &fli, &sli);
+    u64 idx = _tlsfListIndex(fli, sli);
+
+    TlsfBlockHeader* prev = null;
+    TlsfBlockHeader* curr = t->freeLists[idx];
+    while (curr != null && curr != block)
+    {
+        prev = curr;
+        curr = *(TlsfBlockHeader**)((u8*)curr + TLSF_BLOCK_HEADER_SIZE + 8);
+    }
+    if (curr == null) return;
+
+    TlsfBlockHeader* next = *(TlsfBlockHeader**)((u8*)curr + TLSF_BLOCK_HEADER_SIZE + 8);
+    if (prev != null)
+        *(TlsfBlockHeader**)((u8*)prev + TLSF_BLOCK_HEADER_SIZE + 8) = next;
+    else
+        t->freeLists[idx] = next;
+
+    if (next != null)
+        *(TlsfBlockHeader**)((u8*)next + TLSF_BLOCK_HEADER_SIZE) = prev;
+    else if (t->freeLists[idx] == null)
+    {
+        t->slBitmaps[fli] &= ~((u32)1 << sli);
+        if (t->slBitmaps[fli] == 0)
+            t->flBitmaps &= ~((u32)1 << fli);
+    }
+}
+
+void _tlsfInsertBlock(TlsfAllocator* t, TlsfBlockHeader* block)
+{
+    u64 fli, sli;
+    _tlsfMappingInsert(_tlsfBlockSize(block), &fli, &sli);
+    u64 idx = _tlsfListIndex(fli, sli);
+
+    // Insert at head of list
+    TlsfBlockHeader* head = t->freeLists[idx];
+    if (head != null)
+        *(TlsfBlockHeader**)((u8*)head + TLSF_BLOCK_HEADER_SIZE) = block;
+    *(TlsfBlockHeader**)((u8*)block + TLSF_BLOCK_HEADER_SIZE) = null;
+    *(TlsfBlockHeader**)((u8*)block + TLSF_BLOCK_HEADER_SIZE + 8) = head;
+    t->freeLists[idx] = block;
+
+    t->flBitmaps |= (u32)1 << fli;
+    t->slBitmaps[fli] |= (u32)1 << sli;
+}
+
+TlsfBlockHeader* _tlsfRemoveFirstFit(TlsfAllocator* t, u64 fli, u64 sli)
+{
+    u64 idx = _tlsfListIndex(fli, sli);
+    TlsfBlockHeader* block = t->freeLists[idx];
+    if (block == null) return null;
+    TlsfBlockHeader* next = *(TlsfBlockHeader**)((u8*)block + TLSF_BLOCK_HEADER_SIZE + 8);
+    t->freeLists[idx] = next;
+    if (next != null)
+        *(TlsfBlockHeader**)((u8*)next + TLSF_BLOCK_HEADER_SIZE) = null;
+    else
+    {
+        t->slBitmaps[fli] &= ~((u32)1 << sli);
+        if (t->slBitmaps[fli] == 0)
+            t->flBitmaps &= ~((u32)1 << fli);
+    }
+    return block;
+}
+
+TlsfBlockHeader* _tlsfFindSuitableBlock(TlsfAllocator* t, u64 fli, u64 sli)
+{
+    u32 slBitmap = t->slBitmaps[fli] & (~((u32)0) << sli);
+    if (slBitmap != 0)
+    {
+        // Find first set bit in slBitmap
+        u32 foundSli = 0;
+        while ((slBitmap & 1) == 0) { slBitmap >>= 1; foundSli++; }
+        return _tlsfRemoveFirstFit(t, fli, foundSli);
+    }
+
+    // Search higher FLIs
+    u32 flBitmap = t->flBitmaps & (~((u32)0) << (fli + 1));
+    if (flBitmap != 0)
+    {
+        u32 foundFli = 0;
+        while ((flBitmap & 1) == 0) { flBitmap >>= 1; foundFli++; }
+        slBitmap = t->slBitmaps[foundFli];
+        u32 foundSli = 0;
+        while ((slBitmap & 1) == 0) { slBitmap >>= 1; foundSli++; }
+        return _tlsfRemoveFirstFit(t, foundFli, foundSli);
+    }
+    return null;
+}
+
+TlsfBlockHeader* _tlsfSplitBlock(TlsfAllocator* t, TlsfBlockHeader* block, u64 neededSize)
+{
+    u64 blockSize = _tlsfBlockSize(block);
+    u64 remainder = blockSize - neededSize;
+    if (remainder < TLSF_MIN_BLOCK_SIZE + TLSF_BLOCK_HEADER_SIZE) return block;
+
+    // Split, create a new free block from the remainder
+    TlsfBlockHeader* newBlock = _tlsfBlockAt(block, neededSize);
+    newBlock->sizeAndFlags = remainder | TLSF_BLOCK_FREE | (block->sizeAndFlags & TLSF_BLOCK_PREV_FREE);
+    newBlock->prevPhysSize = neededSize;
+
+    block->sizeAndFlags = neededSize | (block->sizeAndFlags & TLSF_BLOCK_FREE) | TLSF_BLOCK_PREV_FREE;
+
+    TlsfBlockHeader* next = _tlsfNextBlock(newBlock);
+    // Adjust next block's prevPhysSize
+    // Need to check if next is within bounds
+    u8* poolEnd = t->pool + t->poolSize;
+    if ((u8*)next + TLSF_BLOCK_HEADER_SIZE <= poolEnd)
+        next->prevPhysSize = remainder;
+
+    _tlsfInsertBlock(t, newBlock);
+    return block;
+}
+
+void _tlsfMergePrev(TlsfAllocator* t, TlsfBlockHeader* block)
+{
+    if (!_tlsfBlockPrevFree(block)) return;
+    TlsfBlockHeader* prev = _tlsfPrevBlock(block);
+    _tlsfRemoveFromFreeList(t, prev);
+
+    u64 mergedSize = _tlsfBlockSize(prev) + TLSF_BLOCK_HEADER_SIZE + _tlsfBlockSize(block);
+    prev->sizeAndFlags = mergedSize | (prev->sizeAndFlags & TLSF_BLOCK_FREE) | TLSF_BLOCK_PREV_FREE;
+    // Update the next block's prevPhysSize
+    TlsfBlockHeader* next = _tlsfNextBlock(prev);
+    u8* poolEnd = t->pool + t->poolSize;
+    if ((u8*)next + TLSF_BLOCK_HEADER_SIZE <= poolEnd)
+        next->prevPhysSize = mergedSize;
+}
+
+void _tlsfMergeNext(TlsfAllocator* t, TlsfBlockHeader* block)
+{
+    TlsfBlockHeader* next = _tlsfNextBlock(block);
+    u8* poolEnd = t->pool + t->poolSize;
+    if ((u8*)next + TLSF_BLOCK_HEADER_SIZE > poolEnd) return;
+    if (!_tlsfBlockIsFree(next)) return;
+
+    _tlsfRemoveFromFreeList(t, next);
+    u64 mergedSize = _tlsfBlockSize(block) + TLSF_BLOCK_HEADER_SIZE + _tlsfBlockSize(next);
+    block->sizeAndFlags = mergedSize | (block->sizeAndFlags & TLSF_BLOCK_FREE) | TLSF_BLOCK_PREV_FREE;
+
+    TlsfBlockHeader* nextNext = _tlsfNextBlock(block);
+    if ((u8*)nextNext + TLSF_BLOCK_HEADER_SIZE <= poolEnd)
+        nextNext->prevPhysSize = mergedSize;
+}
+
+void* _tlsfAlloc(void* ctx, u64 size, u64 align)
+{
+    TlsfAllocator* alloc = (TlsfAllocator*)ctx;
+    if (size == 0) return null;
+    if (size < TLSF_MIN_BLOCK_SIZE) size = TLSF_MIN_BLOCK_SIZE;
+    if (align == 0) align = 1;
+    if (align > 16) align = 16;
+
+    // Account for block header + alignment overhead
+    u64 adjustedSize = size + TLSF_BLOCK_HEADER_SIZE;
+    if (adjustedSize < size) return null; // overflow
+    // Keep every block header on a 16-byte boundary so that user pointers
+    // returned at header + 16 are at least 16-byte aligned
+    adjustedSize = _tlsfAlignUp(adjustedSize, 16);
+
+    // Determine FLI/SLI
+    u64 fli, sli;
+    adjustedSize = _tlsfMappingInsert(adjustedSize, &fli, &sli);
+
+    criticalEnter();
+    TlsfBlockHeader* block = _tlsfFindSuitableBlock(alloc, fli, sli);
+    if (block == null) { criticalExit(); return null; }
+
+    _tlsfMarkAsUsed(block);
+    block = _tlsfSplitBlock(alloc, block, adjustedSize);
+
+    // Header is 16 bytes and every block starts 16-byte aligned, so the
+    // user pointer is 16-byte aligned regardless of align
+    u8* userPtr = (u8*)block + TLSF_BLOCK_HEADER_SIZE;
+    alloc->usedBytes += _tlsfBlockSize(block);
+    criticalExit();
+    return (void*)userPtr;
+}
+
+void _tlsfFree(void* ctx, void* ptr)
+{
+    if (ptr == null) return;
+    TlsfAllocator* alloc = (TlsfAllocator*)ctx;
+    TlsfBlockHeader* block = (TlsfBlockHeader*)((u8*)ptr - TLSF_BLOCK_HEADER_SIZE);
+
+    criticalEnter();
+    alloc->usedBytes -= _tlsfBlockSize(block);
+    bool prevFree = _tlsfBlockPrevFree(block);
+    if (prevFree) _tlsfMergePrev(alloc, block);
+    // The merged header lives at the previous block's address; block's own
+    // header is stale inside the merged region, so operate on the merged one
+    TlsfBlockHeader* merged = prevFree ? _tlsfPrevBlock(block) : block;
+    _tlsfMergeNext(alloc, merged);
+    _tlsfMarkAsFree(merged);
+    _tlsfInsertBlock(alloc, merged);
+    criticalExit();
+}
+
+void* _tlsfRealloc(void* ctx, void* ptr, u64 newSize, u64 align)
+{
+    if (ptr == null) return _tlsfAlloc(ctx, newSize, align);
+    if (newSize == 0) { _tlsfFree(ctx, ptr); return null; }
+
+    TlsfAllocator* alloc = (TlsfAllocator*)ctx;
+    TlsfBlockHeader* block = (TlsfBlockHeader*)((u8*)ptr - TLSF_BLOCK_HEADER_SIZE);
+    u64 oldSize = _tlsfBlockSize(block) - TLSF_BLOCK_HEADER_SIZE;
+
+    if (newSize <= oldSize) return ptr;
+
+    // Try to extend into next block if free
+    TlsfBlockHeader* next = _tlsfNextBlock(block);
+    u8* poolEnd = alloc->pool + alloc->poolSize;
+    if ((u8*)next + TLSF_BLOCK_HEADER_SIZE <= poolEnd && _tlsfBlockIsFree(next))
+    {
+        u64 nextSize = _tlsfBlockSize(next);
+        u64 blockTotal = _tlsfBlockSize(block);
+        u64 combined = blockTotal + TLSF_BLOCK_HEADER_SIZE + nextSize;
+        u64 needed = newSize + TLSF_BLOCK_HEADER_SIZE;
+        if (combined >= needed)
+        {
+            _tlsfRemoveFromFreeList(alloc, next);
+            block->sizeAndFlags = combined | (block->sizeAndFlags & TLSF_BLOCK_FREE) | TLSF_BLOCK_PREV_FREE;
+            TlsfBlockHeader* nextNext = _tlsfNextBlock(block);
+            if ((u8*)nextNext + TLSF_BLOCK_HEADER_SIZE <= poolEnd)
+                nextNext->prevPhysSize = combined;
+            alloc->usedBytes += combined - blockTotal;
+            return ptr;
+        }
+    }
+
+    // Allocate new block and copy
+    void* newPtr = _tlsfAlloc(ctx, newSize, align);
+    if (newPtr != null)
+    {
+        u64 copySize = oldSize < newSize ? oldSize : newSize;
+        u8* dst = (u8*)newPtr;
+        u8* src = (u8*)ptr;
+        for (u64 i = 0; i < copySize; i++) dst[i] = src[i];
+        _tlsfFree(ctx, ptr);
+    }
+    return newPtr;
+}
+
+u64 _tlsfUsed(const void* ctx)
+{
+    const TlsfAllocator* alloc = (const TlsfAllocator*)ctx;
+    return alloc->usedBytes;
+}
+
+u64 _tlsfAvail(const void* ctx)
+{
+    const TlsfAllocator* alloc = (const TlsfAllocator*)ctx;
+    return alloc->poolSize - TLSF_BLOCK_HEADER_SIZE - alloc->usedBytes;
+}
+
+pub u64 mpuAlignUp(u64 addr, u64 alignment)
+{
+    u64 mask = alignment - 1;
+    return (addr + mask) & ~mask;
+}
+
+pub bool mpuIsValidRegion(u64 base, u64 size)
+{
+    return (size & (size - 1)) == 0 && (base & (size - 1)) == 0;
+}
+
+pub u64 mpuNextPowerOf2(u64 size)
+{
+    u64 p = 1;
+    while (p < size) p <<= 1;
+    return p;
+}
+
+pub void mmanCopy(void* dst, const void* src, u64 bytes)
+{
+    u8* d = (u8*)dst;
+    const u8* s = (const u8*)src;
+    for (u64 i = 0; i < bytes; i++) d[i] = s[i];
+}
+
+pub void mmanSet(void* dst, u8 val, u64 bytes)
+{
+    u8* d = (u8*)dst;
+    for (u64 i = 0; i < bytes; i++) d[i] = val;
+}
+
+pub i32 mmanCmp(const void* a, const void* b, u64 bytes)
+{
+    const u8* pa = (const u8*)a;
+    const u8* pb = (const u8*)b;
+    for (u64 i = 0; i < bytes; i++)
+    {
+        if (pa[i] < pb[i]) return -1;
+        if (pa[i] > pb[i]) return 1;
+    }
+    return 0;
+}

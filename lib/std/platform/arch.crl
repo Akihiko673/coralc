@@ -1,0 +1,44 @@
+flag (ARCH) {
+x86_64:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+x86:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+arm64:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+arm32:
+    pub const u64 CACHE_LINE_SIZE = 32;
+    pub const u64 PAGE_SIZE = 4096;
+riscv64:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+riscv32:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+ppc64:
+    pub const u64 CACHE_LINE_SIZE = 128;
+    pub const u64 PAGE_SIZE = 4096;
+ppc:
+    pub const u64 CACHE_LINE_SIZE = 32;
+    pub const u64 PAGE_SIZE = 4096;
+mips64:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+mips:
+    pub const u64 CACHE_LINE_SIZE = 32;
+    pub const u64 PAGE_SIZE = 4096;
+sparc64:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+wasm32:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+wasm64:
+    pub const u64 CACHE_LINE_SIZE = 64;
+    pub const u64 PAGE_SIZE = 4096;
+default:
+    pub const u64 CACHE_LINE_SIZE = 32;
+    pub const u64 PAGE_SIZE = 4096;
+}

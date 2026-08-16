@@ -1,0 +1,48 @@
+
+flag (ENDIAN) {
+little:
+    pub const bool IS_LITTLE_ENDIAN = true;
+    pub const bool IS_BIG_ENDIAN = false;
+big:
+    pub const bool IS_LITTLE_ENDIAN = false;
+    pub const bool IS_BIG_ENDIAN = true;
+default:
+    pub const bool IS_LITTLE_ENDIAN = false;
+    pub const bool IS_BIG_ENDIAN = true;
+}
+
+pub u16 bswapU16(u16 v)
+{
+    return ((v >> 8) & 0x00FF) | ((v << 8) & 0xFF00);
+}
+
+pub u32 bswapU32(u32 v)
+{
+    return ((v >> 24) & 0x000000FF) |
+           ((v >> 8) & 0x0000FF00) |
+           ((v << 8) & 0x00FF0000) |
+           ((v << 24) & 0xFF000000);
+}
+
+pub u64 bswapU64(u64 v)
+{
+    return ((v >> 56) & 0x00000000000000FF) |
+           ((v >> 40) & 0x000000000000FF00) |
+           ((v >> 24) & 0x0000000000FF0000) |
+           ((v >> 8) & 0x00000000FF000000) |
+           ((v << 8) & 0x000000FF00000000) |
+           ((v << 24) & 0x0000FF0000000000) |
+           ((v << 40) & 0x00FF000000000000) |
+           ((v << 56) & 0xFF00000000000000);
+}
+
+pub i16 bswapI16(i16 v) { return (i16)bswapU16((u16)v); }
+pub i32 bswapI32(i32 v) { return (i32)bswapU32((u32)v); }
+pub i64 bswapI64(i64 v) { return (i64)bswapU64((u64)v); }
+
+pub u16 htons(u16 v) { if (IS_LITTLE_ENDIAN) return bswapU16(v); else return v; }
+pub u16 ntohs(u16 v) { if (IS_LITTLE_ENDIAN) return bswapU16(v); else return v; }
+pub u32 htonl(u32 v) { if (IS_LITTLE_ENDIAN) return bswapU32(v); else return v; }
+pub u32 ntohl(u32 v) { if (IS_LITTLE_ENDIAN) return bswapU32(v); else return v; }
+pub u64 htonll(u64 v) { if (IS_LITTLE_ENDIAN) return bswapU64(v); else return v; }
+pub u64 ntohll(u64 v) { if (IS_LITTLE_ENDIAN) return bswapU64(v); else return v; }

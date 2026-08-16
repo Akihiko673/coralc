@@ -1,0 +1,433 @@
+@[no_warn_unsafe]
+
+mod constfold = import("wallvm/passes/constfold.crl");
+mod dce = import("wallvm/passes/dce.crl");
+mod cse = import("wallvm/passes/cse.crl");
+mod gvn = import("wallvm/passes/gvn.crl");
+mod licm = import("wallvm/passes/licm.crl");
+mod sccp = import("wallvm/passes/sccp.crl");
+mod mem2reg = import("wallvm/passes/mem2reg.crl");
+mod inl = import("wallvm/passes/inline.crl");
+mod algebraic = import("wallvm/passes/algebraic.crl");
+mod idiom = import("wallvm/passes/idiom.crl");
+mod range = import("wallvm/passes/range.crl");
+mod branchprop = import("wallvm/passes/branchprop.crl");
+mod divmod = import("wallvm/passes/divmod.crl");
+mod tco = import("wallvm/passes/tco.crl");
+mod loopcse = import("wallvm/passes/loopcse.crl");
+mod unroll = import("wallvm/passes/unroll.crl");
+mod libc = import("std/platform/libc.crl");
+mod dse = import("wallvm/passes/dse.crl");
+mod borrowcheck = import("wallvm/passes/borrowcheck.crl");
+mod validate = import("wallvm/passes/validate.crl");
+mod x86_64 = import("wallvm/target/x86_64/x86_64.crl");
+mod arm64 = import("wallvm/target/arm64/arm64.crl");
+mod arm = import("wallvm/target/arm/arm.crl");
+mod riscv = import("wallvm/target/riscv/riscv.crl");
+mod x86 = import("wallvm/target/x86/x86.crl");
+mod ppc64 = import("wallvm/target/ppc64/ppc64.crl");
+mod ppc = import("wallvm/target/ppc/ppc.crl");
+mod mips64 = import("wallvm/target/mips64/mips64.crl");
+mod mips = import("wallvm/target/mips/mips.crl");
+mod sparc64 = import("wallvm/target/sparc64/sparc64.crl");
+mod wasm32 = import("wallvm/target/wasm32/wasm32.crl");
+mod wasm64 = import("wallvm/target/wasm64/wasm64.crl");
+mod lsra = import("wallvm/regalloc/lsra.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod ir_types = import("wallvm/ir_types.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub const u32 WALLVM_VERSION_MAJOR = 0;
+pub const u32 WALLVM_VERSION_MINOR = 1;
+pub const u32 WALLVM_VERSION_PATCH = 0;
+
+pub typedef PassFn = bool(IrFunc*, void*);
+
+pub struct PassPipeline
+{
+    PassFn** passes;
+    const char** names;
+    u32 count;
+    u32 capacity;
+
+    PassPipeline new()
+    {
+        PassPipeline p;
+        p.passes = null;
+        p.names = null;
+        p.count = 0;
+        p.capacity = 0;
+        return p;
+    }
+
+    void add(PassFn* fn, const char* name)
+    {
+        if (self.count >= self.capacity)
+        {
+            u32 nc = self.capacity ? self.capacity * 2 : 8;
+            PassFn** np = mman.alloc<PassFn*>(nc);
+            const char** nn = mman.alloc<const char*>(nc);
+            for (u32 i = 0; i < self.count; i++)
+            {
+                np[i] = self.passes[i];
+                nn[i] = self.names[i];
+            }
+            if (self.passes) mman.dealloc<PassFn*>(self.passes);
+            if (self.names) mman.dealloc<const char*>(self.names);
+            self.passes = np;
+            self.names = nn;
+            self.capacity = nc;
+        }
+        self.passes[self.count] = fn;
+        self.names[self.count] = name;
+        self.count++;
+    }
+
+    void clear()
+    {
+        if (self.passes) mman.dealloc<PassFn*>(self.passes);
+        if (self.names) mman.dealloc<const char*>(self.names);
+        self.passes = null;
+        self.names = null;
+        self.count = 0;
+        self.capacity = 0;
+    }
+
+    bool runOnFunc(IrFunc* func, void* ctx)
+    {
+        bool changed = false;
+        for (u32 i = 0; i < self.count; i++)
+            if (self.passes[i](func, ctx))
+                changed = true;
+        return changed;
+    }
+}
+
+pub PassPipeline pipelineLevel0()
+{
+    PassPipeline p = PassPipeline::new();
+    p.add(validate.irPassValidate, "validate");
+    p.add(algebraic.irPassSimplify, "simplify");
+    p.add(dce.irPassDce, "dce");
+    p.add(validate.irPassValidate, "validate");
+    return p;
+}
+
+pub PassPipeline pipelineLevel1()
+{
+    PassPipeline p = PassPipeline::new();
+    p.add(validate.irPassValidate, "validate");
+    p.add(algebraic.irPassSimplify, "simplify");
+    p.add(constfold.irPassConstfold, "constfold");
+    p.add(range.irPassRange, "range");
+    p.add(cse.irPassCse, "cse");
+    p.add(idiom.irPassIdiom, "idiom");
+    p.add(dce.irPassDce, "dce");
+    p.add(validate.irPassValidate, "validate");
+    return p;
+}
+
+pub PassPipeline pipelineLevel2()
+{
+    PassPipeline p = PassPipeline::new();
+    p.add(validate.irPassValidate, "validate");
+    p.add(algebraic.irPassSimplify, "simplify");
+    p.add(constfold.irPassConstfold, "constfold");
+    p.add(range.irPassRange, "range");
+    p.add(branchprop.irPassBranchProp, "branchprop");
+    p.add(divmod.irPassDivMod, "divmod");
+    p.add(gvn.irPassGvn, "gvn");
+    p.add(licm.irPassLicm, "licm");
+    p.add(loopcse.irPassLoopCse, "loopcse");
+    p.add(sccp.irPassSccp, "sccp");
+    p.add(idiom.irPassIdiom, "idiom");
+    p.add(dce.irPassAdce, "adce");
+    p.add(validate.irPassValidate, "validate");
+    return p;
+}
+
+pub PassPipeline pipelineLevel3()
+{
+    PassPipeline p = PassPipeline::new();
+    p.add(validate.irPassValidate, "validate");
+    p.add(algebraic.irPassSimplify, "simplify");
+    p.add(mem2reg.irPassMem2Reg, "mem2reg");
+    p.add(constfold.irPassConstfold, "constfold");
+    p.add(range.irPassRange, "range");
+    p.add(branchprop.irPassBranchProp, "branchprop");
+    p.add(divmod.irPassDivMod, "divmod");
+    p.add(gvn.irPassGvn, "gvn");
+    p.add(licm.irPassLicm, "licm");
+    p.add(loopcse.irPassLoopCse, "loopcse");
+    p.add(sccp.irPassSccp, "sccp");
+    p.add(inl.irPassInline, "inl");
+    p.add(tco.irPassAccumulate, "tco");
+    p.add(idiom.irPassIdiom, "idiom");
+    p.add(dce.irPassAdce, "adce");
+    p.add(validate.irPassValidate, "validate");
+    return p;
+}
+
+pub bool irOptimize(IrFunc* func, IrContext* ctx, u32 optLevel)
+{
+    PassPipeline p;
+    switch (optLevel)
+    {
+    case 0: p = pipelineLevel0(); break;
+    case 1: p = pipelineLevel1(); break;
+    case 2: p = pipelineLevel2(); break;
+    default: p = pipelineLevel3(); break;
+    }
+    bool r = p.runOnFunc(func, (void*)ctx);
+    p.clear();
+    return r;
+}
+
+// Structure lane, passes that reshape or police the CFG/IR rather than
+// tuning it for speed. Kept out of the numbered pipelines so their ordering
+// relative to the optimizer stays fixed regardless of -O level.
+pub bool irStructureLane(IrFunc* func, IrContext* ctx)
+{
+    if (!func || !ctx) return false;
+
+    // Borrow checking is semantic, not an optimization, run it before any
+    // pass that could move or remove loads/stores around.
+    if (borrowcheck.irPassBorrowCheck(func, (void*)ctx)) return false;
+
+    PassPipeline p = PassPipeline::new();
+    p.add(unroll.irPassUnroll, "unroll");
+    p.add(dse.irPassDse, "dse");
+    p.add(validate.irPassValidate, "validate");
+    p.runOnFunc(func, (void*)ctx);
+    p.clear();
+    // Returns success (a pass's changed-flag is not an error signal); the
+    // borrow check above is the only failure mode.
+    return true;
+}
+
+pub struct CompileResult
+{
+    bool success;
+    const char* errorMsg;
+    u32 errorLine;
+}
+
+pub CompileResult compileSuccess()
+{
+    CompileResult r;
+    r.success = true;
+    r.errorMsg = null;
+    r.errorLine = 0;
+    return r;
+}
+
+pub CompileResult compileError(const char* msg, u32 line)
+{
+    CompileResult r;
+    r.success = false;
+    r.errorMsg = msg;
+    r.errorLine = line;
+    return r;
+}
+
+// True when the target's backend decodes lsra's valData assignments
+// (SPILL_BIT/FLOAT_BIT/reg index) directly. Until a backend is upgraded it
+// stays slot-based and lsra keeps rewriting spills in the IR.
+static bool targetConsumesRegAlloc(asm_rules.CallingConvention cc)
+{
+    switch (cc)
+    {
+    case asm_rules.CallingConvention::SystemV:
+    case asm_rules.CallingConvention::Win64:
+    case asm_rules.CallingConvention::SyscallWin64:
+    case asm_rules.CallingConvention::SyscallX86_64:
+    case asm_rules.CallingConvention::SyscallMacOS:
+    case asm_rules.CallingConvention::Cdecl:
+    case asm_rules.CallingConvention::Stdcall:
+    case asm_rules.CallingConvention::Fastcall:
+    case asm_rules.CallingConvention::SyscallX86:
+    case asm_rules.CallingConvention::WinX86_32:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static lsra.RegAllocConfig regallocConfigFor(asm_rules.CallingConvention cc)
+{
+    lsra.RegAllocConfig cfg = lsra.defaultRegAllocConfig();
+    // Caller-save registers only: values live across calls in spill slots,
+    // and no backend needs callee-save prologue/epilogue work. The callee
+    // set of every ABI stays free for the calling convention itself.
+    cfg.useCalleeSave = false;
+    cfg.backendHandlesSpills = targetConsumesRegAlloc(cc);
+    if (!cfg.backendHandlesSpills) return cfg;
+
+    // Reserved registers are the ones the backend's own instruction
+    // sequences need as scratch; lsra never allocates them to values.
+    switch (cc)
+    {
+    case asm_rules.CallingConvention::SystemV:
+    case asm_rules.CallingConvention::Win64:
+    case asm_rules.CallingConvention::SyscallWin64:
+    case asm_rules.CallingConvention::SyscallX86_64:
+    case asm_rules.CallingConvention::SyscallMacOS:
+        cfg.reservedIntRegs = x86_64.X86_64_RESERVED_INT;
+        cfg.numReservedIntRegs = 3;
+        cfg.reservedFloatRegs = x86_64.X86_64_RESERVED_FLOAT;
+        cfg.numReservedFloatRegs = 3;
+        break;
+    case asm_rules.CallingConvention::Cdecl:
+    case asm_rules.CallingConvention::Stdcall:
+    case asm_rules.CallingConvention::Fastcall:
+    case asm_rules.CallingConvention::SyscallX86:
+    case asm_rules.CallingConvention::WinX86_32:
+        // Caller-save set (eax/ecx/edx) is all backend scratch and ebp is
+        // the frame pointer, so the allocatable int pool is the callee-save
+        // set ebx/esi/edi. Floats use xmm3-7.
+        cfg.useCalleeSave = true;
+        cfg.reservedIntRegs = x86.X86_RESERVED_INT;
+        cfg.numReservedIntRegs = 4;
+        cfg.reservedFloatRegs = x86.X86_RESERVED_FLOAT;
+        cfg.numReservedFloatRegs = 3;
+        break;
+    default:
+        break;
+    }
+    return cfg;
+}
+
+// Syntax for a calling convention's target, from the rules tables.
+static bool ccUsesAtt(asm_rules.CallingConvention cc)
+{
+    return asm_rules.formatForCc(cc) == asm_rules.AsmFormat::Att;
+}
+
+pub CompileResult irCompile(IrModule* modd, IrContext* ctx, asm_rules.CallingConvention cc, u32 optLevel)
+{
+    if (!modd) return compileError("null module", 0);
+    if (!ctx) return compileError("null context", 0);
+
+    // WASM is a stack machine — no register allocation needed
+    bool isWasm = (cc == asm_rules.CallingConvention::Wasm32 || cc == asm_rules.CallingConvention::Wasm64);
+    asm_rules.ABIRules abi = asm_rules.abiForCc(cc);
+
+    // The register-allocation contract is chosen per target by switch, not
+    // by a global. Each CPU target either consumes lsra's valData
+    // assignments itself (backendHandlesSpills) or keeps IR-level spill
+    // rewriting until its backend is upgraded.
+    lsra.RegAllocConfig cfg = regallocConfigFor(cc);
+
+    // Run register allocation on all functions
+    for (u32 fi = 0; fi < modd.nfuncs; fi++)
+    {
+        IrFunc* func = modd.funcs[fi];
+        if (!func) continue;
+        if (func.isExtern) continue;
+
+        // Optimize
+        irOptimize(func, ctx, optLevel);
+
+        // Structure lane (borrow check + unroll + dse)
+        if (!irStructureLane(func, ctx))
+            return compileError("structure lane failed", 0);
+
+        // Allocate registers (skip for WASM — stack machine)
+        if (!isWasm && !lsra.irLinearScanRegAlloc(func, (void*)ctx, &abi, &cfg))
+            return compileError("register allocation failed", 0);
+    }
+
+    // Generate code
+    if (!irCodegen(modd, (void*)ctx, cc))
+        return compileError("codegen failed", 0);
+
+    return compileSuccess();
+}
+
+// Same pipeline as irCompile, but returns the generated assembly text
+// instead of emitting it to a sink. Test-support export; the buffer lives
+// for the program lifetime.
+pub const char* irCompileAsm(IrModule* modd, IrContext* ctx, asm_rules.CallingConvention cc, u32 optLevel)
+{
+    if (!modd || !ctx) return null;
+    bool isWasm = (cc == asm_rules.CallingConvention::Wasm32 || cc == asm_rules.CallingConvention::Wasm64);
+    asm_rules.ABIRules abi = asm_rules.abiForCc(cc);
+    lsra.RegAllocConfig cfg = regallocConfigFor(cc);
+
+    for (u32 fi = 0; fi < modd.nfuncs; fi++)
+    {
+        IrFunc* func = modd.funcs[fi];
+        if (!func) continue;
+        if (func.isExtern) continue;
+        irOptimize(func, ctx, optLevel);
+        if (!irStructureLane(func, ctx)) { libc.write(2, "[structureLane failed]\n", 23); return null; }
+        if (!isWasm && !lsra.irLinearScanRegAlloc(func, (void*)ctx, &abi, &cfg)) { libc.write(2, "[lsra failed]\n", 14); return null; }
+    }
+
+    switch (cc)
+    {
+    case asm_rules.CallingConvention::SystemV:
+    case asm_rules.CallingConvention::Win64:
+    case asm_rules.CallingConvention::SyscallWin64:
+    case asm_rules.CallingConvention::SyscallX86_64:
+    case asm_rules.CallingConvention::SyscallMacOS:
+        return x86_64.irCodegenX86_64Asm(modd, (void*)ctx, ccUsesAtt(cc));
+    default:
+        return null;
+    }
+}
+
+pub bool irCodegen(IrModule* modd, void* userdata, asm_rules.CallingConvention cc)
+{
+    IrContext* ctx = (IrContext*)userdata;
+    if (!ctx || !modd) return false;
+    switch (cc)
+    {
+    case asm_rules.CallingConvention::SystemV:
+    case asm_rules.CallingConvention::Win64:
+    case asm_rules.CallingConvention::SyscallWin64:
+    case asm_rules.CallingConvention::SyscallX86_64:
+    case asm_rules.CallingConvention::SyscallMacOS:
+        return x86_64.irCodegenX86_64(modd, userdata, ccUsesAtt(cc));
+    case asm_rules.CallingConvention::Aapcs64:
+    case asm_rules.CallingConvention::SyscallArm64:
+        return arm64.irCodegenArm64(modd, userdata);
+    case asm_rules.CallingConvention::Aapcs64MacOs:
+        return arm64.irCodegenArm64(modd, userdata);
+    case asm_rules.CallingConvention::Aapcs64Ios:
+        return arm64.irCodegenArm64(modd, userdata);
+    case asm_rules.CallingConvention::Aapcs:
+    case asm_rules.CallingConvention::SyscallArm:
+        return arm.irCodegenArm(modd, userdata);
+    case asm_rules.CallingConvention::Riscv64:
+    case asm_rules.CallingConvention::SyscallRiscv64:
+        return riscv.irCodegenRiscv(modd, userdata);
+    case asm_rules.CallingConvention::Cdecl:
+    case asm_rules.CallingConvention::Stdcall:
+    case asm_rules.CallingConvention::Fastcall:
+    case asm_rules.CallingConvention::SyscallX86:
+        return x86.irCodegenX86(modd, userdata);
+    case asm_rules.CallingConvention::WinX86_32:
+        return x86.irCodegenX86(modd, userdata);
+    case asm_rules.CallingConvention::Ppc64:
+    case asm_rules.CallingConvention::SyscallPpc64:
+        return ppc64.irCodegenPpc64(modd, userdata);
+    case asm_rules.CallingConvention::Ppc:
+    case asm_rules.CallingConvention::SyscallPpc:
+        return ppc.irCodegenPpc(modd, userdata);
+    case asm_rules.CallingConvention::Mips64:
+    case asm_rules.CallingConvention::SyscallMips64:
+        return mips64.irCodegenMips64(modd, userdata);
+    case asm_rules.CallingConvention::Mips:
+    case asm_rules.CallingConvention::SyscallMips:
+        return mips.irCodegenMips(modd, userdata);
+    case asm_rules.CallingConvention::SparcV9:
+    case asm_rules.CallingConvention::SyscallSparc64:
+        return sparc64.irCodegenSparc64(modd, userdata);
+    case asm_rules.CallingConvention::Wasm32:
+        return wasm32.irCodegenWasm32(modd, userdata);
+    case asm_rules.CallingConvention::Wasm64:
+        return wasm64.irCodegenWasm64(modd, userdata);
+    }
+    return false;
+}

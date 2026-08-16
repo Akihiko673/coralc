@@ -1,0 +1,62 @@
+@[no_warn_unsafe]
+
+mod mman = import("std/memory/mman.crl");
+
+struct RefCount
+{
+    u64 count;
+}
+
+pub struct shared_ptr<T>
+{
+    T* ptr;
+    RefCount* rc;
+
+    void init(T value)
+    {
+        self.ptr = mman.alloc<T>(1);
+        *self.ptr = value;
+        self.rc = mman.alloc<RefCount>(1);
+        self.rc->count = 1;
+    }
+
+    void dispose()
+    {
+        if (self.rc == null) return;
+        self.rc->count--;
+        if (self.rc->count == 0)
+        {
+            mman.dealloc<T>(self.ptr);
+            mman.dealloc<RefCount>(self.rc);
+        }
+        self.ptr = null;
+        self.rc = null;
+    }
+
+    T get(const self*)
+    {
+        assert(self->ptr != null);
+        return *self->ptr;
+    }
+
+    T* data()
+    {
+        return self.ptr;
+    }
+
+    const T* constData(const self*)
+    {
+        return self->ptr;
+    }
+
+    u64 refCount(const self*)
+    {
+        if (self->rc == null) return 0;
+        return self->rc->count;
+    }
+
+    bool isValid(const self*)
+    {
+        return self->ptr != null;
+    }
+}

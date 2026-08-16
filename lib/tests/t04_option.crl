@@ -1,0 +1,11 @@
+mod option = import("std/data/option.crl");
+
+i32 main()
+{
+    option.option<u64> a = option.option<u64>::some(5);
+    if (!a.some) return 1;
+    if (a.value != 5) return 2;
+    option.option<u64> b = option.option<u64>::none();
+    if (b.some) return 3;
+    return 0;
+}

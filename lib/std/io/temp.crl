@@ -1,0 +1,97 @@
+mod mman = import("std/memory/mman.crl");
+mod string = import("std/text/string.crl");
+mod libc = import("std/platform/libc.crl");
+
+pub struct TempFile
+{
+    i32 fd;
+    string.String path;
+    bool autoDelete;
+
+    static TempFile create(string.strView prefix, string.strView suffix)
+    {
+        string.String tmpl = string.String::new();
+        tmpl.appendView(string.strView::fromCstr("/tmp/"));
+        tmpl.appendView(prefix);
+        tmpl.appendView(suffix);
+        tmpl.appendView(string.strView::fromCstr("XXXXXX"));
+
+        u8* buf = mman.alloc<u8>(tmpl.len + 1);
+        if (buf == null) { tmpl.free(); TempFile f; f.fd = -1; f.path = string.String::new(); f.autoDelete = false; return f; }
+        mman.copy<u8>(buf, (const u8*)tmpl.asView().ptr, tmpl.len);
+        buf[tmpl.len] = 0;
+
+        i32 fd = libc.mkstemp(buf);
+        string.String actualPath;
+        if (fd >= 0)
+            actualPath = string.String::fromView(string.strView::fromParts(buf, tmpl.len));
+        else
+            actualPath = string.String::new();
+        mman.dealloc<u8>(buf);
+        tmpl.free();
+
+        TempFile f;
+        f.fd = fd;
+        f.path = actualPath;
+        f.autoDelete = true;
+        return f;
+    }
+
+    void dispose()
+    {
+        if (self.fd >= 0) libc.close(self.fd);
+        if (self.autoDelete && !self.path.isEmpty())
+            libc.unlink((const u8*)self.path.asView().ptr);
+        self.path.free();
+        self.fd = -1;
+    }
+
+    i32 fd() { return self.fd; }
+    string.strView pathStr() { return self.path.asView(); }
+
+    void setAutoDelete(bool ad) { self.autoDelete = ad; }
+}
+
+pub struct TempDir
+{
+    string.String path;
+    bool autoDelete;
+
+    static TempDir create(string.strView prefix)
+    {
+        string.String tmpl = string.String::new();
+        tmpl.appendView(string.strView::fromCstr("/tmp/"));
+        tmpl.appendView(prefix);
+        tmpl.appendView(string.strView::fromCstr("XXXXXX"));
+
+        u8* buf = mman.alloc<u8>(tmpl.len + 1);
+        if (buf == null) { tmpl.free(); TempDir d; d.path = string.String::new(); d.autoDelete = false; return d; }
+        mman.copy<u8>(buf, (const u8*)tmpl.asView().ptr, tmpl.len);
+        buf[tmpl.len] = 0;
+
+        u8* result = libc.mkdtemp(buf);
+        string.String actualPath;
+        if (result != null)
+            actualPath = string.String::fromView(string.strView::fromParts(buf, tmpl.len));
+        else
+            actualPath = string.String::new();
+        mman.dealloc<u8>(buf);
+        tmpl.free();
+
+        TempDir d;
+        d.path = actualPath;
+        d.autoDelete = true;
+        return d;
+    }
+
+    void dispose()
+    {
+        if (self.autoDelete && !self.path.isEmpty())
+            libc.rmdir((const u8*)self.path.asView().ptr);
+        self.path.free();
+    }
+
+    string.strView pathStr() { return self.path.asView(); }
+    void setAutoDelete(bool ad) { self.autoDelete = ad; }
+    bool isValid() { return !self.path.isEmpty(); }
+}

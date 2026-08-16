@@ -1,0 +1,104 @@
+@[no_warn_unsafe]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod domtree = import("wallvm/domtree.crl");
+
+// Div/rem fusion, when both div(x, y) and rem(x, y) exist, the remainder can
+// be computed as x - div(x, y) * y, replacing an expensive division with a
+// multiply and subtract. The transform is exact, by definition
+// rem(x, y) = x - trunc(x / y) * y. Only fired when the quotient is already
+// computed elsewhere (shared), so no division is ever introduced.
+pub struct DivModPass
+{
+    ir_types.IrContext* ctx;
+    u64 fused;
+
+    DivModPass new(ir_types.IrContext* ctx)
+    {
+        DivModPass p;
+        p.ctx = ctx;
+        p.fused = 0;
+        return p;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.fused = 0;
+        bool changed = false;
+
+        domtree.IrDomTree* dom = domtree.irDomtreeNew(func);
+        if (!dom) return false;
+
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            u32 ii = 0;
+            while (ii < bb.ninsts)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                ir_opcodes.IrOpcode divOp;
+                if (inst.opcode == ir_opcodes.IrOpcode::SRem) divOp = ir_opcodes.IrOpcode::SDiv;
+                else if (inst.opcode == ir_opcodes.IrOpcode::URem) divOp = ir_opcodes.IrOpcode::UDiv;
+                else
+                {
+                    ii++;
+                    continue;
+                }
+                if (inst.nops != 2) { ii++; continue; }
+                ir_types.IrValue* x = inst.ops[0];
+                ir_types.IrValue* y = inst.ops[1];
+                if (!x || !y) { ii++; continue; }
+
+                ir_types.IrInst* match = null;
+                for (u32 bj = 0; bj < func.nblocks && !match; bj++)
+                {
+                    ir_types.IrBlock* b2 = func.blocks[bj];
+                    for (u32 ij = 0; ij < b2.ninsts; ij++)
+                    {
+                        ir_types.IrInst* d = b2.insts[ij];
+                        if (d.opcode != divOp || d.nops != 2) continue;
+                        if (d.ops[0] != x || d.ops[1] != y) continue;
+                        if (d.base.nusers < 2) continue;
+                        bool ok;
+                        if (bj == bi) ok = ij < ii;
+                        else ok = domtree.irDomtreeDominates(dom, b2, bb);
+                        if (ok) { match = d; break; }
+                    }
+                }
+                if (!match)
+                {
+                    ii++;
+                    continue;
+                }
+
+                ir_types.IrValue* mulOps[2] = { &match.base, y };
+                ir_types.IrInst* mulInst = self.ctx.createInst(ir_opcodes.IrOpcode::Mul, inst.base.type, mulOps, 2, 0, 0);
+                mulOps[0].addUser(mulInst);
+                mulOps[1].addUser(mulInst);
+                inst.parent.insertBefore(mulInst, inst);
+
+                ir_types.IrValue* subOps[2] = { x, &mulInst.base };
+                ir_types.IrInst* subInst = self.ctx.createInst(ir_opcodes.IrOpcode::Sub, inst.base.type, subOps, 2, 0, 0);
+                subOps[0].addUser(subInst);
+                subOps[1].addUser(subInst);
+                inst.parent.insertBefore(subInst, inst);
+
+                inst.base.replaceAllUses(&subInst.base);
+                inst.erase();
+                self.fused++;
+                changed = true;
+            }
+        }
+
+        return changed;
+    }
+}
+
+pub bool irPassDivMod(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    DivModPass pass = DivModPass::new(ctx);
+    return pass.run(func);
+}
