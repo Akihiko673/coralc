@@ -2,3 +2,4 @@
 TODOs.md
 reason.txt
 *.py
+**/__pycache__/
