@@ -91,6 +91,11 @@ const u32 AC_LFLAG = 57;        // FLAGBODY -> e (EMPTY K_DECL list)
 const u32 AC_LIDENT = 58;       // IDENTS -> e (EMPTY K_VIEW list)
 const u32 AC_RAPP = 59;         // STMTS/SWBODY/FLAGBODY -> item list (right-rec)
 const u32 AC_LPARAMS = 69;      // PARAMS -> e (EMPTY PList)
+const u32 AC_ES_RCURLY = 70;    // stops { ',' '}' }
+const u32 AC_FORIN = 71;        // FOR -> for ( FORINIT ) STMT (range-for)
+const u32 AC_VRBOTHL = 72;      // VARREST -> [ ES_RBKT ] = { ES_RCURLY INLIST }
+const u32 AC_LIN = 73;          // INLIST -> e (EMPTY K_EXPR list)
+const u32 AC_INAPP = 74;        // INLIST -> , ES_RCURLY INLIST
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -141,7 +146,9 @@ const u32 N_TYPEKW = 44;
 const u32 N_FUNC0 = 45;
 const u32 N_CONST0 = 46;
 const u32 N_AUG = 47;
-const u32 N_COUNT = 48;
+const u32 N_ES_RCURLY = 48;
+const u32 N_INLIST = 49;
+const u32 N_COUNT = 50;
 
 // precedence levels (higher wins)
 const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
@@ -163,6 +170,11 @@ str.strView TYPEKWS[] = {
     "u8", "u16", "u32", "u64", "i8", "i16", "i32",
     "i64", "f32", "f64", "bool", "char", "void",
     "isize", "usize"
+};
+
+str.strView ATTRTOKS[] = {
+    "@[forced_unsafe_cast]", "@[forced_null_deref]", "@[no_warn_unsafe]",
+    "@[forced_pointer]", "@no_null", "@[noret]", "@reorder", "@packed"
 };
 
 // semantic slot kinds (for cleanup on failed parses)
@@ -274,6 +286,12 @@ u32 esStops(u32 es, u32* st)
     if (es == AC_ES_RPAR) { st[0] = tok.terminalId(str.strView::fromCstr(")")); return 1; }
     if (es == AC_ES_RBKT) { st[0] = tok.terminalId(str.strView::fromCstr("]")); return 1; }
     if (es == AC_ES_COLON) { st[0] = tok.terminalId(str.strView::fromCstr(":")); return 1; }
+    if (es == AC_ES_RCURLY)
+    {
+        st[0] = tok.terminalId(str.strView::fromCstr(","));
+        st[1] = tok.terminalId(str.strView::fromCstr("}"));
+        return 2;
+    }
     st[0] = tok.terminalId(str.strView::fromCstr(";"));
     st[1] = tok.terminalId(str.strView::fromCstr(")"));
     return 2;
@@ -285,6 +303,7 @@ u32 esNonterm(u32 es)
     if (es == AC_ES_RPAR) return N_ES_RPAR;
     if (es == AC_ES_RBKT) return N_ES_RBKT;
     if (es == AC_ES_COLON) return N_ES_COLON;
+    if (es == AC_ES_RCURLY) return N_ES_RCURLY;
     return N_ES_BOTH;
 }
 
@@ -320,7 +339,7 @@ lalr.Grammar stmtGrammar()
     g.termPrec = mman.alloc<u32>(g.nterms);
     for (u32 i = 0; i < g.nterms; i++) g.termPrec[i] = 0;
 
-    for (u32 k = 0; k < 15; k++)
+    for (u32 k = 0; k < 25; k++)
         g.termPrec[termId((u8*)TYPEKWS[k].ptr)] = PREC_TYPEKW;
     g.termPrec[tok.TOK_IDENT] = PREC_IDENT;
     g.termPrec[termId((u8*)"default")] = PREC_DEFAULT;
@@ -416,7 +435,7 @@ lalr.Grammar stmtGrammar()
     r3[1] = termId((u8*)".");
     r3[2] = tok.TOK_IDENT;
     addProd(&g, i++, lalr.NT_BASE + N_TBASE, 3, r3, 0, 0, AC_TDOT);
-    for (u32 k = 0; k < 15; k++)
+    for (u32 k = 0; k < 25; k++)
     {
         r1[0] = termId((u8*)TYPEKWS[k].ptr);
         addProd(&g, i++, lalr.NT_BASE + N_TYPEKW, 1, r1, 0, 0, AC_PASS);
@@ -515,6 +534,11 @@ lalr.Grammar stmtGrammar()
     r9[7] = termId((u8*)")");
     r9[8] = lalr.NT_BASE + N_STMT;
     addProd(&g, i++, lalr.NT_BASE + N_FOR, 9, r9, 0, 0, AC_FOR);
+    r4[0] = termId((u8*)"for");
+    r4[1] = termId((u8*)"(");
+    r4[2] = lalr.NT_BASE + N_FORINIT;
+    r4[3] = termId((u8*)")");
+    addProd(&g, i++, lalr.NT_BASE + N_FOR, 4, r4, 0, 0, AC_FORIN);
     r1[0] = lalr.NT_BASE + N_ES_SEMI;
     addProd(&g, i++, lalr.NT_BASE + N_FORINIT, 1, r1, 0, 0, AC_FORINIT);
     r4[0] = termId((u8*)"var");
@@ -620,6 +644,20 @@ lalr.Grammar stmtGrammar()
     r5[3] = termId((u8*)"=");
     r5[4] = lalr.NT_BASE + N_ES_SEMI;
     addProd(&g, i++, lalr.NT_BASE + N_VARREST, 5, r5, 0, 0, AC_VRBOTH);
+    r8[0] = termId((u8*)"[");
+    r8[1] = lalr.NT_BASE + N_ES_RBKT;
+    r8[2] = termId((u8*)"]");
+    r8[3] = termId((u8*)"=");
+    r8[4] = termId((u8*)"{");
+    r8[5] = lalr.NT_BASE + N_ES_RCURLY;
+    r8[6] = lalr.NT_BASE + N_INLIST;
+    r8[7] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_VARREST, 8, r8, 0, 0, AC_VRBOTHL);
+    addProd(&g, i++, lalr.NT_BASE + N_INLIST, 0, null, 0, 0, AC_LIN);
+    r3[0] = termId((u8*)",");
+    r3[1] = lalr.NT_BASE + N_ES_RCURLY;
+    r3[2] = lalr.NT_BASE + N_INLIST;
+    addProd(&g, i++, lalr.NT_BASE + N_INLIST, 3, r3, 0, 0, AC_INAPP);
     r2[0] = termId((u8*)",");
     r2[1] = lalr.NT_BASE + N_IDENTS;
     addProd(&g, i++, lalr.NT_BASE + N_VARREST, 2, r2, 0, 0, AC_VRNAMES);
@@ -641,6 +679,13 @@ lalr.Grammar stmtGrammar()
     r3[1] = tok.TOK_IDENT;
     r3[2] = lalr.NT_BASE + N_ATTRS;
     addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 3, r3, 0, 0, AC_NONE);
+    for (u32 k = 0; k < 0; k++)
+    {
+        u32 tt = termId((u8*)ATTRTOKS[k].ptr);
+        r2[0] = tt;
+        r2[1] = lalr.NT_BASE + N_ATTRS;
+        addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 2, r2, 0, 0, AC_NONE);
+    }
 
     r11[0] = termId((u8*)"extern");
     r11[1] = termId((u8*)"(");
@@ -681,6 +726,7 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_ES_RBKT, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_RBKT);
     addProd(&g, i++, lalr.NT_BASE + N_ES_COLON, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_COLON);
     addProd(&g, i++, lalr.NT_BASE + N_ES_BOTH, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_BOTH);
+    addProd(&g, i++, lalr.NT_BASE + N_ES_RCURLY, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_RCURLY);
 
     g.nprods = i;
     return g;
@@ -734,7 +780,7 @@ pub struct StmtParser
                 if (en->kind == lalr.ACT_REDUCE)
                 {
                     u32 a = p.g.prods[en->a].action;
-                    if (a >= AC_ES_SEMI && a <= AC_ES_BOTH) { et = (u8)a; break; }
+                    if ((a >= AC_ES_SEMI && a <= AC_ES_BOTH) || a == AC_ES_RCURLY) { et = (u8)a; break; }
                 }
             }
             p.esType[s] = et;
@@ -1385,6 +1431,46 @@ pub struct StmtParser
             self.push((u64)vr, K_VRES);
             return;
         }
+        case AC_VRBOTHL:
+        {
+            SList* l = (SList*)(u64)self.sem[base + 6];
+            ast.Expr* e = mman.alloc<ast.Expr>(1);
+            e->kind = ast.EX_INIT;
+            e->text = str.strView::empty();
+            e->a = null;
+            e->b = null;
+            e->c = null;
+            e->args = mman.alloc<ast.Expr*>(l->n ? l->n : 1);
+            for (u32 k = 0; k < l->n; k++) e->args[k] = (ast.Expr*)(u64)l->a[k];
+            e->nargs = l->n;
+            e->names = null;
+            e->type = null;
+            e->targs = null;
+            e->ntargs = 0;
+            e->post = false;
+            e->line = line;
+            e->col = col;
+            if (l->a) mman.dealloc<u64>(l->a);
+            mman.dealloc<SList>(l);
+            VRes* vr = mman.alloc<VRes>(1);
+            vr->init = (u64)e;
+            vr->arr = self.sem[base + 1];
+            vr->names = 0;
+            self.push((u64)vr, K_VRES);
+            return;
+        }
+        case AC_LIN:
+        {
+            self.push((u64)listNew(K_EXPR), K_LIST);
+            return;
+        }
+        case AC_INAPP:
+        {
+            SList* l = (SList*)(u64)self.sem[base + 2];
+            listAppend(l, self.sem[base + 1]);
+            self.push((u64)l, K_LIST);
+            return;
+        }
         case AC_VRNAMES:
         {
             VRes* vr = mman.alloc<VRes>(1);
@@ -1768,6 +1854,28 @@ pub struct StmtParser
             s->b = (ast.Expr*)(u64)self.sem[base + 4];
             s->c = (ast.Expr*)(u64)self.sem[base + 6];
             s->body = (ast.Stmt*)(u64)self.sem[base + 8];
+            s->body2 = null;
+            s->init = (ast.Stmt*)(u64)self.sem[base + 2];
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_FORIN:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_FOR;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = null;
+            s->b = null;
+            s->c = null;
+            s->body = (ast.Stmt*)(u64)self.sem[base + 4];
             s->body2 = null;
             s->init = (ast.Stmt*)(u64)self.sem[base + 2];
             s->stmts = null;
