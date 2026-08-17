@@ -121,7 +121,7 @@ lalr.Grammar exprGrammar()
     lalr.Grammar g;
     g.nterms = tok.TOK_ANON_FIRST + tok.NUM_ANON;   // 6..(5+NUM_ANON) anonymous
     g.nnonterms = N_COUNT;
-    g.nprods = 82;
+    g.nprods = 84;
     g.prods = mman.alloc<lalr.Prod>(g.nprods);
     g.start = NT + N_E;
     g.termPrec = mman.alloc<u32>(g.nterms);
@@ -270,6 +270,8 @@ lalr.Grammar exprGrammar()
     addProd(&g, i++, NT + N_P, 3, r3, 0, 0, AC_DOT);
     r3[1] = term((u8*)"->");
     addProd(&g, i++, NT + N_P, 3, r3, 0, 0, AC_ARROW);
+    r3[1] = term((u8*)"::");
+    addProd(&g, i++, NT + N_P, 3, r3, 0, 0, AC_DOT);
     r2[0] = NT + N_P; r2[1] = term((u8*)"++");
     addProd(&g, i++, NT + N_P, 2, r2, 0, 0, AC_POSTINC);
     r2[1] = term((u8*)"--");
@@ -337,6 +339,9 @@ lalr.Grammar exprGrammar()
     r1t[0] = tok.TOK_IDENT;
     addProd(&g, i++, NT + N_T, 1, r1t, 0, 0, AC_TIDENT);
 
+    r4[0] = NT + N_T; r4[1] = term((u8*)"!<"); r4[2] = NT + N_TARGS; r4[3] = term((u8*)">");
+    addProd(&g, i++, NT + N_T, 4, r4, 0, 0, AC_GENERIC);
+
     r4[0] = NT + N_P; r4[1] = term((u8*)"!<"); r4[2] = NT + N_TARGS; r4[3] = term((u8*)">");
     addProd(&g, i++, NT + N_P, 4, r4, 0, 0, AC_GENERIC);
 
@@ -362,6 +367,19 @@ pub struct ExprParser
     u32 tTrueId;
     u32 tFalseId;
     u32 tNullId;
+    u32 tLtId;
+    u32 tGtId;
+    u32 tGtGtId;
+    u32 tBangLtId;
+    u32 tCommaId;
+    u32 tConstId;
+    u32 tColonColonId;
+    u32 tLbraceId;
+    u32 tSizeofId;
+    u32 scr[128];       // ltPos scratch for nested generic '<' rewrites
+    u32 scrSpl[32];     // scratch '>>' positions to split into two '>'
+    u32 nScr;
+    u32 nSpl;
     u32 stk[STKMAX];
     u32 sp;
     ast.Expr* sem[STKMAX];
@@ -386,6 +404,17 @@ pub struct ExprParser
         p.tTrueId = tok.terminalId(str.strView::fromCstr("true"));
         p.tFalseId = tok.terminalId(str.strView::fromCstr("false"));
         p.tNullId = tok.terminalId(str.strView::fromCstr("null"));
+        p.tLtId = tok.terminalId(str.strView::fromCstr("<"));
+        p.tGtId = tok.terminalId(str.strView::fromCstr(">"));
+        p.tGtGtId = tok.terminalId(str.strView::fromCstr(">>"));
+        p.tBangLtId = tok.terminalId(str.strView::fromCstr("!<"));
+        p.tCommaId = tok.terminalId(str.strView::fromCstr(","));
+        p.tConstId = tok.terminalId(str.strView::fromCstr("const"));
+        p.tColonColonId = tok.terminalId(str.strView::fromCstr("::"));
+        p.tLbraceId = tok.terminalId(str.strView::fromCstr("{"));
+        p.tSizeofId = tok.terminalId(str.strView::fromCstr("sizeof"));
+        p.nScr = 0;
+        p.nSpl = 0;
         return p;
     }
 
@@ -654,6 +683,111 @@ pub struct ExprParser
         return false;
     }
 
+    // True when tid can begin an expression. Used to tell a comparison chain
+    // (`a < b > c` keeps the comparison reading) from a generic instantiation
+    // (`Foo<T>` is followed by a call, '::', an operator or a stop).
+    bool exprStart(u32 tid)
+    {
+        if (tid == tok.TOK_IDENT || tid == tok.TOK_INT || tid == tok.TOK_FLOAT
+            || tid == tok.TOK_STR || tid == tok.TOK_CHAR) return true;
+        if (tid == self.tTrueId || tid == self.tFalseId || tid == self.tNullId
+            || tid == self.tLbraceId || tid == self.tSizeofId) return true;
+        return false;
+    }
+
+    // Matches a plain-`<` type-argument list whose '<' is at ltPos, at
+    // nesting depth `depth` (1 = outermost). Args are IDENTs or type
+    // keywords, optionally `const`-prefixed or `::`-paths, and may nest
+    // further generic types. The list must close with '>' (any depth) or,
+    // at depth >= 2, '>>' (which also closes the enclosing list). On
+    // success sets *end to the token just past the closer, *doubleClose to
+    // true when a '>>' closed this list, and appends every '<' it spans to
+    // scr[] and every '>>' closer to scrSpl[]. On any mismatch returns false.
+    bool matchArgs(u32 ltPos, u32 depth, u32* end, bool* doubleClose)
+    {
+        if (self.nScr >= 128) return false;
+        self.scr[self.nScr++] = ltPos;
+        u32 i = ltPos + 1;
+        while (true)
+        {
+            if (i >= self.ntoks) return false;
+            u32 tid = self.toks[i].id;
+            if (tid == self.tCommaId) { i++; continue; }
+            if (tid == self.tGtId) { *end = i + 1; *doubleClose = false; return true; }
+            if (tid == self.tGtGtId)
+            {
+                if (depth < 2 || self.nSpl >= 32) return false;
+                self.scrSpl[self.nSpl++] = i;
+                *end = i + 1;
+                *doubleClose = true;
+                return true;
+            }
+            if (tid == self.tConstId)
+            {
+                i++;
+                if (i >= self.ntoks) return false;
+                tid = self.toks[i].id;
+            }
+            if (tid != tok.TOK_IDENT && (tid < self.tTypeMinId || tid > self.tTypeMaxId))
+                return false;
+            i++;
+            while (i + 1 < self.ntoks && self.toks[i].id == self.tColonColonId
+                   && (self.toks[i + 1].id == tok.TOK_IDENT
+                       || (self.toks[i + 1].id >= self.tTypeMinId
+                           && self.toks[i + 1].id <= self.tTypeMaxId)))
+                i += 2;
+            if (i < self.ntoks && self.toks[i].id == self.tLtId)
+            {
+                u32 ne;
+                bool nd;
+                if (!self.matchArgs(i, depth + 1, &ne, &nd)) return false;
+                if (nd)
+                {
+                    *end = ne;
+                    *doubleClose = false;   // '>>' closed the nested list and us
+                    return true;
+                }
+                i = ne;
+            }
+        }
+    }
+
+    // Probes [start, ntoks) for `IDENT <` pairs forming a valid type-arg
+    // list (see matchArgs), scanning up to the first stop token. Outermost
+    // matches whose closer is immediately followed by another expression
+    // keep their comparison reading (`a < b > c`). Rewrite positions land in
+    // rew[] (*nrew, count of '<' to flip to '!<') and spl[] (*nspl, '>>'
+    // closers to split into two '>').
+    void probeGeneric(u32 start, const u32* stops, u32 nstops,
+                      u32* rew, u32* nrew, u32* spl, u32* nspl)
+    {
+        u32 i = start;
+        while (i + 1 < self.ntoks)
+        {
+            u32 tid = self.toks[i].id;
+            if (self.inStops(tid, stops, nstops)) return;
+            if (tid == tok.TOK_IDENT && self.toks[i + 1].id == self.tLtId)
+            {
+                u32 end;
+                bool dbl;
+                self.nScr = 0;
+                self.nSpl = 0;
+                if (self.matchArgs(i + 1, 1, &end, &dbl)
+                    && !(end < self.ntoks && self.exprStart(self.toks[end].id)))
+                {
+                    if (*nrew + self.nScr <= 128 && *nspl + self.nSpl <= 32)
+                    {
+                        for (u32 k = 0; k < self.nScr; k++) rew[(*nrew)++] = self.scr[k];
+                        for (u32 k = 0; k < self.nSpl; k++) spl[(*nspl)++] = self.scrSpl[k];
+                    }
+                    i = end;
+                    continue;
+                }
+            }
+            i++;
+        }
+    }
+
     // Frees any partially-built nodes on a failed parse (the caller cannot
     // use them). Only called from error paths in parseFrom.
     void clearSem()
@@ -662,23 +796,12 @@ pub struct ExprParser
         self.sv = 0;
     }
 
-    // Parses one expression starting at token offset `start` and returns
-    // the node plus, in *consumed, the offset just past it (the token that
-    // ended the expression, or the EOF token index). A token in `stops`
-    // terminates the expression only where the grammar has no transition
-    // for it (ACT_ERROR), so tokens that the expression itself legitimately
-    // contains (a ternary ':', an argument-list ',') are never cut short.
-    // Returns null on any parse failure.
-    ast.Expr* parseFrom(u8* src, tok.LexTok* toks, u32 ntoks, u32 start,
-                        const u32* stops, u32 nstops, u32* consumed)
+    // Drives the LALR tables over self.toks from token ip0 until accept or
+    // a stop token. Returns the node (and sets *consumed to the token index
+    // just past the expression) or null on any parse failure.
+    ast.Expr* parseLoop(u32 ip0, const u32* stops, u32 nstops, u32* consumed)
     {
-        self.src = src;
-        self.toks = toks;
-        self.ntoks = ntoks;
-        self.sp = 0;
-        self.sv = 0;
-        self.stk[0] = 0;
-        u32 ip = start;
+        u32 ip = ip0;
         while (true)
         {
             u32 state = self.stk[self.sp];
@@ -785,6 +908,71 @@ pub struct ExprParser
                 return null;
             }
         }
+    }
+
+    // Parses one expression starting at token offset `start` and returns
+    // the node plus, in *consumed, the offset just past it (the token that
+    // ended the expression, or the EOF token index). A token in `stops`
+    // terminates the expression only where the grammar has no transition
+    // for it (ACT_ERROR), so tokens that the expression itself legitimately
+    // contains (a ternary ':', an argument-list ',') are never cut short.
+    // Plain-`<` generic instantiations (IDENT < TARGS >) are recognized by
+    // probeGeneric and parsed through the LALR '!<' productions; '>>' that
+    // closes two nested levels is split into two '>'.
+    // Returns null on any parse failure.
+    ast.Expr* parseFrom(u8* src, tok.LexTok* toks, u32 ntoks, u32 start,
+                        const u32* stops, u32 nstops, u32* consumed)
+    {
+        self.src = src;
+        self.toks = toks;
+        self.ntoks = ntoks;
+        self.sp = 0;
+        self.sv = 0;
+        self.stk[0] = 0;
+        u32 rew[128];
+        u32 spl[32];
+        u32 nrew = 0;
+        u32 nspl = 0;
+        self.probeGeneric(start, stops, nstops, rew, &nrew, spl, &nspl);
+        if (nrew == 0)
+            return self.parseLoop(start, stops, nstops, consumed);
+
+        // A plain-`<` generic was recognized: build an adjusted copy of the
+        // window ('<' flipped to '!<', '>>' split into two '>'), parse from
+        // it, then map the consumed index back to the original array.
+        u32 wN = ntoks - start + nspl;
+        tok.LexTok* wToks = mman.alloc<tok.LexTok>(wN);
+        u32* origOf = mman.alloc<u32>(wN);
+        u32 li = 0;
+        for (u32 p = start; p < ntoks; p++)
+        {
+            bool isSpl = false;
+            bool isRew = false;
+            for (u32 k = 0; k < nspl; k++) if (spl[k] == p) { isSpl = true; break; }
+            for (u32 k = 0; k < nrew; k++) if (rew[k] == p) { isRew = true; break; }
+            wToks[li] = toks[p];
+            if (isRew) wToks[li].id = self.tBangLtId;
+            if (isSpl) wToks[li].id = self.tGtId;
+            origOf[li] = p;
+            li++;
+            if (isSpl)
+            {
+                wToks[li] = toks[p];
+                wToks[li].id = self.tGtId;
+                origOf[li] = p;
+                li++;
+            }
+        }
+        self.toks = wToks;
+        self.ntoks = wN;
+        u32 c = 0;
+        ast.Expr* r = self.parseLoop(0, stops, nstops, &c);
+        self.toks = toks;
+        self.ntoks = ntoks;
+        mman.dealloc<tok.LexTok>(wToks);
+        mman.dealloc<u32>(origOf);
+        if (r != null) *consumed = origOf[c];
+        return r;
     }
 
     ast.Expr* parse(u8* src, tok.LexTok* toks, u32 ntoks)

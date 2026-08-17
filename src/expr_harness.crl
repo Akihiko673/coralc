@@ -25,6 +25,12 @@ str.strView SOURCES[] = {
     "m!<u64>->get()", "x!<T, u8, Node>", "vec!<u32> + 1",
     "f!<i64>(a) - 2",
     "f!<isize, usize>",
+    "Foo<u32>()", "Foo<Bar<Baz>>()", "Foo<T>", "Foo<u32>::new()",
+    "Foo<u32, bool>()", "string::new()", "a::b::c", "vec::push<T>(x)",
+    "a + Foo<u32>", "f(Foo<T>)", "a < b", "a << b >> c",
+    "f(a < b, c)", "a < b && c", "a < b >> c", "x = Foo<u32>",
+    "Foo<Bar<Baz>>::next()", "Foo<T> + 1", "Foo<u32>[i]",
+    "Foo<Vec<u32>, i8>::m()", "a.b<u8>::c()", "x = Foo<Bar<u32>>()",
 };
 
 str.strView EXPECTS[] = {
@@ -49,6 +55,28 @@ str.strView EXPECTS[] = {
     "(+ (generic vec ty u32) 1)",
     "(- (call (generic f ty i64) a) 2)",
     "(generic f ty isize ty usize)",
+    "(call (generic Foo ty u32))",
+    "(call (generic Foo (generic ty Bar ty Baz)))",
+    "(generic Foo ty T)",
+    "(call (. (generic Foo ty u32) new))",
+    "(call (generic Foo ty u32 ty bool))",
+    "(call (. string new))",
+    "(. (. a b) c)",
+    "(call (generic (. vec push) ty T) x)",
+    "(+ a (generic Foo ty u32))",
+    "(call f (generic Foo ty T))",
+    "(< a b)",
+    "(>> (<< a b) c)",
+    "(call f (< a b) c)",
+    "(&& (< a b) c)",
+    "(< a (>> b c))",
+    "(= x (generic Foo ty u32))",
+    "(call (. (generic Foo (generic ty Bar ty Baz)) next))",
+    "(+ (generic Foo ty T) 1)",
+    "(index (generic Foo ty u32) i)",
+    "(call (. (generic Foo (generic ty Vec ty u32) ty i8) m))",
+    "(call (. (generic (. a b) ty u8) c))",
+    "(= x (call (generic Foo (generic ty Bar ty u32))))",
 };
 
 str.strView BAD[] = {
@@ -57,6 +85,7 @@ str.strView BAD[] = {
     "sizeof(f(1))",
     "f!<>", "f!<u32", "f!<u32,>",
     "m!<v!<u64>>", // nested generics need '>>' closing-depth (statements phase)
+    "Foo<", "Foo<u32", "Foo<u32,>",
 };
 
 void put(u8* s, u32 n) { libc.write(1, s, n); }
@@ -223,7 +252,7 @@ i32 main(i32 argc, char** argv)
     exprP.ExprParser p;
     p = exprP.ExprParser::new();
 
-    for (u32 i = 0; i < 52; i++)
+    for (u32 i = 0; i < 74; i++)
     {
         str.strView src = SOURCES[i];
         lex.Lexer l = lex.Lexer::new((const u8*)src.ptr, (u32)src.len);
@@ -253,7 +282,7 @@ i32 main(i32 argc, char** argv)
         if (e) ast.freeExpr(e);
     }
 
-    for (u32 i = 0; i < 19; i++)
+    for (u32 i = 0; i < 22; i++)
     {
         str.strView src = BAD[i];
         lex.Lexer l = lex.Lexer::new((const u8*)src.ptr, (u32)src.len);
