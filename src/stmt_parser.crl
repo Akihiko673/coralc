@@ -938,20 +938,6 @@ pub struct StmtParser
             }
             if (et == 0xFF && p.t.gotos[s * p.t.nnonterms + N_ES_SEMI] != lalr.NO_STATE)
                 et = (u8)AC_ES_SEMI;
-            if (et == 0xFF)
-            {
-                bool hasShift = false;
-                bool hasRed = false;
-                bool hasErr = false;
-                for (u32 tt = 0; tt < p.t.nterms; tt++)
-                {
-                    lalr.Entry* e2 = &p.t.act[s * p.t.nterms + tt];
-                    if (e2->kind == lalr.ACT_SHIFT) hasShift = true;
-                    else if (e2->kind == lalr.ACT_REDUCE) hasRed = true;
-                    else if (e2->kind == lalr.ACT_ERROR) hasErr = true;
-                }
-                if (hasRed && hasErr && !hasShift) et = (u8)AC_ES_SEMI;
-            }
             p.esType[s] = et;
         }
         return p;
