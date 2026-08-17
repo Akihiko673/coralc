@@ -190,7 +190,7 @@ pub struct Tlsf
         }
 
         u32 sliMap = self.sliBitmap[fli] & (~0u << sli);
-        sliMap &= ~(1u << sli); // the bucket above was already searched
+        sliMap &= ~(1u << sli);
         while (sliMap != 0)
         {
             u32 candSli = self._lsbIndex(sliMap);
@@ -244,7 +244,7 @@ pub struct Tlsf
 
         self._removeFree((FreeBlock*)block);
         u64 blockSize = self._blockSize(block);
-        if (blockSize < needSize) return null; // safety: never split a too-small block
+        if (blockSize < needSize) return null;
         u64 remaining = blockSize - needSize;
 
         if (remaining >= MIN_BLOCK_SIZE + sizeof(BlockHeader))
@@ -304,9 +304,7 @@ pub struct Tlsf
         if ((u8*)next < (u8*)self.heapEnd)
             next->sizeAndFlags &= ~BLOCK_PREV_USED;
 
-        // keep the footer fresh even for the unmerged case: it lives
-        // inside the (dead) payload while free and is read by the
-        // next block's _prevBlock walk
+        // keep the footer fresh even for the unmerged case
         self._writeFooter(block);
         self._insertFree(block);
     }

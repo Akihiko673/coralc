@@ -334,13 +334,16 @@ lalr.Grammar stmtGrammar()
     lalr.Grammar g;
     g.nterms = tok.TOK_ANON_FIRST + tok.NUM_ANON;
     g.nnonterms = N_COUNT;
-    g.prods = mman.alloc<lalr.Prod>(128);
+    g.prods = mman.alloc<lalr.Prod>(256);
     g.start = lalr.NT_BASE + N_PROG;
     g.termPrec = mman.alloc<u32>(g.nterms);
     for (u32 i = 0; i < g.nterms; i++) g.termPrec[i] = 0;
 
-    for (u32 k = 0; k < 25; k++)
+    for (u32 k = 0; k < 15; k++)
         g.termPrec[termId((u8*)TYPEKWS[k].ptr)] = PREC_TYPEKW;
+    for (u32 k = 0; k < 8; k++)
+        g.termPrec[termId((u8*)ATTRTOKS[k].ptr)] = PREC_ES + 1;
+    g.termPrec[termId((u8*)"{")] = PREC_ES + 1;
     g.termPrec[tok.TOK_IDENT] = PREC_IDENT;
     g.termPrec[termId((u8*)"default")] = PREC_DEFAULT;
     g.termPrec[termId((u8*)";")] = PREC_SEMI;
@@ -435,7 +438,7 @@ lalr.Grammar stmtGrammar()
     r3[1] = termId((u8*)".");
     r3[2] = tok.TOK_IDENT;
     addProd(&g, i++, lalr.NT_BASE + N_TBASE, 3, r3, 0, 0, AC_TDOT);
-    for (u32 k = 0; k < 25; k++)
+    for (u32 k = 0; k < 15; k++)
     {
         r1[0] = termId((u8*)TYPEKWS[k].ptr);
         addProd(&g, i++, lalr.NT_BASE + N_TYPEKW, 1, r1, 0, 0, AC_PASS);
@@ -679,7 +682,7 @@ lalr.Grammar stmtGrammar()
     r3[1] = tok.TOK_IDENT;
     r3[2] = lalr.NT_BASE + N_ATTRS;
     addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 3, r3, 0, 0, AC_NONE);
-    for (u32 k = 0; k < 0; k++)
+    for (u32 k = 0; k < 8; k++)
     {
         u32 tt = termId((u8*)ATTRTOKS[k].ptr);
         r2[0] = tt;
