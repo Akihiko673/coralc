@@ -3,6 +3,9 @@ mod mman = import("std/memory/mman.crl");
 extern u8 __bss_start;
 extern u8 __bss_end;
 
+// std.vec!<std.arr!<std.vec!<int>, 3>> do;
+// do't mind me, just checking how it looks.
+
 static void _zeroBss()
 {
     flag (ZERO_BSS) {

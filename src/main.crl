@@ -3,6 +3,8 @@ mod mman = import("std/memory/mman.crl");
 mod tok = import("token");
 mod lex = import("lexer");
 mod str = import("std/text/string.crl");
+mod ast = import("ast/ast.crl");
+mod stmtP = import("stmt_parser");
 
 const u32 MAX_FILE = 16 * 1024 * 1024;
 
@@ -90,6 +92,7 @@ i32 main(i32 argc, char** argv)
         first = 2;
     }
     i32 fails = 0;
+    stmtP.StmtParser stp = stmtP.StmtParser::new();
     for (i32 fi = first; fi < argc; fi++)
     {
         str.strView path = str.strView::fromCstr(argv[fi]);
@@ -110,14 +113,27 @@ i32 main(i32 argc, char** argv)
         lex.LexResult res = lx.lex();
         if (dump)
             dumptoks(src, res.toks, res.n, res.errs, res.nerrs);
-        else
+        else if (res.nerrs > 0)
+        {
             for (u32 i = 0; i < res.nerrs; i++)
             {
                 libc.write(2, "lex error: ", 11);
                 libc.write(2, res.errs[i].msg.ptr, res.errs[i].msg.len);
                 libc.write(2, "\n", 1);
             }
-        if (res.nerrs > 0) fails++;
+            fails++;
+        }
+        else
+        {
+            ast.Program* prog = stp.parseProgram(src, res.toks, res.n);
+            if (prog == null)
+            {
+                libc.write(2, "parse error\n", 12);
+                fails++;
+            }
+        }
+    }
+    stp.free();
     }
     libc.write(2, fails == 0 ? "LEX OK\n" : "LEX FAIL\n", fails == 0 ? 7 : 9);
     return fails == 0 ? 0 : 1;
