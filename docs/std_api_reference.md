@@ -1392,3 +1392,25 @@ pub u16 htons(u16) / u16 ntohs(u16)
 pub u32 htonl(u32) / u32 ntohl(u32)
 pub u64 htonll(u64) / u64 ntohll(u64)
 ```
+
+---
+
+## 75. `std/misc/any` — Type-Erased Pointer
+
+Type-erased holder: wraps a raw `void*` and recovers the typed pointer at the use site. Under the hood `any` is a `void*`.
+
+### `struct any` — `void* p`
+- `void* ptr()` — raw void pointer to the wrapped value
+- `bool isNull()` — true if `p == null`
+- `T* as<T>()` — reinterpret cast of `p` to `T*`
+
+**Free functions:**
+- `pub any wrap(void* value)` — store a raw pointer in an `any`
+
+---
+
+## 76. `std/misc/cast` — Generic Type Cast Through `any`
+
+```coral
+pub T cast<T>(any val)   // reinterprets the wrapped pointer as T
+```

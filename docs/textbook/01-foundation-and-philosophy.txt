@@ -60,7 +60,7 @@ It adds methods to C-style structs, so that data and the operations on that data
 
 It adds generics, designed so that the compiler fully monomorphizes them at compile time. A generic function is not a runtime dispatch mechanism. It is a compile-time template that generates concrete, specialized code for each type it is used with. This gives you the performance of hand-written C for every instantiation, and it lets the compiler catch type errors before the program ever runs.
 
-It adds traits, so that different types can share a common interface and be used polymorphically without inheriting from a common base class. A trait is a contract. Any type can implement a trait. Any code written against a trait works with any type that implements it. This is the modern way to get polymorphism: you define what a type can do, not what a type is.
+It adds traits, so that different types can share a common interface and be used polymorphically without inheriting from a common base class. A trait is a promise a type makes. Any type can implement a trait. Any code written against a trait works with any type that implements it. This is the modern way to get polymorphism: you define what a type can do, not what a type is.
 
 It adds compile-time evaluation and conditional compilation, so that code that is only valid on certain platforms, or code that computes constants at compile time, is expressed in the language itself, not in a preprocessor bolted on the side. C's preprocessor was a workaround — a text manipulation layer separate from the language. Coral puts this capability in the language, where it can be checked, reasoned about, and type-safe.
 
@@ -228,7 +228,7 @@ Two points before moving on. First, these programs are intentionally small becau
 
 Coral is often described as type-first, and the phrase is worth unpacking, because it is visible in every line of the language. In many languages a declaration leads with the name: you write the name, then a colon and the type, or you write the name and let the compiler infer the type. Coral leads with the type. A field is declared as the type, then the name. A function declaration leads with its return type, then the name, then any angle-bracket type parameters. Reading Coral, the very first word you encounter for any declaration tells you the most important thing about it: what it is, or what it produces.
 
-Why does this order matter? Because types are contracts, and the contract is the thing you most need to know when you read unfamiliar code. When you scan a Coral file, the types line up on the left of the page, and a skim of that column gives you the shape of the program: a handle here, a length there, a function that produces a configuration. You can read the structure before you read the details. In a name-first language you must read each declaration through to its type before you know what you are looking at, and a page of names alone tells you almost nothing.
+Why does this order matter? Because a type tells you what a value is and what can be done with it, and that is the thing you most need to know when you read unfamiliar code. When you scan a Coral file, the types line up on the left of the page, and a skim of that column gives you the shape of the program: a handle here, a length there, a function that produces a configuration. You can read the structure before you read the details. In a name-first language you must read each declaration through to its type before you know what you are looking at, and a page of names alone tells you almost nothing.
 
 A struct field:
 
@@ -297,7 +297,7 @@ The receiver, self, is available inside every method without ceremony. A static 
 
 The type is still named first, the operation second.
 
-The practical consequence of type-first syntax is that the compiler-enforced contract and the human-facing contract line up. When the type checker rejects a program, it is enforcing the information the reader sees on the page. The syntax, the semantics, and the documentation of a Coral program are one, and that is the point.
+The practical consequence of type-first syntax is that what the compiler enforces and what the reader sees line up. When the type checker rejects a program, it is enforcing the information the reader sees on the page. The syntax, the semantics, and the documentation of a Coral program are one, and that is the point.
 
 1.9 You Get What You Write: The Cost Model
 
@@ -309,7 +309,7 @@ A method call in Coral is a function call. There is no virtual table inserted un
 
 This honesty has a price, and Coral expects you to understand it, because the price is also visible. Generic functions are monomorphized: the compiler generates a specialized copy for every type combination the program actually uses. The speed of hand-written code comes with the code-size cost of hand-written code. This is not a hidden tax; it is a decision you can see in the generated output and control by choosing what you instantiate. A systems language does not hide its costs from you, because you are the person who has to pay them.
 
-The compiler's job in this model is verification and translation, not reinterpretation. The compiler checks the types, checks the conversions and the generic instantiations, checks the comptime assertions, and then generates machine code that does what the source says. When it optimizes, it preserves the meaning of the program; it never quietly changes the meaning. The contract between the programmer and the compiler is simple: the programmer decides what the program does, and the compiler makes it fast. Neither side is allowed to surprise the other.
+The compiler's job in this model is verification and translation, not reinterpretation. The compiler checks the types, checks the conversions and the generic instantiations, checks the comptime assertions, and then generates machine code that does what the source says. When it optimizes, it preserves the meaning of the program; it never quietly changes the meaning. The deal between the programmer and the compiler is simple: the programmer decides what the program does, and the compiler makes it fast. Neither side is allowed to surprise the other.
 
 This is the deep reason behind the design decisions throughout this chapter. Errors are values because a thrown exception is invisible control flow, a cost you did not write. Memory is explicit because an automatic collector is invisible behavior, a cost you did not write. Casts are explicit because an implicit conversion is a silent reinterpretation, a decision you did not write. The cost model is not an economic theory; it is a rule about honesty: every decision the program makes should be a decision you can point to in the source.
 

@@ -32,7 +32,7 @@ The primitive types are the units the compiler reasons about. It knows their siz
 
 The width is not a theoretical detail; it is the budget the program lives within, and a concrete example makes the budget visible. A `u8` holds the values zero through 255. A counter that marches through temperatures, byte counts, or buffer offsets in a `u8` stops being able to count at 255: the next increment cannot be represented, and the value wraps to zero. In practice that means a byte counter is the wrong type for anything that can exceed two hundred fifty-five — a file's size, a list's length, a delay in milliseconds — and the type's name is the warning, readable in the declaration before the program ever runs. The standard library's instinct is to use `u64` for anything that counts, exactly because the budget is so roomy that the width never becomes the bug: four billion billion is not a real-world count of anything in one program. The width you choose is the risk you accept, and the fixed-width types make the choice visible and deliberate instead of accidental.
 
-If you are coming from a scripting language, this is also the first real difference in how work happens. A dynamic number grows until it cannot; a typed number is decided at the declaration, and the program's correctness depends on the decision matching the data. The example to keep in your head: a counter of lines in a file, declared `u64`, is safe for any file that exists; the same counter declared `u8` is broken at line two hundred fifty-six, silently, without a single error message. Fixed widths are not a restriction imposed on the programmer; they are a contract offered to the reader — the width in the name says exactly how far the value may go, and the compiler checks the arithmetic that would go further.
+If you are coming from a scripting language, this is also the first real difference in how work happens. A dynamic number grows until it cannot; a typed number is decided at the declaration, and the program's correctness depends on the decision matching the data. The example to keep in your head: a counter of lines in a file, declared `u64`, is safe for any file that exists; the same counter declared `u8` is broken at line two hundred fifty-six, silently, without a single error message. Fixed widths are not a restriction imposed on the programmer; they are knowledge handed to the reader — the width in the name says exactly how far the value may go, and the compiler checks the arithmetic that would go further.
 
 7.4 Type Inference
 
@@ -143,7 +143,7 @@ This is the previous chapter's machinery in its full role, and the previous chap
 
 Now the interesting half, the use. The bound is no good if the compiler forgets it at the call site: when `largestArea` is instantiated for `std.vec<Circle>`, the compiler must verify that Circle actually implements Shape, and it does — the implementation block declared it, and the declaration is the fact the use is checked against. When the code instantiates the function for a type that does not implement Shape, the compiler refuses, naming the missing conformance. The promise is checked on both sides: the body trusts it, and every use must keep it. A bound that was only documentation would fail at runtime; a bound in the signature fails at the line that broke it.
 
-The bounds also document, and the documentation is a free consequence. A generic function whose parameter is bounded by a trait says, in its signature, what it requires of its argument: the reader sees `Shape T` and knows, before reading a line of the body, that the function measures shapes and that only shape types may be passed. The requirement is part of the contract, and the contract is the signature — the same reason every signature in the book states its parameter count, its types, and its return type.
+The bounds also document, and the documentation is a free consequence. A generic function whose parameter is bounded by a trait says, in its signature, what it requires of its argument: the reader sees `Shape T` and knows, before reading a line of the body, that the function measures shapes and that only shape types may be passed. The requirement is part of the signature, and the signature is the whole statement — the same reason every signature in the book states its parameter count, its types, and its return type.
 
 Coral's plainer bounded form is the function parameter, and it is worth naming as the same idea wearing work clothes. When the standard library sorts a vector, it does not invent a `Sortable` trait and require `T` to implement it; it takes an explicit comparison function as a parameter, `bool less(T, T)`, and the requirement is stated in the parameter list — the sort needs to know which of two elements comes first, and the caller provides the knowledge. The trait bound states a promise by name; the function parameter states the promise by value. Both say, in the signature, what the generic needs from its arguments, and both are checked at the call.
 
@@ -232,7 +232,7 @@ That is also the contrast with the typedef of the previous section, and the two 
 
 7.11 Opaque Types
 
-An opaque type hides its implementation. The user of the type sees its name and its operations, and the type's internals are not part of the type's contract. The term "opaque" is exactly right: you can see through glass to the mechanism, but an opaque type is frosted; you know its size and its behavior, never its insides.
+An opaque type hides its implementation. The user of the type sees its name and its operations, and the type's internals are not part of what the type shows you. The term "opaque" is exactly right: you can see through glass to the mechanism, but an opaque type is frosted; you know its size and its behavior, never its insides.
 
 The opaque pattern in Coral is a struct whose fields are a fixed block of storage, written for the implementation's benefit rather than the user's. The `Regex` type is the canonical example. This is the real declaration from `text/regex.crl`:
 
@@ -445,7 +445,7 @@ The guide's section on dynamic typing asks about duck typing and structural typi
 
 Duck typing is the runtime version of the idea that a value's behavior is what matters: if it quacks like a duck, it is a duck, and the check happens when the method is called. In a duck-typed language you can pass anything with an `area()` to the code that wants an `area()`; the failure — a string with no `area()` — appears at the call, at runtime. Coral does not have duck typing, because Coral's checks happen at compile time, and a value's behavior is established by its type.
 
-Protocol-oriented design is the compile-time version of the idea. A protocol is a named contract, and a type's conformance to the protocol is declared and checked. The trait is the protocol, the implementation block establishes conformance, and the generic function over the trait calls the protocol's methods. The design is the previous chapter's trait machinery, and it is the answer to the duck-typing question: the duck-ness is a contract, declared by the type and checked by the compiler. The shape of a duck is checked when it is defined, not when it quacks.
+Protocol-oriented design is the compile-time version of the idea. A protocol is a named set of rules, and a type's conformance to the protocol is declared and checked. The trait is the protocol, the implementation block establishes conformance, and the generic function over the trait calls the protocol's methods. The design is the previous chapter's trait machinery, and it is the answer to the duck-typing question: the duck-ness is a declared fact, checked by the compiler. The shape of a duck is checked when it is defined, not when it quacks.
 
 A minimum of machinery makes the design concrete. A storefront calls its payment providers through one door: every provider can `charge(cents)` and can answer `canCancel(order)`. The door is a trait — the protocol — and each provider declares that it implements it:
 
@@ -473,25 +473,25 @@ The checkout function takes the protocol, not a provider:
         provider.charge(cents);
     }
 
-The duck-typed version of the same call site would check `charge` exists when the call runs, and the check would be needed for every provider, forever, at runtime. The Coral version declares both conformance blocks once, and the checkout call is checked at build time: `checkout(paypal, 2500)` compiles because `PayPal` declares the trait, and it would not compile if some third provider — or a string — were passed by accident. The protocol is the one door, the types state that they fit through it, and the compiler is the doorman who checks every visitor before the shop opens. The duck is checked at its definition, and the quacking is the signed contract saying quack.
+The duck-typed version of the same call site would check `charge` exists when the call runs, and the check would be needed for every provider, forever, at runtime. The Coral version declares both conformance blocks once, and the checkout call is checked at build time: `checkout(paypal, 2500)` compiles because `PayPal` declares the trait, and it would not compile if some third provider — or a string — were passed by accident. The protocol is the one door, the types state that they fit through it, and the compiler is the doorman who checks every visitor before the shop opens. The duck is checked at its definition, and the quack is part of the signed declaration.
 
-The structural typing version of the idea, where a type conforms to a contract by having the right shape without declaring it, is not Coral's model. Coral's conformance is nominal: a type implements a trait because it has an implementation block, not because it happens to have the right methods. The nominal conformance is explicit, and the explicit conformance is what the compiler checks. If two structs both happen to have a field called `name`, neither implements the `Named` trait unless one says so; the coincidence of shape proves nothing. The protocol is the interface, the implementation is the declaration, and the checking is where the rigor lives.
+The structural typing version of the idea, where a type qualifies by having the right shape without declaring it, is not Coral's model. Coral's conformance is nominal: a type implements a trait because it has an implementation block, not because it happens to have the right methods. The nominal conformance is explicit, and the explicit conformance is what the compiler checks. If two structs both happen to have a field called `name`, neither implements the `Named` trait unless one says so; the coincidence of shape proves nothing. The protocol is the interface, the implementation is the declaration, and the checking is where the rigor lives.
 
 7.23 What a Type Is
 
-A type is a contract between the program and the compiler. When a value has a type, the compiler knows what can be done with it: what operations exist, what memory it occupies, what it can become. The contract runs in both directions. The type promises the compiler what the value is, and the compiler promises the program that every use of the value is checked against that promise. A program that compiles is a program whose values were used according to their types.
+A type is an agreement between the program and the compiler. When a value has a type, the compiler knows what can be done with it: what operations exist, what memory it occupies, what it can become. The agreement runs both ways. The type promises the compiler what the value is, and the compiler promises the program that every use of the value is checked against that promise. A program that compiles is a program whose values were used according to their types.
 
-The type is also a contract with the reader. A signature like
+The type is also a promise to the reader. A signature like
 
     std.Result<Config, ParseError> loadConfig(std.strView path)   // and its call sites
 
-tells the reader everything the code needs to know before the body is read: the function takes text, and it produces either a configuration or a parse error. The reader can see the shape of the program, the paths and the outcomes, without executing a line. This is the sense in which the type system is the documentation: the types say what the program means, and the prose says why. When you read `std.option<u64>` as a return type, the function is telling you the truth it could have hidden: sometimes there is no answer, and you must look. Reading the type gives you the contract the body is bound to honor.
+tells the reader everything the code needs to know before the body is read: the function takes text, and it produces either a configuration or a parse error. The reader can see the shape of the program, the paths and the outcomes, without executing a line. This is the sense in which the type system is the documentation: the types say what the program means, and the prose says why. When you read `std.option<u64>` as a return type, the function is telling you the truth it could have hidden: sometimes there is no answer, and you must look. Reading the type tells you what the body is bound to do.
 
-The type is finally a contract with the machine. A `u64` is sixty-four bits, an `f64` is the IEEE double format, a pointer is an address, a struct is its fields laid out in order. The type determines the representation, and the representation determines the cost. The rigor of the type system is not academic; it is the same rigor that decides how many bytes a value occupies and how the hardware treats it. The type is where the language's abstraction meets the machine's reality, and the meeting is exact.
+The type is finally a promise the machine keeps. A `u64` is sixty-four bits, an `f64` is the IEEE double format, a pointer is an address, a struct is its fields laid out in order. The type determines the representation, and the representation determines the cost. The rigor of the type system is not academic; it is the same rigor that decides how many bytes a value occupies and how the hardware treats it. The type is where the language's abstraction meets the machine's reality, and the meeting is exact.
 
 7.24 The Type Checker at Work
 
-The compiler's type checker is the enforcement arm of the type system. It walks the program, giving every expression a type, and it verifies that every use matches its type's contract. The checking is the machine that makes the types real.
+The compiler's type checker is the enforcement arm of the type system. It walks the program, giving every expression a type, and it verifies that every use matches what its type allows. The checking is the machine that makes the types real.
 
 The checker gives each expression the type the rules say it has. A literal has its type, a variable has its declared type, a function call has its return type, an operator has the type its operands produce. The checker then verifies the seams: an assignment requires the same type on both sides, a function argument requires the declared parameter type, an operation requires the operand types its rules demand. A mismatch is an error at the seam, reported with the code that caused it.
 
@@ -511,7 +511,7 @@ The same seam catches the subtler mistake, the one where both sides are nearly r
 
 The last line is the kind of mistake C compilers wave through with a quiet warning, if that — an `i32` widens to a `u64` silently in C, and the bug that follows is the one where a negative count becomes four billion. Coral's checker refuses the line, and the refusal is the conversion policy of section 7.16 wearing its enforcement uniform: the writer must write the cast, and the cast is the statement that the widening was seen and intended. The checker never decides a type change on its own; it reports the seam and waits for the writer's word.
 
-The checking is total in the sense that it covers the whole program. Every expression is typed, every seam is verified, and every function is checked against its own contract before it is used. The totality is what makes the type system's promises real: a program that compiles has been checked everywhere, not just in the parts the compiler noticed. The rigor is uniform, and the uniformity is the trust.
+The checking is total in the sense that it covers the whole program. Every expression is typed, every seam is verified, and every function is checked against its own signature before it is used. The totality is what makes the type system's promises real: a program that compiles has been checked everywhere, not just in the parts the compiler noticed. The rigor is uniform, and the uniformity is the trust.
 
 7.25 A Worked Example: Modeling With Types
 
@@ -578,7 +578,7 @@ The types carry the program's meaning. The enum names the categories and prevent
 
 7.26 Types and the Machine: Layout
 
-A type is not only a contract; it is a layout. The machine stores values as bytes, and the type decides how the bytes are arranged. Understanding the layout is understanding the cost of a type, and the cost is where the rigor meets the machine.
+A type is not only a set of rules; it is a layout. The machine stores values as bytes, and the type decides how the bytes are arranged. Understanding the layout is understanding the cost of a type, and the cost is where the rigor meets the machine.
 
 A struct's fields are laid out in declaration order, each field at the address the platform's alignment requires. A struct with a `u64`, a `u8`, and a `u64` has its first `u64` at the start, its `u8` after it, and its second `u64` at the next alignment boundary, with padding between the `u8` and the `u64`. The padding is the platform's price for alignment, and the size of the struct includes it. The order of the fields decides the padding, which is why a struct's fields are arranged with the wider fields first when memory matters. This is a practical lesson, not a trivia: two structs holding the same fields in the other order can differ by several bytes each, and a million of them in a vector differ by millions of bytes.
 
@@ -606,9 +606,9 @@ The `sizeof` operator reports a type's size, and the standard library uses it wh
 
 7.27 Reading Types
 
-The habit of reading types is the habit the type-first language rewards. A reader who encounters a signature reads it as a sentence: the return type is the result, the parameters are the inputs, and the types are the contract.
+The habit of reading types is the habit the type-first language rewards. A reader who encounters a signature reads it as a sentence: the return type is the result, the parameters are the inputs, and the types carry the meaning.
 
-Reading a generic type means reading its parameters. A `std.hashmap<K, V>` says the keys and values without naming them; a `std.vec<T>` says the elements; an `std.arr<T, N>` says the elements and the count. The generic type's parameters are its whole structure, and the type arguments at the use are the structure made concrete. Reading a bounded type parameter, a `Shape T`, reads the requirement: the type must implement the contract, and the contract is what the body can use. A signature that says `largestArea<Shape T>` tells you the function measures shapes it never named, and the bound is the promise that keeps the body honest.
+Reading a generic type means reading its parameters. A `std.hashmap<K, V>` says the keys and values without naming them; a `std.vec<T>` says the elements; an `std.arr<T, N>` says the elements and the count. The generic type's parameters are its whole structure, and the type arguments at the use are the structure made concrete. Reading a bounded type parameter, a `Shape T`, reads the requirement: the type must implement the trait, and the trait is what the body can use. A signature that says `largestArea<Shape T>` tells you the function measures shapes it never named, and the bound is the promise that keeps the body honest.
 
 Reading an option reads the possibility of absence, and reading a `Result` reads the possibility of failure. The types say what the function may not produce, which is as important as what it produces. A function returning an `std.option<u64>` does not promise a `u64`; it promises a `u64` or nothing, and the reader handles both before relying on it. The types are read as the program's honest description, and the honesty is the point of the type-first language: everything that can be said about a value's behavior, the types say it, and the reader reads it.
 
@@ -664,7 +664,7 @@ The `comptime` block compares types at compile time, selecting code by type para
 
 Coral has no reflection, no runtime type checking, and no `typeof` or `instanceof`, because the types are checked at compile time and absent at runtime.
 
-A type is a contract with the compiler, the reader, and the machine: it states what a value is, what can be done with it, and how it is stored.
+A type is an agreement with the compiler, the reader, and the machine: it states what a value is, what can be done with it, and how it is stored.
 
 The type checker walks the program, gives every expression a type, and verifies every seam, so a compiled program has been checked in full.
 
@@ -674,6 +674,6 @@ A type is a layout: struct fields lie in declaration order with platform alignme
 
 Reading a signature is reading a sentence: the return type is the result, the parameters are the inputs, and the option and `Result` types state the absence and failure the function may produce.
 
-Protocol-oriented design replaces duck typing: traits are declared contracts, conformance is nominal and checked, and generics over traits call the protocol's methods.
+Protocol-oriented design replaces duck typing: traits are promises a type declares, conformance is nominal and checked, and generics over traits call the protocol's methods.
 
 The type system is the type-first principle in full, and a program that compiles is a program whose types are consistent.

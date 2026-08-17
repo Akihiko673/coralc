@@ -4,27 +4,3 @@ pub T cast<T>(any val)
 {
     return (T)val.ptr();
 }
-
-/*
-make reference to attributes.txt, it hold definintions for atributes that neede to be used. these aare compiler attributes
-pub T safeCast<T>(any val)
-{
-    comptime {
-        if (T == intrinsic_int_signed && (@[byte_order] : (T)) != (@[byte_order] : (T)) )
-        /*
-        if ((T == i64 || i32 || i16 || i8) && (typeof(val) == i64, i32)) return (T)val;
-        if ((T == i64 || i32) && (typeof(val) == i8, i16))
-        {
-            @[throw_error_allow] : ("Value and presicion may be lost when converting from bigger to smaller types);
-            return (T)val;
-        }
-        if ((T == u64 || u32 || u16 || u8) && (typeof(val) == u64, u32, u16, u8)) return (T)val;
-        if ((T == i64 || i32 || i16 || i8) && (typeof(val) == i64, i32, i16, i8)) return (T)val;
-        if ((T == u64 || u32 || u16 || u8) && (typeof(val) == u64, u32, u16, u8)) return (T)val;
-        if (((T == i64 || i32 || i16 || i8) && (typeof(val) == u64, u32, u16, u8)) {
-            @[throw_error_allow] : ("Explicit conversion from signed to unsigned type!\nMake sure that the conversion is safe");
-            return (T)val;
-        }
-    }
-}
-*/

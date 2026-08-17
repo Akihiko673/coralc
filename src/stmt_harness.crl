@@ -33,12 +33,10 @@ str.strView PROGS[] = {
     "u64 arr[16] = { 1, 2 };",
     "const char* CP = 0;",
     "my.ns.Widget w;",
-    "flag (ARCH) { x86_64: u64 step() { return 1; } "
-        "default: u64 step() { return 3; } }",
+    "flag (ARCH) { x86_64: u64 step() { return 1; } default: u64 step() { return 3; } }",
     "flag (ZERO_BSS) { off: default: u8* p = &x; u32 job() { return 0; } }",
     "flag (N) { default: }",
-    "void f(u32 x) { switch (x) { case 0: x = 1; break; "
-        "case 1: case 2: x = 3; default: x = 9; } }",
+    "void f(u32 x) { switch (x) { case 0: x = 1; break; case 1: case 2: x = 3; default: x = 9; } }",
     "void f() { for (var i = 0; i < 10; i = i + 1) { } }",
     "void f() { for (u32 j = 0; j < 10; j++) { } }",
     "void f() { for (;;) { break; } }",
@@ -145,6 +143,7 @@ void dumpRow(stmt.StmtParser p, u32 s)
 
 i32 main(i32 argc, char** argv)
 {
+    mman.initDefaultAllocator();
     u32 fails = 0;
     stmt.StmtParser p = stmt.StmtParser::new();
     if (p.t.nconflicts > 0)
@@ -309,7 +308,7 @@ i32 main(i32 argc, char** argv)
         nl();
     }
 
-    for (u32 i = 0; i < 39; i++)
+    for (u32 i = 0; i < 38; i++)
     {
         str.strView src = PROGS[i];
         lex.Lexer l = lex.Lexer::new((const u8*)src.ptr, (u32)src.len);

@@ -8,7 +8,7 @@ const u32 MAX_FILE = 16 * 1024 * 1024;
 
 u8* readFile(str.strView path, u32* outLen)
 {
-    i32 fd = libc.open(path.ptr, 0, 0); // O_RDONLY
+    i32 fd = libc.open(path.ptr, 0, 0);
     if (fd < 0) return null;
     u64 cap = 65536;
     u8* buf = mman.alloc<u8>(cap);
@@ -80,6 +80,7 @@ void selfNum(u8* buf, u32* bl, u32 v)
 
 i32 main(i32 argc, char** argv)
 {
+    mman.initDefaultAllocator();
     if (argc < 2) return 1;
     bool dump = false;
     i32 first = 1;

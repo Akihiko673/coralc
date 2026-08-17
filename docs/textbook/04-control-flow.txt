@@ -104,7 +104,7 @@ A guard clause can also dispose of a whole class of failures in one condition ea
         return c->workers > 0 && c->workers <= MAX_WORKERS;
     }
 
-The last line combines two bounds in one short-circuited condition, and the function reads top to bottom as the config's contract, each requirement stated where it fails and nothing left for the body to discover.
+The last line combines two bounds in one short-circuited condition, and the function reads top to bottom as the config's rules, each requirement stated where it fails and nothing left for the body to discover.
 
 Conditions that test a value against several possibilities are written either as if chains or as switches, depending on the situation. The rule of thumb is this: if the decision is a chain of independent tests, or the tests are complex, use if chains; if the decision is choosing among a fixed set of values of one expression, use a switch. The switch is the subject of the next sections.
 
@@ -272,7 +272,7 @@ The while loop is also the loop of repeated division, the workhorse of digit ext
         digits++;
     }
 
-The loop runs once per decimal digit, the counter accumulates the divisions, and the loop naturally terminates because every division moves n toward zero. It is also very easy to prove it terminates, which is exactly what you want from a loop: the condition moves a value strictly toward a bound. Reading the loop as a search, scan, or repeated-division pattern, the while form says what the loop is for: it continues while a condition holds, and the condition is the loop's whole contract.
+The loop runs once per decimal digit, the counter accumulates the divisions, and the loop naturally terminates because every division moves n toward zero. It is also very easy to prove it terminates, which is exactly what you want from a loop: the condition moves a value strictly toward a bound. Reading the loop as a search, scan, or repeated-division pattern, the while form says what the loop is for: it continues while a condition holds, and the condition is the whole of what the loop promises.
 
 The while loop is also the pointer-walk, the traversal of a chain of nodes, and the linked list is its home. The walk is the whole list iteration in three lines, and the loop's condition says exactly when the chain ends:
 
@@ -392,13 +392,13 @@ The ranged for is not a separate kind of iteration invented for one collection t
 
 4.11 The Iterator Protocol
 
-The ranged for works through a protocol, a small set of operations that a type implements to say how it is iterated. The protocol is the contract between the container and the loop, and understanding it is understanding what the ranged for actually does under the hood.
+The ranged for works through a protocol, a small set of operations that a type implements to say how it is iterated. The protocol is the deal between the container and the loop, and understanding it is understanding what the ranged for actually does under the hood.
 
 A type that can be iterated provides a way to obtain an iterator over its elements. The iterator tracks the current position, provides the current element, and advances to the next position. The standard collections implement this protocol: a vector is iterated by walking its contiguous storage from the first element to the last, a linked list by walking its node chain, a map by walking its entries. Each collection knows how to walk itself, and the ranged for does not need to know the difference.
 
 When you write a ranged for over a container, the compiler lowers it to the protocol operations: obtain the iterator for this container, and while the iterator has a next element, bind the loop variable to the current element and run the body, then advance the iterator. The exact lowering depends on the container's storage, and the compiler picks the efficient walk for each type. For a contiguous vector, the walk is a pointer that advances across the storage; for a linked list, it is a node pointer following links. The protocol hides the storage while preserving its performance.
 
-The point is worth stating plainly: the ranged for is not a macro that only works on known containers. It is defined over a contract, and your own types can join. If you write a Tree that can be walked in order, implementing the protocol makes for (var n : tree) work, and the loop body never needs to know the traversal details.
+The point is worth stating plainly: the ranged for is not a macro that only works on known containers. It is defined over the protocol, and your own types can join. If you write a Tree that can be walked in order, implementing the protocol makes for (var n : tree) work, and the loop body never needs to know the traversal details.
 
 The iterator protocol is how Coral keeps the ranged for general without sacrificing efficiency. A container's iteration is implemented by the container itself, once, in the way that is fastest for that container's layout. Every ranged for over that container reuses that implementation. There is no generic walker that could be slower than the container's natural traversal, because the container defines its own traversal.
 
@@ -536,7 +536,7 @@ The assert statement is Coral's built-in runtime check. It takes a bool expressi
     assert(self.ptr != null);
     assert(factor != 0);
 
-The standard library uses assert pervasively as a contract check at the top of methods and in the middle of algorithms. The vector's access methods assert their index is in range. The priority queue asserts it is not popped while empty. The duration's division asserts its divisor is nonzero. Each assert states, in code, a fact the method relies on, and the assertion is checked at runtime so a violation is caught with a precise location rather than manifesting as a memory error.
+The standard library uses assert pervasively, at the top of methods and in the middle of algorithms, to state what must be true. The vector's access methods assert their index is in range. The priority queue asserts it is not popped while empty. The duration's division asserts its divisor is nonzero. Each assert states, in code, a fact the method relies on, and the assertion is checked at runtime so a violation is caught with a precise location rather than manifesting as a memory error.
 
 The role of assert is to catch programmer error, not to handle expected conditions. An assertion that fails is a bug in the program, and the assertion is the tripwire that catches it at the moment of violation, with the line number and condition in the diagnostic. Expected conditions, conditions that arise from user input or external events, are handled with the Result machinery, not with asserts. The distinction is the same one C programmers draw: assert for what must be true, Result for what might not be.
 
@@ -544,7 +544,7 @@ The distinction is why an assert reads as a statement about the code, not about 
 
     u64 divide(u64 a, u64 b)
     {
-        assert(b != 0);        // "this is a bug if b is zero" — the caller broke the contract
+        assert(b != 0);        // "this is a bug if b is zero" — the caller broke the rules
         return a / b;
     }
 
@@ -600,7 +600,7 @@ The Result type provides the two constructors, a function to create an ok result
 
 The Result type works for any error type. A small program might use an integer code, a string message, or an enum describing the failure kinds. The error type is a type parameter, so the programmer chooses the error representation that fits the function. The standard library uses Result where a fallible operation must distinguish success from failure and carry a value in the success case.
 
-The caller's side shows why the signature is the contract. A function that opens a configuration file receives a Result and must handle both states before touching the value:
+The caller's side shows why the signature tells the whole story. A function that opens a configuration file receives a Result and must handle both states before touching the value:
 
     std.Result<Config, ParseError> result = loadConfig(path);
     if (result.isOk())
@@ -708,11 +708,11 @@ The defers guarantee that the file is closed and the buffer is disposed no matte
 
 The smart pointer types extend the same idea to ownership. A smart pointer owns the object it points to and releases it when the pointer is destroyed. A shared pointer tracks multiple owners and releases the object when the last owner is gone. These types make the release automatic at the end of the pointer's scope, so an error path that exits a scope releases the owned objects without an explicit defer. The ownership is in the type, and the release is guaranteed.
 
-Coral has no destructors in the C++ sense and no RAII as a language-forced contract on every type. What it has is the defer statement for explicit guaranteed cleanup, and smart pointer types for ownership-based release. Both are explicit, both are visible in the code, and neither depends on a hidden unwinding mechanism. The combination covers the resource cleanup problem completely, without the machinery Coral rejected.
+Coral has no destructors in the C++ sense and no RAII forced onto every type by the language. What it has is the defer statement for explicit guaranteed cleanup, and smart pointer types for ownership-based release. Both are explicit, both are visible in the code, and neither depends on a hidden unwinding mechanism. The combination covers the resource cleanup problem completely, without the machinery Coral rejected.
 
 4.27 Reasoning About Loops: Invariants
 
-A loop that runs is a loop that can be trusted, and the way to make a loop trustworthy is the loop invariant: a property that is true when the loop begins, true after every iteration, and therefore true when the loop ends. The invariant is the loop's contract, and reading and writing loops through their invariants is how a programmer knows the loop does what it claims.
+A loop that runs is a loop that can be trusted, and the way to make a loop trustworthy is the loop invariant: a property that is true when the loop begins, true after every iteration, and therefore true when the loop ends. The invariant is the loop's promise, and reading and writing loops through their invariants is how a programmer knows the loop does what it claims.
 
 Consider a running sum:
 
@@ -851,7 +851,7 @@ The cleanest demonstration of the error model is a function that acquires a reso
         return std.Result<u64, ParseErr>::ok(total);
     }
 
-The file is opened and immediately protected by defer, so every return, the error return inside the loop and the success return at the end, runs fileClose on the way out. The parse logic handles each character: digits accumulate into the total, commas are skipped, and any other character is an error returned immediately. The error return is the failure path, the deferred close runs on it, and the function's contract, sum the numbers or report an invalid character, is stated by its Result type. The error handling is written where the failure is detected, and the cleanup is written where the resource is acquired, and neither depends on machinery outside the code.
+The file is opened and immediately protected by defer, so every return, the error return inside the loop and the success return at the end, runs fileClose on the way out. The parse logic handles each character: digits accumulate into the total, commas are skipped, and any other character is an error returned immediately. The error return is the failure path, the deferred close runs on it, and the function's purpose, sum the numbers or report an invalid character, is stated by its Result type. The error handling is written where the failure is detected, and the cleanup is written where the resource is acquired, and neither depends on machinery outside the code.
 
 4.31 Control Flow and the Machine
 

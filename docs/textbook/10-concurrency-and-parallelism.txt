@@ -220,7 +220,7 @@ Three hazards make the protocol rigid, and each has a name. The *lost wakeup*: a
     ...
     self.mutex.unlock();
 
-That is the canonical wait, and the `while` is not a style choice; it is the contract. The next section shows the canonical wait doing its job, in a complete program.
+That is the canonical wait, and the `while` is not a style choice; it is what makes the wait correct. The next section shows the canonical wait doing its job, in a complete program.
 
 10.14 The Producer and the Consumer: A Complete Exchange
 
@@ -454,7 +454,7 @@ The concrete shape is the handoff: one thread prepares data and flags it ready; 
 
 The consumer's `while` loop is a busy-wait, and the text will not pretend it is good style — real programs use the join or the condition variable of the earlier sections, and the busy-wait is a teaching scaffold, or a last-resort wait that must be short. What the example proves is ordering. The producer wrote 1024 values and then `store(1)`. The consumer that sees `load() == 1` is guaranteed to see all 1024 values — the store released the writes, the load acquired them, and the publish-subscribe pair moved the data intact. If `ready` were an ordinary `u64`, this program could read half-written data on a weakly-ordered machine, no matter how "obviously" the flag comes last. It is the same guarantee the mutex gave in the previous chapter, restated for the word-sized tool.
 
-The standard library's atomics compile to the strong end of the spectrum. The `load` and `store` on x86 carry the fences, and the aarch64 forms use the acquire-release ldar/stlr instructions by construction; the compare-exchange uses the locked compare-swap on x86 and the load-exclusive/store-exclusive loop on aarch64. Coral does not yet offer the whole menu of orderings — the relaxed and the one-way — and the omission is a stance rather than a gap: the weak orderings are where the deepest bugs live, and the tools the language ships are the ones whose intuitions match the mutex pair the program already knows. The contract, then, is the one from the previous chapter, restated for the word-sized case: a shared value is read and written through the atomic, the atomic's operations are ordered by the platform's acquire-release semantics, and the program that reads the value without the atomic while another thread writes it with one has a race, with all the horror the previous chapter gave that word. The atomic is not a mutex you can forget; it is a mutex for one word.
+The standard library's atomics compile to the strong end of the spectrum. The `load` and `store` on x86 carry the fences, and the aarch64 forms use the acquire-release ldar/stlr instructions by construction; the compare-exchange uses the locked compare-swap on x86 and the load-exclusive/store-exclusive loop on aarch64. Coral does not yet offer the whole menu of orderings — the relaxed and the one-way — and the omission is a stance rather than a gap: the weak orderings are where the deepest bugs live, and the tools the language ships are the ones whose intuitions match the mutex pair the program already knows. The promise, then, is the one from the previous chapter, restated for the word-sized case: a shared value is read and written through the atomic, the atomic's operations are ordered by the platform's acquire-release semantics, and the program that reads the value without the atomic while another thread writes it with one has a race, with all the horror the previous chapter gave that word. The atomic is not a mutex you can forget; it is a mutex for one word.
 
 10.19 The ABA Problem
 
@@ -832,7 +832,7 @@ The thread pool is the real worker pattern: a fixed number of threads, a queue u
 
 Deadlock needs mutual exclusion, hold-and-wait, no preemption, and circular wait; the bank transfer that takes two locks in conflicting order is the real-world shape, and the fixes are prevention by lock ordering, detection in the wait-for graph, and avoidance by the Banker's algorithm.
 
-The atomics are the one-word tools: load, store, fetchAdd, fetchSub, and compareExchange, compiling to the platform's own locked instructions — the ticket generator and the progress counter are their everyday shapes — and the contract covers exactly one word.
+The atomics are the one-word tools: load, store, fetchAdd, fetchSub, and compareExchange, compiling to the platform's own locked instructions — the ticket generator and the progress counter are their everyday shapes — and each one covers exactly one word.
 
 The flag-and-data handoff is the ordering bargain: the store publishes the writes, the load acquires them, and the data crosses the boundary intact — the same acquire-release pair the mutex uses, in the atomics' vocabulary.
 

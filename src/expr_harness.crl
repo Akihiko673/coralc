@@ -218,6 +218,7 @@ bool check(bool ok, u8* what, u32 wl)
 
 i32 main(i32 argc, char** argv)
 {
+    mman.initDefaultAllocator();
     u32 fails = 0;
     exprP.ExprParser p;
     p = exprP.ExprParser::new();

@@ -1,5 +1,3 @@
-Excellent—here's how to think about those attributes in your compiler:
-
 ## Semantic Differences
 
 ```

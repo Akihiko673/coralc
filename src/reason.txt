@@ -17,8 +17,15 @@
 //
 // all attributes must be implemented, used. addition of constexpr or final, for compile time constants.
 
-// Should we add destructors to run when a variable leaves, ot should we do the time the type it i sued on goes out of scope, it is trait drop {}, where structs can use
-// function declarations for each std or lib type, then the compiler will auto inject on default mode, unless turned on via @[explicit_destructor]?
+// Cleanup is trait-based: a `Drop` trait in the language (contract: `void drop()`),
+// implemented by each std/lib type that owns resources. No language-level
+// destructors, no auto-injected destructor declarations, no `@[explicit_destructor]`.
+//
+// `@no_drop` is a file-level attribute, like `@[forced_pointer]` and `@[no_warn_unsafe]`:
+// it turns drop injection off for the whole file. Std files still define their drops;
+// the attribute stops the compiler from doing variable/type tracking for cleanup in
+// those modules, which is what keeps the std compile fast. User code that imports
+// those modules gets the auto-drop; the std itself skips the tracking.
 
 // then, the implecit self, but for const pointers, it'll be something like. rather than passin const self* as argi
 // struct vec {

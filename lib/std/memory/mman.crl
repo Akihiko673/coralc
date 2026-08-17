@@ -135,12 +135,6 @@ i32 _memcmp(const void* a, const void* b, u64 n)
     return 0;
 }
 
-// OS page allocation via direct syscalls
-// Linux and macOS syscall ABIs per architecture, Windows via the
-// kernel32 VirtualAlloc/VirtualFree APIs. The platform/ARCH flags are
-// set by the build via --flag or left as default.
-// 32, wasm (memory.grow), macOS syscalls on non x86_64/arm64, more os
-
 extern("kernel32") void* VirtualAlloc(void* lpAddress, u64 dwSize, u32 flAllocationType, u32 flProtect);
 extern("kernel32") bool VirtualFree(void* lpAddress, u64 dwSize, u32 dwFreeType);
 

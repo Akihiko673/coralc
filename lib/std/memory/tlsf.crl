@@ -75,31 +75,19 @@ pub struct Tlsf
 
     void _getIndex(u64 size, u32* fli, u32* sli)
     {
-        // for sizes up to ~2^36, this works with u64 shift
-        u32 raw;
-        if (size >= (1u << 14))
-            raw = (u32)(size >> 4);
-        else if (size >= (1u << 6))
-            raw = (u32)(size >> 4);
+        // fixed 16-byte bucket width: every block in a bucket
+        // has a size within 16 bytes of the request's floor,
+        // so the fit-walk in _findSuitableBlock stays short.
+        u32 bucket;
+        if (size < 16u)
+            bucket = 1;
+        else if (size < 0x100000000u)
+            bucket = (u32)(size >> 4);
         else
-            raw = 1;
+            bucket = 0xFFFFFFFFu;
 
-        *fli = self._fls(raw);
-        if (*fli < 1) *fli = 1;
-
-        if (*fli >= 5)
-        {
-            u32 shift = *fli - 4;
-            if (shift < 32)
-                *sli = ((u32)(size >> (shift + 4))) & (SLI_COUNT - 1);
-            else
-                *sli = 0;
-        }
-        else
-        {
-            *sli = (raw << (4 - *fli)) & (SLI_COUNT - 1);
-        }
-
+        *fli = bucket >> 5;
+        *sli = bucket & (SLI_COUNT - 1);
         if (*fli >= FLI_COUNT) *fli = FLI_COUNT - 1;
     }
 
@@ -190,21 +178,56 @@ pub struct Tlsf
         u32 fli = *outFli;
         u32 sli = *outSli;
 
-        u32 sliMap = self.sliBitmap[fli] & (~0u << sli);
-        if (sliMap != 0)
+        // pick the first block in a bucket whose size is >= size;
+        // width-16 buckets make this walk at most a few nodes
+        FreeBlock* fb = self.freeLists[fli][sli];
+        if (fb != null)
         {
-            *outSli = self._lsbIndex(sliMap);
-            return (BlockHeader*)self.freeLists[*outFli][*outSli];
+            while (fb != null && self._blockSize(&fb->header) < size)
+                fb = fb->next;
+            if (fb != null)
+                return (BlockHeader*)fb;
+        }
+
+        u32 sliMap = self.sliBitmap[fli] & (~0u << sli);
+        sliMap &= ~(1u << sli); // the bucket above was already searched
+        while (sliMap != 0)
+        {
+            u32 candSli = self._lsbIndex(sliMap);
+            fb = self.freeLists[fli][candSli];
+            while (fb != null && self._blockSize(&fb->header) < size)
+                fb = fb->next;
+            if (fb != null)
+            {
+                *outFli = fli;
+                *outSli = candSli;
+                return (BlockHeader*)fb;
+            }
+            sliMap &= ~(1u << candSli);
         }
 
         u32 fliMap = self.fliBitmap & (~0u << (fli + 1));
-        if (fliMap == 0) return null;
-
-        *outFli = self._lsbIndex(fliMap);
-        sliMap = self.sliBitmap[*outFli];
-        if (sliMap == 0) return null;
-        *outSli = self._lsbIndex(sliMap);
-        return (BlockHeader*)self.freeLists[*outFli][*outSli];
+        while (fliMap != 0)
+        {
+            u32 candFli = self._lsbIndex(fliMap);
+            u32 candSliMap = self.sliBitmap[candFli];
+            while (candSliMap != 0)
+            {
+                u32 candSli = self._lsbIndex(candSliMap);
+                fb = self.freeLists[candFli][candSli];
+                while (fb != null && self._blockSize(&fb->header) < size)
+                    fb = fb->next;
+                if (fb != null)
+                {
+                    *outFli = candFli;
+                    *outSli = candSli;
+                    return (BlockHeader*)fb;
+                }
+                candSliMap &= ~(1u << candSli);
+            }
+            fliMap &= ~(1u << candFli);
+        }
+        return null;
     }
 
     void* alloc(u64 size)
@@ -221,6 +244,7 @@ pub struct Tlsf
 
         self._removeFree((FreeBlock*)block);
         u64 blockSize = self._blockSize(block);
+        if (blockSize < needSize) return null; // safety: never split a too-small block
         u64 remaining = blockSize - needSize;
 
         if (remaining >= MIN_BLOCK_SIZE + sizeof(BlockHeader))
@@ -260,7 +284,7 @@ pub struct Tlsf
             if (prev != null && (prev->sizeAndFlags & BLOCK_USED) == 0)
             {
                 self._removeFree((FreeBlock*)prev);
-                u64 combined = self._blockSize(prev) + sizeof(BlockHeader) + self._blockSize(block);
+                u64 combined = self._blockSize(prev) + self._blockSize(block);
                 prev->sizeAndFlags = combined | (prev->sizeAndFlags & BLOCK_PREV_USED);
                 self._writeFooter(prev);
                 block = prev;
@@ -271,7 +295,7 @@ pub struct Tlsf
         if ((u8*)next < (u8*)self.heapEnd && (next->sizeAndFlags & BLOCK_USED) == 0)
         {
             self._removeFree((FreeBlock*)next);
-            u64 combined = self._blockSize(block) + sizeof(BlockHeader) + self._blockSize(next);
+            u64 combined = self._blockSize(block) + self._blockSize(next);
             block->sizeAndFlags = combined | (block->sizeAndFlags & BLOCK_PREV_USED);
             self._writeFooter(block);
             next = self._nextBlock(block);
@@ -280,6 +304,10 @@ pub struct Tlsf
         if ((u8*)next < (u8*)self.heapEnd)
             next->sizeAndFlags &= ~BLOCK_PREV_USED;
 
+        // keep the footer fresh even for the unmerged case: it lives
+        // inside the (dead) payload while free and is read by the
+        // next block's _prevBlock walk
+        self._writeFooter(block);
         self._insertFree(block);
     }
 
