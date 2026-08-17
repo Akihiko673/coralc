@@ -8,6 +8,7 @@ mod str = import("std/text/string.crl");
 mod lex = import("lexer");
 mod tok = import("token");
 mod exprP = import("expr_parser");
+mod res = import("std/data/result.crl");
 mod ast = import("ast/ast.crl");
 
 str.strView SOURCES[] = {
@@ -258,7 +259,12 @@ i32 main(i32 argc, char** argv)
         lex.Lexer l = lex.Lexer::new((const u8*)src.ptr, (u32)src.len);
         lex.LexResult r = l.lex();
         ast.Expr* e = null;
-        if (r.nerrs == 0) e = p.parse((u8*)src.ptr, r.toks, r.n);
+        if (r.nerrs == 0)
+        {
+            res.Result<ast.Expr*, exprP.ParseErr> pr =
+                p.parse((u8*)src.ptr, r.toks, r.n);
+            if (pr.isOk()) e = pr.value;
+        }
         u8 buf[512];
         u32 blen = 0;
         if (e) dumpTo(e, buf, &blen);
@@ -287,9 +293,8 @@ i32 main(i32 argc, char** argv)
         str.strView src = BAD[i];
         lex.Lexer l = lex.Lexer::new((const u8*)src.ptr, (u32)src.len);
         lex.LexResult r = l.lex();
-        ast.Expr* e = null;
-        if (r.nerrs == 0) e = p.parse((u8*)src.ptr, r.toks, r.n);
-        bool ok = e == null;
+        res.Result<ast.Expr*, exprP.ParseErr> pr = p.parse((u8*)src.ptr, r.toks, r.n);
+        bool ok = pr.isErr();
         if (!ok) fails++;
         check(ok, (u8*)"bad", 3);
         if (!ok)
@@ -300,7 +305,7 @@ i32 main(i32 argc, char** argv)
         }
         if (r.toks) mman.dealloc<tok.LexTok>(r.toks);
         if (r.errs) mman.dealloc<tok.LexErr>(r.errs);
-        if (e) ast.freeExpr(e);
+        if (pr.isOk()) ast.freeExpr(pr.value);
     }
 
     p.free();

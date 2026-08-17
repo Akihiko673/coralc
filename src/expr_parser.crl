@@ -9,6 +9,31 @@ mod str = import("std/text/string.crl");
 mod tok = import("token");
 mod ast = import("ast/ast.crl");
 mod lalr = import("lalr");
+mod res = import("std/data/result.crl");
+
+// Where an expression parse failed (row/col/token id of the lookahead).
+pub struct ParseErr
+{
+    u32 row;
+    u32 col;
+    u32 tid;
+}
+
+res.Result<ast.Expr*, ParseErr> okExpr(ast.Expr* e)
+{
+    res.Result<ast.Expr*, ParseErr> r;
+    r.ok = true;
+    r.value = e;
+    return r;
+}
+
+res.Result<ast.Expr*, ParseErr> errExpr(ParseErr pe)
+{
+    res.Result<ast.Expr*, ParseErr> r;
+    r.ok = false;
+    r.error = pe;
+    return r;
+}
 
 // reduce actions
 const u32 AC_PASS = 0;      // identity chain (E->B, B->C, ...)
@@ -380,6 +405,9 @@ pub struct ExprParser
     u32 scrSpl[32];     // scratch '>>' positions to split into two '>'
     u32 nScr;
     u32 nSpl;
+    u32 errRow;         // failing lookahead position (set by fail())
+    u32 errCol;
+    u32 errTid;
     u32 stk[STKMAX];
     u32 sp;
     ast.Expr* sem[STKMAX];
@@ -796,6 +824,34 @@ pub struct ExprParser
         self.sv = 0;
     }
 
+    // Records the failing lookahead, frees partial nodes, returns null.
+    ast.Expr* fail(u32 ip)
+    {
+        if (ip < self.ntoks)
+        {
+            self.errRow = self.toks[ip].row;
+            self.errCol = self.toks[ip].col;
+            self.errTid = self.toks[ip].id;
+        }
+        else
+        {
+            self.errRow = 0;
+            self.errCol = 0;
+            self.errTid = tok.TOK_EOF;
+        }
+        self.clearSem();
+        return null;
+    }
+
+    ParseErr errFromFail()
+    {
+        ParseErr pe;
+        pe.row = self.errRow;
+        pe.col = self.errCol;
+        pe.tid = self.errTid;
+        return pe;
+    }
+
     // Drives the LALR tables over self.toks from token ip0 until accept or
     // a stop token. Returns the node (and sets *consumed to the token index
     // just past the expression) or null on any parse failure.
@@ -843,15 +899,13 @@ pub struct ExprParser
                     *consumed = ip;
                     return self.sem[0];
                 }
-                self.clearSem();
-                return null;
+                return self.fail(ip);
             }
             if (en->kind == lalr.ACT_SHIFT)
             {
                 if (self.sp + 1 >= STKMAX || self.sv >= STKMAX)
                 {
-                    self.clearSem();
-                    return null;
+                    return self.fail(ip);
                 }
                 self.sp++;
                 self.stk[self.sp] = en->a;
@@ -866,28 +920,24 @@ pub struct ExprParser
                 lalr.Prod* pr = &self.g.prods[en->a];
                 if (pr->nrhs > self.sp)
                 {
-                    self.clearSem();
-                    return null;
+                    return self.fail(ip);
                 }
                 self.sp -= pr->nrhs;
                 self.apply(pr, pr->nrhs);
                 if (self.sv == 0)
                 {
-                    self.clearSem();
-                    return null;
+                    return self.fail(ip);
                 }
                 u32 top = self.stk[self.sp];
                 u32 headIdx = pr->head - lalr.NT_BASE;
                 if (headIdx >= self.t.nnonterms)
                 {
-                    self.clearSem();
-                    return null;
+                    return self.fail(ip);
                 }
                 u32 go = self.t.gotos[top * self.t.nnonterms + headIdx];
                 if (go == lalr.NO_STATE)
                 {
-                    self.clearSem();
-                    return null;
+                    return self.fail(ip);
                 }
                 self.sp++;
                 self.stk[self.sp] = go;
@@ -899,13 +949,11 @@ pub struct ExprParser
                     *consumed = ip;
                     return self.sem[0];
                 }
-                self.clearSem();
-                return null;
+                return self.fail(ip);
             }
             else
             {
-                self.clearSem();
-                return null;
+                return self.fail(ip);
             }
         }
     }
@@ -919,9 +967,11 @@ pub struct ExprParser
     // Plain-`<` generic instantiations (IDENT < TARGS >) are recognized by
     // probeGeneric and parsed through the LALR '!<' productions; '>>' that
     // closes two nested levels is split into two '>'.
-    // Returns null on any parse failure.
-    ast.Expr* parseFrom(u8* src, tok.LexTok* toks, u32 ntoks, u32 start,
-                        const u32* stops, u32 nstops, u32* consumed)
+    // Returns the node, or a ParseErr with the failing lookahead position.
+    res.Result<ast.Expr*, ParseErr> parseFrom(u8* src, tok.LexTok* toks,
+                                              u32 ntoks, u32 start,
+                                              const u32* stops, u32 nstops,
+                                              u32* consumed)
     {
         self.src = src;
         self.toks = toks;
@@ -935,7 +985,11 @@ pub struct ExprParser
         u32 nspl = 0;
         self.probeGeneric(start, stops, nstops, rew, &nrew, spl, &nspl);
         if (nrew == 0)
-            return self.parseLoop(start, stops, nstops, consumed);
+        {
+            ast.Expr* r = self.parseLoop(start, stops, nstops, consumed);
+            if (r == null) return errExpr(self.errFromFail());
+            return okExpr(r);
+        }
 
         // A plain-`<` generic was recognized: build an adjusted copy of the
         // window ('<' flipped to '!<', '>>' split into two '>'), parse from
@@ -971,11 +1025,12 @@ pub struct ExprParser
         self.ntoks = ntoks;
         mman.dealloc<tok.LexTok>(wToks);
         mman.dealloc<u32>(origOf);
-        if (r != null) *consumed = origOf[c];
-        return r;
+        if (r == null) return errExpr(self.errFromFail());
+        *consumed = origOf[c];
+        return okExpr(r);
     }
 
-    ast.Expr* parse(u8* src, tok.LexTok* toks, u32 ntoks)
+    res.Result<ast.Expr*, ParseErr> parse(u8* src, tok.LexTok* toks, u32 ntoks)
     {
         u32 consumed = 0;
         return self.parseFrom(src, toks, ntoks, 0, null, 0, &consumed);

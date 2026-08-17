@@ -18,6 +18,7 @@ mod tok = import("token");
 mod ast = import("ast/ast.crl");
 mod lalr = import("lalr");
 mod exprP = import("expr_parser");
+mod res = import("std/data/result.crl");
 mod libc = import("std/platform/libc.crl");
 
 // reduce actions
@@ -853,9 +854,10 @@ pub struct StmtParser
             return true;
         }
         u32 consumed = 0;
-        ast.Expr* e = self.exp.parseFrom(self.src, self.toks, self.ntoks,
-                                         self.ip, stops, nstops, &consumed);
-        if (e == null) return false;
+        res.Result<ast.Expr*, exprP.ParseErr> r = self.exp.parseFrom(
+            self.src, self.toks, self.ntoks, self.ip, stops, nstops, &consumed);
+        if (r.isErr()) return false;
+        ast.Expr* e = r.value;
         val = (u64)e;
         self.ip = consumed;
         *out = val;
