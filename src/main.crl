@@ -1,10 +1,11 @@
 mod libc = import("std/platform/libc.crl");
 mod mman = import("std/memory/mman.crl");
-mod tok = import("token");
-mod lex = import("lexer");
 mod str = import("std/text/string.crl");
 mod ast = import("ast/ast.crl");
+mod tok = import("token");
+mod lex = import("lexer");
 mod stmtP = import("stmt_parser");
+mod lalr = import("lalr");
 
 const u32 MAX_FILE = 16 * 1024 * 1024;
 
@@ -93,6 +94,7 @@ i32 main(i32 argc, char** argv)
     }
     i32 fails = 0;
     stmtP.StmtParser stp = stmtP.StmtParser::new();
+    stp.trace = dump;
     for (i32 fi = first; fi < argc; fi++)
     {
         str.strView path = str.strView::fromCstr(argv[fi]);
@@ -110,31 +112,42 @@ i32 main(i32 argc, char** argv)
         libc.write(2, path.ptr, path.len);
         libc.write(2, "\n", 1);
         lex.Lexer lx = lex.Lexer::new(src, len);
-        lex.LexResult res = lx.lex();
+        lex.LexResult lr = lx.lex();
         if (dump)
-            dumptoks(src, res.toks, res.n, res.errs, res.nerrs);
-        else if (res.nerrs > 0)
+            dumptoks(src, lr.toks, lr.n, lr.errs, lr.nerrs);
+        else if (lr.nerrs > 0)
         {
-            for (u32 i = 0; i < res.nerrs; i++)
+            for (u32 i = 0; i < lr.nerrs; i++)
             {
                 libc.write(2, "lex error: ", 11);
-                libc.write(2, res.errs[i].msg.ptr, res.errs[i].msg.len);
+                libc.write(2, lr.errs[i].msg.ptr, lr.errs[i].msg.len);
                 libc.write(2, "\n", 1);
             }
             fails++;
         }
         else
         {
-            ast.Program* prog = stp.parseProgram(src, res.toks, res.n);
+            ast.Program* prog = stp.parseProgram(src, lr.toks, lr.n);
             if (prog == null)
             {
-                libc.write(2, "parse error\n", 12);
+                libc.write(2, "parse error at ", 15);
+                libc.write(2, "tid ", 4);
+                u8 eb[32];
+                u32 el = 0;
+                selfNum(eb, &el, stp.errTid);
+                libc.write(2, eb, el);
+                libc.write(2, " ", 1);
+                el = 0;
+                selfNum(eb, &el, stp.errRow);
+                eb[el++] = ':';
+                selfNum(eb, &el, stp.errCol);
+                eb[el++] = '\n';
+                libc.write(2, eb, el);
                 fails++;
             }
         }
     }
     stp.free();
-    }
     libc.write(2, fails == 0 ? "LEX OK\n" : "LEX FAIL\n", fails == 0 ? 7 : 9);
     return fails == 0 ? 0 : 1;
 }

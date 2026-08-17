@@ -97,6 +97,15 @@ const u32 AC_FORIN = 71;        // FOR -> for ( FORINIT ) STMT (range-for)
 const u32 AC_VRBOTHL = 72;      // VARREST -> [ ES_RBKT ] = { ES_RCURLY INLIST }
 const u32 AC_LIN = 73;          // INLIST -> e (EMPTY K_EXPR list)
 const u32 AC_INAPP = 74;        // INLIST -> , ES_RCURLY INLIST
+const u32 AC_MODULE = 75;       // MODULE -> ATTRS mod IDENT = import ( STR ) ;
+const u32 AC_STRUCT = 76;       // STRUCT -> ATTRS PREF struct IDENT { SBLOCK }
+const u32 AC_STRUCTG = 77;      // STRUCT -> ATTRS PREF struct IDENT < TYPES > { SBLOCK }
+const u32 AC_ENUM = 78;         // ENUM -> ATTRS enum IDENT { EVARIANTS }
+const u32 AC_SFIELD = 79;       // SFIELD -> PREF TYPE IDENT ( ; | [ ES_RBKT ] ; )
+const u32 AC_LSBLOCK = 80;      // SBLOCK -> e (EMPTY K_SITEM list)
+const u32 AC_SITEMW = 81;       // SITEM -> SMETHOD
+const u32 AC_SITEMW0 = 82;      // SITEM -> SMETHOD0
+const u32 AC_EXTERN_FB = 83;    // EXTB -> extern ( STR ) ATTRS TYPE IDENT ( PARAMS ) BLOCK
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -149,7 +158,17 @@ const u32 N_CONST0 = 46;
 const u32 N_AUG = 47;
 const u32 N_ES_RCURLY = 48;
 const u32 N_INLIST = 49;
-const u32 N_COUNT = 50;
+const u32 N_MODULE = 50;    // mod IDENT = import ( STR ) ;
+const u32 N_STRUCT = 51;    // struct IDENT { SBLOCK }
+const u32 N_ENUM = 52;      // enum IDENT { EVARIANTS }
+const u32 N_SBLOCK = 53;    // struct member block
+const u32 N_SITEM = 54;     // struct member
+const u32 N_SFIELD = 55;    // struct field decl
+const u32 N_SMETHOD = 56;   // struct method decl
+const u32 N_SMETHOD0 = 57;  // struct method decl (no generics)
+const u32 N_EVARIANTS = 58; // enum variant list
+const u32 N_EXTB = 59;      // extern-with-body decl
+const u32 N_COUNT = 60;
 
 // precedence levels (higher wins)
 const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
@@ -194,6 +213,7 @@ const u32 K_PARAM = 11;     // ast.Param*
 const u32 K_VRES = 12;      // VRes*
 const u32 K_PROG = 13;      // ast.Program*
 const u32 K_VRAW = 14;      // VRaw* (raw var-decl parts)
+const u32 K_SITEM = 15;     // SItem* (struct member)
 
 pub struct SList
 {
@@ -231,6 +251,12 @@ pub struct FCase
 {
     u64 name;   // strView*
     u64 decls;  // SList* of Decl*
+}
+
+pub struct SItem
+{
+    bool isMethod;
+    u64 v;      // ast.Decl* (method) or ast.StructField* (field)
 }
 
 SList* listNew(u8 itemKind)
@@ -356,10 +382,11 @@ lalr.Grammar stmtGrammar()
     u32 r3[3];
     u32 r4[4];
     u32 r5[5];
-    u32 r6[6];
+    u32 r6[8];
     u32 r7[7];
     u32 r8[8];
     u32 r9[9];
+    u32 r10[10];
     u32 r11[11];
 
     r1[0] = lalr.NT_BASE + N_PROG;
@@ -387,6 +414,14 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_DECL, 2, r2, 0, 0, AC_MKVDP);
     r1[0] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_NONE);
+    r1[0] = lalr.NT_BASE + N_MODULE;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_STRUCT;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_ENUM;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_EXTB;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
 
     r7[0] = lalr.NT_BASE + N_PREF;
     r7[1] = lalr.NT_BASE + N_TYPE;
@@ -717,6 +752,18 @@ lalr.Grammar stmtGrammar()
     r4[2] = tok.TOK_IDENT;
     r4[3] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_EXT, 4, r4, 0, 0, AC_EXTERN_V0);
+    r11[0] = termId((u8*)"extern");
+    r11[1] = termId((u8*)"(");
+    r11[2] = tok.TOK_STR;
+    r11[3] = termId((u8*)")");
+    r11[4] = lalr.NT_BASE + N_ATTRS;
+    r11[5] = lalr.NT_BASE + N_TYPE;
+    r11[6] = tok.TOK_IDENT;
+    r11[7] = termId((u8*)"(");
+    r11[8] = lalr.NT_BASE + N_PARAMS;
+    r11[9] = termId((u8*)")");
+    r11[10] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_EXTB, 11, r11, 0, 0, AC_EXTERN_FB);
 
     r2[0] = termId((u8*)"break");
     r2[1] = termId((u8*)";");
@@ -731,6 +778,91 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_ES_COLON, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_COLON);
     addProd(&g, i++, lalr.NT_BASE + N_ES_BOTH, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_BOTH);
     addProd(&g, i++, lalr.NT_BASE + N_ES_RCURLY, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_ES_RCURLY);
+    r9[0] = lalr.NT_BASE + N_ATTRS;
+    r9[1] = termId((u8*)"mod");
+    r9[2] = tok.TOK_IDENT;
+    r9[3] = termId((u8*)"=");
+    r9[4] = termId((u8*)"import");
+    r9[5] = termId((u8*)"(");
+    r9[6] = tok.TOK_STR;
+    r9[7] = termId((u8*)")");
+    r9[8] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_MODULE, 9, r9, 0, 0, AC_MODULE);
+    r7[0] = lalr.NT_BASE + N_PREF;
+    r7[1] = lalr.NT_BASE + N_ATTRS;
+    r7[2] = termId((u8*)"struct");
+    r7[3] = tok.TOK_IDENT;
+    r7[4] = termId((u8*)"{");
+    r7[5] = lalr.NT_BASE + N_SBLOCK;
+    r7[6] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_STRUCT, 7, r7, 0, 0, AC_STRUCT);
+    r10[0] = lalr.NT_BASE + N_PREF;
+    r10[1] = lalr.NT_BASE + N_ATTRS;
+    r10[2] = termId((u8*)"struct");
+    r10[3] = tok.TOK_IDENT;
+    r10[4] = termId((u8*)"<");
+    r10[5] = lalr.NT_BASE + N_TYPES;
+    r10[6] = termId((u8*)">");
+    r10[7] = termId((u8*)"{");
+    r10[8] = lalr.NT_BASE + N_SBLOCK;
+    r10[9] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_STRUCT, 10, r10, 0, 0, AC_STRUCTG);
+    r6[0] = lalr.NT_BASE + N_PREF;
+    r6[1] = lalr.NT_BASE + N_ATTRS;
+    r6[2] = termId((u8*)"enum");
+    r6[3] = tok.TOK_IDENT;
+    r6[4] = termId((u8*)"{");
+    r6[5] = lalr.NT_BASE + N_EVARIANTS;
+    r6[6] = termId((u8*)"}");
+    addProd(&g, i++, lalr.NT_BASE + N_ENUM, 7, r6, 0, 0, AC_ENUM);
+    addProd(&g, i++, lalr.NT_BASE + N_SBLOCK, 0, null, 0, 0, AC_LSBLOCK);
+    r2[0] = lalr.NT_BASE + N_SBLOCK;
+    r2[1] = lalr.NT_BASE + N_SITEM;
+    addProd(&g, i++, lalr.NT_BASE + N_SBLOCK, 2, r2, 0, 0, AC_APP);
+    r1[0] = lalr.NT_BASE + N_SMETHOD;
+    addProd(&g, i++, lalr.NT_BASE + N_SITEM, 1, r1, 0, 0, AC_SITEMW);
+    r1[0] = lalr.NT_BASE + N_SMETHOD0;
+    addProd(&g, i++, lalr.NT_BASE + N_SITEM, 1, r1, 0, 0, AC_SITEMW0);
+    r1[0] = lalr.NT_BASE + N_SFIELD;
+    addProd(&g, i++, lalr.NT_BASE + N_SITEM, 1, r1, 0, 0, AC_PASS);
+    r1[0] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_SITEM, 1, r1, 0, 0, AC_NONE);
+    r7[0] = lalr.NT_BASE + N_PREF;
+    r7[1] = lalr.NT_BASE + N_TYPE;
+    r7[2] = tok.TOK_IDENT;
+    r7[3] = termId((u8*)"(");
+    r7[4] = lalr.NT_BASE + N_PARAMS;
+    r7[5] = termId((u8*)")");
+    r7[6] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_SMETHOD, 7, r7, 0, 0, AC_FUNC);
+    r7[0] = lalr.NT_BASE + N_PREF;
+    r7[1] = lalr.NT_BASE + N_TYPE;
+    r7[2] = tok.TOK_IDENT;
+    r7[3] = termId((u8*)"(");
+    r7[4] = lalr.NT_BASE + N_PARAMS;
+    r7[5] = termId((u8*)")");
+    r7[6] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_SMETHOD0, 7, r7, 0, 0, AC_FUNC0);
+    r4[0] = lalr.NT_BASE + N_PREF;
+    r4[1] = lalr.NT_BASE + N_TYPE;
+    r4[2] = tok.TOK_IDENT;
+    r4[3] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_SFIELD, 4, r4, 0, 0, AC_SFIELD);
+    r7[0] = lalr.NT_BASE + N_PREF;
+    r7[1] = lalr.NT_BASE + N_TYPE;
+    r7[2] = tok.TOK_IDENT;
+    r7[3] = termId((u8*)"[");
+    r7[4] = lalr.NT_BASE + N_ES_RBKT;
+    r7[5] = termId((u8*)"]");
+    r7[6] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_SFIELD, 7, r7, 0, 0, AC_SFIELD);
+    addProd(&g, i++, lalr.NT_BASE + N_EVARIANTS, 0, null, 0, 0, AC_LIDENT);
+    r1[0] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_EVARIANTS, 1, r1, 0, 0, AC_L1);
+    r3[0] = lalr.NT_BASE + N_EVARIANTS;
+    r3[1] = termId((u8*)",");
+    r3[2] = tok.TOK_IDENT;
+    addProd(&g, i++, lalr.NT_BASE + N_EVARIANTS, 3, r3, 0, 0, AC_APP);
 
     g.nprods = i;
     return g;
@@ -756,6 +888,9 @@ pub struct StmtParser
     u32 tTypeMinId;
     u32 tTypeMaxId;
     bool trace;     // debug: print each driver step
+    u32 errRow;
+    u32 errCol;
+    u32 errTid;
 
     static StmtParser new()
     {
@@ -785,7 +920,37 @@ pub struct StmtParser
                 {
                     u32 a = p.g.prods[en->a].action;
                     if ((a >= AC_ES_SEMI && a <= AC_ES_BOTH) || a == AC_ES_RCURLY) { et = (u8)a; break; }
+                    if (p.g.prods[en->a].nrhs > 0)
+                    {
+                        u32 esn = p.g.prods[en->a].rhs[0];
+                        if (esn >= lalr.NT_BASE && esn < lalr.NT_BASE + N_COUNT)
+                            esn -= lalr.NT_BASE;
+                        else
+                            esn = 999;
+                        if (esn >= N_ES_SEMI && esn <= N_ES_BOTH)
+                        {
+                            et = (u8)(AC_ES_SEMI + (esn - N_ES_SEMI));
+                            break;
+                        }
+                        if (esn == N_ES_RCURLY) { et = (u8)AC_ES_RCURLY; break; }
+                    }
                 }
+            }
+            if (et == 0xFF && p.t.gotos[s * p.t.nnonterms + N_ES_SEMI] != lalr.NO_STATE)
+                et = (u8)AC_ES_SEMI;
+            if (et == 0xFF)
+            {
+                bool hasShift = false;
+                bool hasRed = false;
+                bool hasErr = false;
+                for (u32 tt = 0; tt < p.t.nterms; tt++)
+                {
+                    lalr.Entry* e2 = &p.t.act[s * p.t.nterms + tt];
+                    if (e2->kind == lalr.ACT_SHIFT) hasShift = true;
+                    else if (e2->kind == lalr.ACT_REDUCE) hasRed = true;
+                    else if (e2->kind == lalr.ACT_ERROR) hasErr = true;
+                }
+                if (hasRed && hasErr && !hasShift) et = (u8)AC_ES_SEMI;
             }
             p.esType[s] = et;
         }
@@ -838,7 +1003,13 @@ pub struct StmtParser
     {
         if (at + 1 >= self.ntoks) return false;
         u32 n = self.toks[at + 1].id;
-        return n == tok.TOK_IDENT || n == termId((u8*)".");
+        if (n == tok.TOK_IDENT) return true;
+        if (n != termId((u8*)".")) return false;
+        if (at + 2 >= self.ntoks) return false;
+        if (self.toks[at + 2].id != tok.TOK_IDENT) return false;
+        if (at + 3 >= self.ntoks) return true;
+        u32 o = self.toks[at + 3].id;
+        return o != termId((u8*)"(") && o != termId((u8*)"=");
     }
 
     // runs the expression sub-parser at the current token for an ES slot;
@@ -924,6 +1095,26 @@ pub struct StmtParser
                 mman.dealloc<VRaw>(vr);
                 break;
             }
+            case K_SITEM:
+            {
+                SItem* it = (SItem*)(u64)v;
+                if (it)
+                {
+                    if (it->isMethod)
+                        ast.freeDecl((ast.Decl*)(u64)it->v);
+                    else
+                    {
+                        ast.StructField* f = (ast.StructField*)(u64)it->v;
+                        if (f)
+                        {
+                            ast.freeType(f->type);
+                            mman.dealloc<ast.StructField>(f);
+                        }
+                    }
+                    mman.dealloc<SItem>(it);
+                }
+                break;
+            }
             default:
                 break;
             }
@@ -983,6 +1174,26 @@ pub struct StmtParser
                 break;
             }
             case K_VIEW: self.freeView(v); break;
+            case K_SITEM:
+            {
+                SItem* it = (SItem*)(u64)v;
+                if (it)
+                {
+                    if (it->isMethod)
+                        ast.freeDecl((ast.Decl*)(u64)it->v);
+                    else
+                    {
+                        ast.StructField* f = (ast.StructField*)(u64)it->v;
+                        if (f)
+                        {
+                            ast.freeType(f->type);
+                            mman.dealloc<ast.StructField>(f);
+                        }
+                    }
+                    mman.dealloc<SItem>(it);
+                }
+                break;
+            }
             case K_PARAM:
             {
                 ast.Param* pp = (ast.Param*)(u64)v;
@@ -2477,6 +2688,332 @@ pub struct StmtParser
             self.push((u64)pr, K_PROG);
             return;
         }
+
+        case AC_LSBLOCK:
+            self.push((u64)listNew(K_SITEM), K_LIST);
+            return;
+        case AC_SITEMW:
+        {
+            SItem* it = mman.alloc<SItem>(1);
+            it->isMethod = true;
+            it->v = self.sem[base];
+            self.push((u64)it, K_SITEM);
+            return;
+        }
+        case AC_SITEMW0:
+        {
+            SItem* it = mman.alloc<SItem>(1);
+            it->isMethod = true;
+            it->v = self.sem[base];
+            self.push((u64)it, K_SITEM);
+            return;
+        }
+        case AC_SFIELD:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 1];
+            ast.StructField* f = mman.alloc<ast.StructField>(1);
+            f->name = *s;
+            if (n == 6)
+            {
+                ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+                p->kind = ast.TYP_ARRAY;
+                p->elem = ty;
+                p->count = (ast.Expr*)(u64)self.sem[base + 3];
+                p->name.ptr = null;
+                p->name.len = 0;
+                p->args = null;
+                p->nargs = 0;
+                p->cargs = null;
+                p->ncargs = 0;
+                p->ret = null;
+                p->isConst = false;
+                p->line = 0;
+                p->col = 0;
+                ty = p;
+            }
+            f->type = ty;
+            self.freeView((u64)s);
+            SItem* it = mman.alloc<SItem>(1);
+            it->isMethod = false;
+            it->v = (u64)f;
+            self.push((u64)it, K_SITEM);
+            return;
+        }
+        case AC_MODULE:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            str.strView* p = (str.strView*)(u64)self.sem[base + 6];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_MODULE;
+            d->name = *s;
+            d->text = *p;
+            d->type = null;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = 0;
+            d->col = 0;
+            self.freeView((u64)s);
+            self.freeView((u64)p);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_STRUCT:
+        case AC_STRUCTG:
+        {
+            u32 flags = (u32)(u64)self.sem[base];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 3];
+            SList* l = (SList*)(u64)self.sem[n == 7 ? 5 : 8];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_STRUCT;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = null;
+            d->value = null;
+            d->exported = (flags & FLAG_PUB) != 0;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = 0;
+            d->col = 0;
+            if (n == 10)
+            {
+                SList* tl = (SList*)(u64)self.sem[base + 5];
+                if (tl)
+                {
+                    if (tl->n > 0)
+                    {
+                        d->generics = mman.alloc<str.strView>(tl->n);
+                        d->ngenerics = tl->n;
+                        for (u32 k = 0; k < tl->n; k++)
+                        {
+                            ast.TypeExpr* t = (ast.TypeExpr*)(u64)tl->a[k];
+                            d->generics[k] = t->name;
+                            ast.freeType(t);
+                        }
+                    }
+                    if (tl->a) mman.dealloc<u64>(tl->a);
+                    mman.dealloc<SList>(tl);
+                }
+            }
+            if (l)
+            {
+                u32 nf = 0;
+                u32 nm = 0;
+                for (u32 k = 0; k < l->n; k++)
+                {
+                    SItem* it = (SItem*)(u64)l->a[k];
+                    if (!it) continue;
+                    if (it->isMethod) nm++;
+                    else nf++;
+                }
+                if (nf > 0)
+                {
+                    d->fields = mman.alloc<ast.StructField>(nf);
+                    d->nfields = nf;
+                    u32 j = 0;
+                    for (u32 k = 0; k < l->n; k++)
+                    {
+                        SItem* it = (SItem*)(u64)l->a[k];
+                        if (!it || it->isMethod) continue;
+                        d->fields[j++] = *(ast.StructField*)(u64)it->v;
+                        mman.dealloc<ast.StructField>((ast.StructField*)(u64)it->v);
+                        mman.dealloc<SItem>(it);
+                        l->a[k] = 0;
+                    }
+                }
+                if (nm > 0)
+                {
+                    d->decls = mman.alloc<ast.Decl*>(nm);
+                    d->ndecls = nm;
+                    u32 j = 0;
+                    for (u32 k = 0; k < l->n; k++)
+                    {
+                        SItem* it = (SItem*)(u64)l->a[k];
+                        if (!it || !it->isMethod) continue;
+                        ast.Decl* m = (ast.Decl*)(u64)it->v;
+                        m->structName = d->name;
+                        d->decls[j++] = m;
+                        mman.dealloc<SItem>(it);
+                        l->a[k] = 0;
+                    }
+                }
+                for (u32 k = 0; k < l->n; k++)
+                {
+                    SItem* it = (SItem*)(u64)l->a[k];
+                    if (!it) continue;
+                    if (it->isMethod)
+                        ast.freeDecl((ast.Decl*)(u64)it->v);
+                    else
+                    {
+                        ast.freeType(((ast.StructField*)(u64)it->v)->type);
+                        mman.dealloc<ast.StructField>((ast.StructField*)(u64)it->v);
+                    }
+                    mman.dealloc<SItem>(it);
+                }
+                if (l->a) mman.dealloc<u64>(l->a);
+                mman.dealloc<SList>(l);
+            }
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_ENUM:
+        {
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            SList* l = (SList*)(u64)self.sem[base + 4];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_ENUM;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = null;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = false;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = 0;
+            d->col = 0;
+            if (l && l->n > 0)
+            {
+                d->variants = mman.alloc<ast.EnumVariant>(l->n);
+                d->nvariants = l->n;
+                for (u32 k = 0; k < l->n; k++)
+                {
+                    str.strView* v = (str.strView*)(u64)l->a[k];
+                    d->variants[k].name = *v;
+                    d->variants[k].value = null;
+                    mman.dealloc<str.strView>(v);
+                }
+                if (l->a) mman.dealloc<u64>(l->a);
+                mman.dealloc<SList>(l);
+            }
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_FB:
+        {
+            str.strView* ccs = (str.strView*)(u64)self.sem[base + 2];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 5];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 6];
+            PList* pl = (PList*)(u64)self.sem[base + 8];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_FUNC;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = *ccs;
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            d->variadic = pl->variadic;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->body = (ast.Stmt*)(u64)self.sem[base + 10];
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.freeView((u64)ccs);
+            self.push((u64)d, K_DECL);
+            return;
+        }
         default:
             self.push(0, K_NULL);
             return;
@@ -2534,6 +3071,9 @@ pub struct StmtParser
                 u64 val = 0;
                 if (!self.intercept(es, &val))
                 {
+                    self.errRow = self.toks[self.ip].row;
+                    self.errCol = self.toks[self.ip].col;
+                    self.errTid = self.toks[self.ip].id;
                     self.clearSem();
                     return null;
                 }
@@ -2643,6 +3183,12 @@ pub struct StmtParser
             }
             else
             {
+                if (self.ip < self.ntoks)
+                {
+                    self.errRow = self.toks[self.ip].row;
+                    self.errCol = self.toks[self.ip].col;
+                    self.errTid = self.toks[self.ip].id;
+                }
                 self.clearSem();
                 return null;
             }

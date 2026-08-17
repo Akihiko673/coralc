@@ -32,6 +32,7 @@ str.strView SOURCES[] = {
     "f(a < b, c)", "a < b && c", "a < b >> c", "x = Foo<u32>",
     "Foo<Bar<Baz>>::next()", "Foo<T> + 1", "Foo<u32>[i]",
     "Foo<Vec<u32>, i8>::m()", "a.b<u8>::c()", "x = Foo<Bar<u32>>()",
+    "vec.vec<u64>::withCap(4)",
 };
 
 str.strView EXPECTS[] = {
@@ -78,6 +79,7 @@ str.strView EXPECTS[] = {
     "(call (. (generic Foo (generic ty Vec ty u32) ty i8) m))",
     "(call (. (generic (. a b) ty u8) c))",
     "(= x (call (generic Foo (generic ty Bar ty u32))))",
+    "(call (. (generic (. vec vec) ty u64) withCap) 4)",
 };
 
 str.strView BAD[] = {

@@ -44,6 +44,7 @@ str.strView PROGS[] = {
     "void f(u32 x) { if (x > 0) x = 1; else if (x < 0) x = 2; else x = 3; }",
     "void f(u32 x) { while (x > 0) { x = x - 1; } if (x) { x = 4; } }",
     "void f() { u32 i; i = 5; }",
+    "extern(\"c\") u32 twice(u32 x) { return x * 2; }",
     "void f() { { } }",
     "void f() { ; ; }",
     "extern(\"c\") @[noret] void exit(i32 code);",
