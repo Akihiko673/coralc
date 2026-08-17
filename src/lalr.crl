@@ -14,7 +14,6 @@
 // have nrhs == 0. The caller's grammar must include the augmented start
 // production as production 0: head = NT_BASE + nnonterms, rhs = [start].
 mod mman = import("std/memory/mman.crl");
-mod libc = import("std/platform/libc.crl"); // DEBUG ONLY for dumpItems
 
 pub const u32 NT_BASE = 0x10000;
 pub const u32 NO_STATE = 0xFFFFFFFF;
@@ -142,7 +141,8 @@ pub struct Generator
 
     u32 symIdx(u32 s)
     {
-        if (s == self.augHead) return self.g.nterms + self.g.nnonterms;        if (s >= NT_BASE) return s - NT_BASE + self.g.nterms;
+        if (s == self.augHead) return self.g.nterms + self.g.nnonterms;
+        if (s >= NT_BASE) return s - NT_BASE + self.g.nterms;
         return s;
     }
 
@@ -254,7 +254,6 @@ pub struct Generator
         for (u32 w = 0; w < LAWORDS; w++) out[w] |= L[w];
     }
 
-    // item sets
     void growItems(State* st, u32 need)
     {
         if (need < st->cap) return;
@@ -488,56 +487,6 @@ pub struct Generator
         self.mergeCores();
         self.buildTables(out);
         return true;
-    }
-
-    // DEBUG ONLY: prints every item of state st as "prod/dot la-bitmask".
-    void dumpItems(u32 st)
-    {
-        State* s = &self.states[st];
-        u8 b[1024];
-        for (u32 i = 0; i < s->n; i++)
-        {
-            Item* it = &s->items[i];
-            b[0] = 0;
-            u32 bl = 0;
-            u32 p = it->prod;
-            if (p > 99) b[bl++] = (u8)('0' + p / 100 % 10);
-            if (p > 9) b[bl++] = (u8)('0' + p / 10 % 10);
-            b[bl++] = (u8)('0' + p % 10);
-            b[bl++] = (u8)'/';
-            u32 d = it->dot;
-            if (d > 9) b[bl++] = (u8)('0' + d / 10 % 10);
-            b[bl++] = (u8)('0' + d % 10);
-            b[bl++] = (u8)' ';
-            for (u32 w = 0; w < LAWORDS; w++)
-                for (u32 t = w * 32; t < w * 32 + 32 && t < self.g.nterms; t++)
-                    if ((it->la[w] >> (t & 31)) & 1u)
-                    {
-                        if (t > 9) b[bl++] = (u8)('0' + t / 10 % 10);
-                        b[bl++] = (u8)('0' + t % 10);
-                        b[bl++] = (u8)' ';
-                    }
-            b[bl++] = (u8)'\n';
-            libc.write(1, b, bl);
-        }
-    }
-
-    // DEBUG ONLY: prints the computed first[] set of one nonterminal.
-    void dumpFirstNt(u32 nt)
-    {
-        u8 b[512];
-        u32 bl = 0;
-        u32* f = self.first + (nt + self.g.nterms) * LAWORDS;
-        for (u32 w = 0; w < LAWORDS; w++)
-            for (u32 t = w * 32; t < w * 32 + 32 && t < self.g.nterms; t++)
-                if ((f[w] >> (t & 31)) & 1u)
-                {
-                    if (t > 9) b[bl++] = (u8)('0' + t / 10 % 10);
-                    b[bl++] = (u8)('0' + t % 10);
-                    b[bl++] = (u8)' ';
-                }
-        b[bl++] = (u8)'\n';
-        libc.write(1, b, bl);
     }
 
     // True if merging two same-core canonical states would create a
