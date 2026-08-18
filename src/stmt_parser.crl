@@ -110,6 +110,10 @@ const u32 AC_FUNC0G = 84;       // FUNC0 -> TYPE IDENT !< TYPES > ( PARAMS ) BLO
 const u32 AC_FUNCP0G = 85;      // FUNC0 -> TYPE IDENT !< TYPES > ( PARAMS ) ;
 const u32 AC_FUNCG = 86;        // FUNC -> PREF TYPE IDENT !< TYPES > ( PARAMS ) BLOCK
 const u32 AC_FUNCPG = 87;       // FUNC -> PREF TYPE IDENT !< TYPES > ( PARAMS ) ;
+const u32 AC_TGEN2 = 88;        // TYPE -> TBASE < TYPES , TCONSTS >
+const u32 AC_TGEN3 = 89;        // TYPE -> TBASE < TCONSTS >
+const u32 AC_CONSTINT = 90;     // TCONSTS -> INT (const-expr entry)
+const u32 AC_CONSTAPP = 91;     // TCONSTS -> TCONSTS , INT
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -175,7 +179,8 @@ const u32 N_EXTB = 59;      // extern-with-body decl
 const u32 N_CSEBODY = 60;   // flag case body: DECL list (distinct from DECLS
                             // so its epsilon lookahead is not polluted by the
                             // right-recursive DECLS list states)
-const u32 N_COUNT = 61;
+const u32 N_TCONSTS = 61;   // trailing const-expr args of TYPES (<u64, 3>)
+const u32 N_COUNT = 62;
 
 // precedence levels (higher wins)
 const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
@@ -502,6 +507,18 @@ lalr.Grammar stmtGrammar()
     r4[2] = lalr.NT_BASE + N_TYPES;
     r4[3] = termId((u8*)">");
     addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGEN);
+    r6[0] = lalr.NT_BASE + N_TBASE;
+    r6[1] = termId((u8*)"<");
+    r6[2] = lalr.NT_BASE + N_TYPES;
+    r6[3] = termId((u8*)",");
+    r6[4] = lalr.NT_BASE + N_TCONSTS;
+    r6[5] = termId((u8*)">");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 6, r6, 0, 0, AC_TGEN2);
+    r4[0] = lalr.NT_BASE + N_TBASE;
+    r4[1] = termId((u8*)"<");
+    r4[2] = lalr.NT_BASE + N_TCONSTS;
+    r4[3] = termId((u8*)">");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGEN3);
     r1[0] = lalr.NT_BASE + N_TYPEKW;
     addProd(&g, i++, lalr.NT_BASE + N_TBASE, 1, r1, 0, 0, AC_TBASE);
     r1[0] = tok.TOK_IDENT;
@@ -521,6 +538,12 @@ lalr.Grammar stmtGrammar()
     r3[1] = termId((u8*)",");
     r3[2] = lalr.NT_BASE + N_TYPE;
     addProd(&g, i++, lalr.NT_BASE + N_TYPES, 3, r3, 0, 0, AC_APP);
+    r1[0] = tok.TOK_INT;
+    addProd(&g, i++, lalr.NT_BASE + N_TCONSTS, 1, r1, 0, 0, AC_CONSTINT);
+    r3[0] = lalr.NT_BASE + N_TCONSTS;
+    r3[1] = termId((u8*)",");
+    r3[2] = tok.TOK_INT;
+    addProd(&g, i++, lalr.NT_BASE + N_TCONSTS, 3, r3, 0, 0, AC_CONSTAPP);
 
     addProd(&g, i++, lalr.NT_BASE + N_PARAMS, 0, null, 0, 0, AC_LPARAMS);
     r2[0] = lalr.NT_BASE + N_PARAM;
@@ -1311,6 +1334,52 @@ pub struct StmtParser
             self.push((u64)l, K_LIST);
             return;
         }
+        case AC_CONSTINT:
+        {
+            ast.Expr* e = mman.alloc<ast.Expr>(1);
+            e->kind = ast.EX_INT;
+            tok.LexTok* lt = &self.toks[self.ip - 1];
+            e->text = str.strView::fromParts((const char*)self.src + lt->start, lt->len);
+            e->a = null;
+            e->b = null;
+            e->c = null;
+            e->args = null;
+            e->nargs = 0;
+            e->names = null;
+            e->type = null;
+            e->targs = null;
+            e->ntargs = 0;
+            e->post = false;
+            e->line = line;
+            e->col = col;
+            SList* l = listNew(K_EXPR);
+            listAppend(l, (u64)e);
+            self.push((u64)l, K_LIST);
+            return;
+        }
+        case AC_CONSTAPP:
+        {
+            SList* l = (SList*)(u64)self.sem[base];
+            ast.Expr* e = mman.alloc<ast.Expr>(1);
+            e->kind = ast.EX_INT;
+            tok.LexTok* lt = &self.toks[self.ip - 1];
+            e->text = str.strView::fromParts((const char*)self.src + lt->start, lt->len);
+            e->a = null;
+            e->b = null;
+            e->c = null;
+            e->args = null;
+            e->nargs = 0;
+            e->names = null;
+            e->type = null;
+            e->targs = null;
+            e->ntargs = 0;
+            e->post = false;
+            e->line = line;
+            e->col = col;
+            listAppend(l, (u64)e);
+            self.push((u64)l, K_LIST);
+            return;
+        }
         case AC_RAPP:
         {
             SList* l = (SList*)(u64)self.sem[base + 1];
@@ -1441,6 +1510,52 @@ pub struct StmtParser
             p->col = col;
             ast.freeType(ty);
             mman.dealloc<SList>(l);
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_TGEN2:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            SList* tl = (SList*)(u64)self.sem[base + 2];
+            SList* cl = (SList*)(u64)self.sem[base + 4];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_GENERIC;
+            p->name = ty->name;
+            p->elem = null;
+            p->count = null;
+            p->args = (ast.TypeExpr**)(u64)tl->a;
+            p->nargs = tl->n;
+            p->cargs = (ast.Expr**)(u64)cl->a;
+            p->ncargs = cl->n;
+            p->ret = null;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            ast.freeType(ty);
+            mman.dealloc<SList>(tl);
+            mman.dealloc<SList>(cl);
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_TGEN3:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            SList* cl = (SList*)(u64)self.sem[base + 2];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_GENERIC;
+            p->name = ty->name;
+            p->elem = null;
+            p->count = null;
+            p->args = null;
+            p->nargs = 0;
+            p->cargs = (ast.Expr**)(u64)cl->a;
+            p->ncargs = cl->n;
+            p->ret = null;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            ast.freeType(ty);
+            mman.dealloc<SList>(cl);
             self.push((u64)p, K_TYPE);
             return;
         }
