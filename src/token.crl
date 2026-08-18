@@ -58,7 +58,7 @@ pub str.strView OP_TERMS[] = {
     "++", "--",
     "->", "::",
     "=", "<", ">",
-    "!", "~",
+    "!", "~", "#",
     "+", "-", "*", "/",
     "%", "&", "|", "^",
     ".", ",", ":", ";",
@@ -107,7 +107,7 @@ pub str.strView ANON_TERMS[] = {
     "@packed",
 };
 
-pub const u32 NUM_OP = 58;      // OP_TERMS length (scanPunct bound)
+pub const u32 NUM_OP = 59;      // OP_TERMS length (scanPunct bound)
 pub const u32 NUM_ANON = 108;   // ANON_TERMS length
 
 pub u32 terminalId(str.strView s)

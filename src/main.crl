@@ -68,7 +68,14 @@ void dumptoks(const u8* src, tok.LexTok* toks, u32 n, tok.LexErr* errs, u32 nerr
     {
         libc.write(2, "lex error: ", 11);
         libc.write(2, errs[i].msg.ptr, errs[i].msg.len);
-        libc.write(2, "\n", 1);
+        u8 eb[16];
+        u32 ebl = 0;
+        eb[ebl++] = ' ';
+        selfNum(eb, &ebl, errs[i].row);
+        eb[ebl++] = ':';
+        selfNum(eb, &ebl, errs[i].col);
+        eb[ebl++] = '\n';
+        libc.write(2, eb, ebl);
     }
 }
 
@@ -86,15 +93,22 @@ i32 main(i32 argc, char** argv)
     mman.initDefaultAllocator();
     if (argc < 2) return 1;
     bool dump = false;
+    bool gdump = false;
     i32 first = 1;
     if (argv[1][0] == '-' && argv[1][1] == 't')
     {
         dump = true;
         first = 2;
     }
+    if (argv[1][0] == '-' && argv[1][1] == 'g')
+    {
+        gdump = true;
+        first = 2;
+    }
     i32 fails = 0;
     stmtP.StmtParser stp = stmtP.StmtParser::new();
     stp.trace = dump;
+    stp.dumpGrammar = gdump;
     for (i32 fi = first; fi < argc; fi++)
     {
         str.strView path = str.strView::fromCstr(argv[fi]);
@@ -119,7 +133,14 @@ i32 main(i32 argc, char** argv)
             {
                 libc.write(2, "lex error: ", 11);
                 libc.write(2, lr.errs[i].msg.ptr, lr.errs[i].msg.len);
-                libc.write(2, "\n", 1);
+                u8 eb2[16];
+                u32 ebl2 = 0;
+                eb2[ebl2++] = ' ';
+                selfNum(eb2, &ebl2, lr.errs[i].row);
+                eb2[ebl2++] = ':';
+                selfNum(eb2, &ebl2, lr.errs[i].col);
+                eb2[ebl2++] = '\n';
+                libc.write(2, eb2, ebl2);
             }
             fails++;
         }

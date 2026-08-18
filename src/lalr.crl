@@ -20,7 +20,7 @@ pub const u32 NO_STATE = 0xFFFFFFFF;
 pub const u32 ASSOC_LEFT = 0;
 pub const u32 ASSOC_RIGHT = 1;
 pub const u32 ASSOC_NONASSOC = 2;
-const u32 LAWORDS = 8;   // up to 256 terminals
+pub const u32 LAWORDS = 8;   // up to 256 terminals
 
 pub struct Prod
 {
@@ -73,20 +73,20 @@ pub struct Tables
     u32 nconflicts;
 }
 
-struct Item
+pub struct Item
 {
     u32 prod;
     u32 dot;
     u32 la[LAWORDS];
 }
 
-struct Edge
+pub struct Edge
 {
     u32 sym;
     u32 to;
 }
 
-struct State
+pub struct State
 {
     Item* items;
     u32 n;

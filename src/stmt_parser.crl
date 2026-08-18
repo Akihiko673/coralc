@@ -118,6 +118,7 @@ const u32 AC_EXTERN_F0 = 92;    // EXT -> extern TYPE IDENT ( PARAMS ) ;
 const u32 AC_EXTERN_F0P = 93;   // EXT -> PREF extern TYPE IDENT ( PARAMS ) ;
 const u32 AC_EXTERN_V0P = 94;   // EXT -> PREF extern TYPE IDENT ;
 const u32 AC_TFUNC = 95;        // TYPE -> TYPE ( PARAMS ) func-pointer type
+const u32 AC_PASS1 = 96;        // DECL -> ATTRS (FUNC|FUNC0|EXT): pass the inner decl
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -389,7 +390,7 @@ lalr.Grammar stmtGrammar()
     for (u32 k = 0; k < 15; k++)
         g.termPrec[termId((u8*)TYPEKWS[k].ptr)] = PREC_TYPEKW;
     for (u32 k = 0; k < 8; k++)
-        g.termPrec[termId((u8*)ATTRTOKS[k].ptr)] = PREC_ES + 1;
+        g.termPrec[termId((u8*)ATTRTOKS[k].ptr)] = PREC_TYPEKW;
     g.termPrec[termId((u8*)"{")] = PREC_ES + 1;
     g.termPrec[tok.TOK_IDENT] = PREC_IDENT;
     g.termPrec[termId((u8*)"default")] = PREC_DEFAULT;
@@ -434,6 +435,12 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_DECL, 2, r2, 0, 0, AC_MKVDP);
     r1[0] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_NONE);
+    r2[0] = lalr.NT_BASE + N_ATTRS; r2[1] = lalr.NT_BASE + N_FUNC;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 2, r2, 0, 0, AC_PASS1);
+    r2[0] = lalr.NT_BASE + N_ATTRS; r2[1] = lalr.NT_BASE + N_FUNC0;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 2, r2, 0, 0, AC_PASS1);
+    r2[0] = lalr.NT_BASE + N_ATTRS; r2[1] = lalr.NT_BASE + N_EXT;
+    addProd(&g, i++, lalr.NT_BASE + N_DECL, 2, r2, 0, 0, AC_PASS1);
     r1[0] = lalr.NT_BASE + N_MODULE;
     addProd(&g, i++, lalr.NT_BASE + N_DECL, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_STRUCT;
@@ -983,6 +990,7 @@ pub struct StmtParser
     u32 tTypeMinId;
     u32 tTypeMaxId;
     bool trace;     // debug: print each driver step
+    bool dumpGrammar;   // debug: dump grammar/tables once before parsing
     u32 errRow;
     u32 errCol;
     u32 errTid;
@@ -1061,6 +1069,98 @@ pub struct StmtParser
         if (v == 0) tmp[--p] = '0';
         while (v) { tmp[--p] = (char)('0' + v % 10); v /= 10; }
         while (p < 12) buf[(*bl)++] = (u8)tmp[p++];
+    }
+
+    // Debug: rebuild the tables from self.g and print grammar, per-state
+    // items with final lookaheads, and the dense action table.
+    void dumpGrammarTables()
+    {
+        lalr.Generator gen = lalr.Generator::new(self.g);
+        lalr.Tables t2;
+        gen.build(&t2);
+        u8 buf[65536];
+        u32 bl = 0;
+        self.num(buf, &bl, self.g.nterms); buf[bl++] = ' ';
+        self.num(buf, &bl, self.g.nnonterms); buf[bl++] = ' ';
+        self.num(buf, &bl, self.g.nprods); buf[bl++] = ' ';
+        self.num(buf, &bl, gen.nstates); buf[bl++] = ' ';
+        self.num(buf, &bl, t2.nstates); buf[bl++] = '\n';
+        libc.write(1, buf, bl);
+        for (u32 pi = 0; pi < self.g.nprods; pi++)
+        {
+            lalr.Prod* pr = &self.g.prods[pi];
+            bl = 0;
+            buf[bl++] = 'P'; self.num(buf, &bl, pi); buf[bl++] = ' ';
+            buf[bl++] = 'h'; self.num(buf, &bl, pr->head); buf[bl++] = ' ';
+            buf[bl++] = 'n'; self.num(buf, &bl, pr->nrhs); buf[bl++] = ' ';
+            buf[bl++] = 'r';
+            for (u32 ri = 0; ri < pr->nrhs; ri++) { self.num(buf, &bl, pr->rhs[ri]); buf[bl++] = ','; }
+            buf[bl++] = ' '; buf[bl++] = 'p'; self.num(buf, &bl, pr->prec); buf[bl++] = ' ';
+            buf[bl++] = 'a'; self.num(buf, &bl, pr->action); buf[bl++] = '\n';
+            libc.write(1, buf, bl);
+        }
+        for (u32 si = 0; si < gen.nstates; si++)
+        {
+            lalr.State* ds = &gen.states[si];
+            if (ds->n == 0) continue;
+            bl = 0;
+            buf[bl++] = 'S'; self.num(buf, &bl, si); buf[bl++] = ' ';
+            for (u32 k = 0; k < ds->n; k++)
+            {
+                lalr.Item* it = &ds->items[k];
+                buf[bl++] = 'i'; self.num(buf, &bl, it->prod);
+                buf[bl++] = 'd'; self.num(buf, &bl, it->dot);
+                if (it->dot == self.g.prods[it->prod].nrhs)
+                {
+                    buf[bl++] = 'L';
+                    for (u32 w = 0; w < lalr.LAWORDS; w++)
+                    {
+                        u32 lw = it->la[w];
+                        for (u32 b = 0; b < 32 && w * 32 + b < self.g.nterms; b++)
+                            if ((lw >> b) & 1u) { self.num(buf, &bl, w * 32 + b); buf[bl++] = ','; }
+                    }
+                }
+                buf[bl++] = ' ';
+            }
+            for (u32 e = 0; e < ds->nedges; e++)
+            {
+                lalr.Edge* ed = &ds->edges[e];
+                if (ed->sym >= lalr.NT_BASE) continue;
+                buf[bl++] = 'E'; self.num(buf, &bl, ed->sym);
+                buf[bl++] = '>'; self.num(buf, &bl, ed->to);
+                buf[bl++] = ' ';
+            }
+            buf[bl++] = '\n';
+            libc.write(1, buf, bl);
+        }
+        u32 live = 0;
+        for (u32 si = 0; si < gen.nstates; si++)
+        {
+            if (gen.rep[si] != si) continue;
+            bl = 0;
+            buf[bl++] = 'M'; self.num(buf, &bl, live); buf[bl++] = ' '; self.num(buf, &bl, si); buf[bl++] = '\n';
+            libc.write(1, buf, bl);
+            live++;
+        }
+        for (u32 si = 0; si < t2.nstates; si++)
+        {
+            bl = 0;
+            buf[bl++] = 'A'; self.num(buf, &bl, si); buf[bl++] = ' ';
+            for (u32 t = 0; t < t2.nterms; t++)
+            {
+                lalr.Entry* en = &t2.act[si * t2.nterms + t];
+                if (en->kind == lalr.ACT_ERROR) continue;
+                self.num(buf, &bl, t); buf[bl++] = ':';
+                self.num(buf, &bl, en->kind); buf[bl++] = ':';
+                self.num(buf, &bl, en->a); buf[bl++] = ' ';
+            }
+            buf[bl++] = '\n';
+            libc.write(1, buf, bl);
+        }
+        gen.free();
+        if (t2.act) mman.dealloc<lalr.Entry>(t2.act);
+        if (t2.gotos) mman.dealloc<u32>(t2.gotos);
+        if (t2.conflicts) mman.dealloc<lalr.Conflict>(t2.conflicts);
     }
 
     // value pushed for a shifted token: a strView for IDENT / type
@@ -1347,6 +1447,11 @@ pub struct StmtParser
         case AC_PASS:
             v = self.sem[base];
             kind = self.skind[base];
+            self.push(v, kind);
+            return;
+        case AC_PASS1:
+            v = self.sem[base + 1];
+            kind = self.skind[base + 1];
             self.push(v, kind);
             return;
         case AC_NONE:
@@ -3435,6 +3540,11 @@ pub struct StmtParser
         self.sv = 0;
         self.ip = 0;
         self.stk[0] = 0;
+        if (self.dumpGrammar)
+        {
+            self.dumpGrammar = false;
+            self.dumpGrammarTables();
+        }
         while (true)
         {
             u32 state = self.stk[self.sp];
