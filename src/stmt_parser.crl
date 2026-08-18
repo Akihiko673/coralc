@@ -114,6 +114,10 @@ const u32 AC_TGEN2 = 88;        // TYPE -> TBASE < TYPES , TCONSTS >
 const u32 AC_TGEN3 = 89;        // TYPE -> TBASE < TCONSTS >
 const u32 AC_CONSTINT = 90;     // TCONSTS -> INT (const-expr entry)
 const u32 AC_CONSTAPP = 91;     // TCONSTS -> TCONSTS , INT
+const u32 AC_EXTERN_F0 = 92;    // EXT -> extern TYPE IDENT ( PARAMS ) ;
+const u32 AC_EXTERN_F0P = 93;   // EXT -> PREF extern TYPE IDENT ( PARAMS ) ;
+const u32 AC_EXTERN_V0P = 94;   // EXT -> PREF extern TYPE IDENT ;
+const u32 AC_TFUNC = 95;        // TYPE -> TYPE ( PARAMS ) func-pointer type
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -519,6 +523,11 @@ lalr.Grammar stmtGrammar()
     r4[2] = lalr.NT_BASE + N_TCONSTS;
     r4[3] = termId((u8*)">");
     addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGEN3);
+    r4[0] = lalr.NT_BASE + N_TYPE;
+    r4[1] = termId((u8*)"(");
+    r4[2] = lalr.NT_BASE + N_PARAMS;
+    r4[3] = termId((u8*)")");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TFUNC);
     r1[0] = lalr.NT_BASE + N_TYPEKW;
     addProd(&g, i++, lalr.NT_BASE + N_TBASE, 1, r1, 0, 0, AC_TBASE);
     r1[0] = tok.TOK_IDENT;
@@ -815,6 +824,29 @@ lalr.Grammar stmtGrammar()
     r4[2] = tok.TOK_IDENT;
     r4[3] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_EXT, 4, r4, 0, 0, AC_EXTERN_V0);
+    r7[0] = termId((u8*)"extern");
+    r7[1] = lalr.NT_BASE + N_TYPE;
+    r7[2] = tok.TOK_IDENT;
+    r7[3] = termId((u8*)"(");
+    r7[4] = lalr.NT_BASE + N_PARAMS;
+    r7[5] = termId((u8*)")");
+    r7[6] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXT, 7, r7, 0, 0, AC_EXTERN_F0);
+    r8[0] = lalr.NT_BASE + N_PREF;
+    r8[1] = termId((u8*)"extern");
+    r8[2] = lalr.NT_BASE + N_TYPE;
+    r8[3] = tok.TOK_IDENT;
+    r8[4] = termId((u8*)"(");
+    r8[5] = lalr.NT_BASE + N_PARAMS;
+    r8[6] = termId((u8*)")");
+    r8[7] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXT, 8, r8, 0, 0, AC_EXTERN_F0P);
+    r5[0] = lalr.NT_BASE + N_PREF;
+    r5[1] = termId((u8*)"extern");
+    r5[2] = lalr.NT_BASE + N_TYPE;
+    r5[3] = tok.TOK_IDENT;
+    r5[4] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_EXT, 5, r5, 0, 0, AC_EXTERN_V0P);
     r11[0] = termId((u8*)"extern");
     r11[1] = termId((u8*)"(");
     r11[2] = tok.TOK_STR;
@@ -1556,6 +1588,35 @@ pub struct StmtParser
             p->col = col;
             ast.freeType(ty);
             mman.dealloc<SList>(cl);
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_TFUNC:
+        {
+            ast.TypeExpr* ret = (ast.TypeExpr*)(u64)self.sem[base];
+            PList* pl = (PList*)(u64)self.sem[base + 2];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_FUNC;
+            p->name = str.strView::empty();
+            p->elem = null;
+            p->count = null;
+            p->args = mman.alloc<ast.TypeExpr*>(pl->n ? pl->n : 1);
+            p->nargs = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+            {
+                ast.Param* pp = (ast.Param*)(u64)pl->a[k];
+                p->args[k] = pp->type;
+                pp->type = null;
+                mman.dealloc<ast.Param>(pp);
+            }
+            p->cargs = null;
+            p->ncargs = 0;
+            p->ret = ret;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
             self.push((u64)p, K_TYPE);
             return;
         }
@@ -2798,6 +2859,149 @@ pub struct StmtParser
             d->exported = false;
             d->isStatic = false;
             d->isInline = false;
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = true;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = null;
+            d->nparams = 0;
+            d->variadic = false;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_F0:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
+            PList* pl = (PList*)(u64)self.sem[base + 4];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_EXTERN;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = false;
+            d->isStatic = false;
+            d->isInline = false;
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            bool variadic = pl->variadic;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->variadic = variadic;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_F0P:
+        {
+            u64 fl = self.sem[base];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 2];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 3];
+            PList* pl = (PList*)(u64)self.sem[base + 5];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_EXTERN;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = ((fl & FLAG_PUB) != 0);
+            d->isStatic = ((fl & FLAG_STATIC) != 0);
+            d->isInline = ((fl & FLAG_INLINE) != 0);
+            d->isExtern = true;
+            d->noreturn = false;
+            d->isVar = false;
+            d->cc = str.strView::empty();
+            d->structName = str.strView::empty();
+            d->traitName = str.strView::empty();
+            d->generics = null;
+            d->ngenerics = 0;
+            d->fields = null;
+            d->nfields = 0;
+            d->variants = null;
+            d->nvariants = 0;
+            d->params = mman.alloc<ast.Param>(pl->n);
+            d->nparams = pl->n;
+            for (u32 k = 0; k < pl->n; k++)
+                d->params[k] = *(ast.Param*)(u64)pl->a[k];
+            bool variadic = pl->variadic;
+            if (pl->a) mman.dealloc<u64>(pl->a);
+            mman.dealloc<PList>(pl);
+            d->variadic = variadic;
+            d->body = null;
+            d->decls = null;
+            d->ndecls = 0;
+            d->cases = null;
+            d->caseNames = null;
+            d->caseLens = null;
+            d->ncases = 0;
+            d->defaultBody = null;
+            d->ndeclDefault = 0;
+            d->line = line;
+            d->col = col;
+            self.freeView((u64)s);
+            self.push((u64)d, K_DECL);
+            return;
+        }
+        case AC_EXTERN_V0P:
+        {
+            u64 fl = self.sem[base];
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 2];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 3];
+            ast.Decl* d = mman.alloc<ast.Decl>(1);
+            d->kind = ast.DT_EXTERN;
+            d->name = *s;
+            d->text = str.strView::empty();
+            d->type = ty;
+            d->value = null;
+            d->exported = ((fl & FLAG_PUB) != 0);
+            d->isStatic = ((fl & FLAG_STATIC) != 0);
+            d->isInline = ((fl & FLAG_INLINE) != 0);
             d->isExtern = true;
             d->noreturn = false;
             d->isVar = true;
