@@ -119,6 +119,8 @@ const u32 AC_EXTERN_F0P = 93;   // EXT -> PREF extern TYPE IDENT ( PARAMS ) ;
 const u32 AC_EXTERN_V0P = 94;   // EXT -> PREF extern TYPE IDENT ;
 const u32 AC_TFUNC = 95;        // TYPE -> TYPE ( PARAMS ) func-pointer type
 const u32 AC_PASS1 = 96;        // DECL -> ATTRS (FUNC|FUNC0|EXT): pass the inner decl
+const u32 AC_ASSERT = 97;       // ASSERT -> assert ( ES ) ;
+const u32 AC_APP2 = 98;         // X -> X , Y lists: append child at base+2
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -185,7 +187,8 @@ const u32 N_CSEBODY = 60;   // flag case body: DECL list (distinct from DECLS
                             // so its epsilon lookahead is not polluted by the
                             // right-recursive DECLS list states)
 const u32 N_TCONSTS = 61;   // trailing const-expr args of TYPES (<u64, 3>)
-const u32 N_COUNT = 62;
+const u32 N_ASSERT = 62;    // assert ( ES ) ;
+const u32 N_COUNT = 63;
 
 // precedence levels (higher wins)
 const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
@@ -553,7 +556,7 @@ lalr.Grammar stmtGrammar()
     r3[0] = lalr.NT_BASE + N_TYPES;
     r3[1] = termId((u8*)",");
     r3[2] = lalr.NT_BASE + N_TYPE;
-    addProd(&g, i++, lalr.NT_BASE + N_TYPES, 3, r3, 0, 0, AC_APP);
+    addProd(&g, i++, lalr.NT_BASE + N_TYPES, 3, r3, 0, 0, AC_APP2);
     r1[0] = tok.TOK_INT;
     addProd(&g, i++, lalr.NT_BASE + N_TCONSTS, 1, r1, 0, 0, AC_CONSTINT);
     r3[0] = lalr.NT_BASE + N_TCONSTS;
@@ -599,6 +602,8 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_RETURN;
     addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
+    r1[0] = lalr.NT_BASE + N_ASSERT;
+    addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_IF;
     addProd(&g, i++, lalr.NT_BASE + N_STMT, 1, r1, 0, 0, AC_PASS);
     r1[0] = lalr.NT_BASE + N_WHILE;
@@ -621,6 +626,12 @@ lalr.Grammar stmtGrammar()
     r3[1] = lalr.NT_BASE + N_ES_SEMI;
     r3[2] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_RETURN, 3, r3, 0, 0, AC_RETURN);
+    r5[0] = termId((u8*)"assert");
+    r5[1] = termId((u8*)"(");
+    r5[2] = lalr.NT_BASE + N_ES_RPAR;
+    r5[3] = termId((u8*)")");
+    r5[4] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_ASSERT, 5, r5, 0, 0, AC_ASSERT);
     r6[0] = termId((u8*)"if");
     r6[1] = termId((u8*)"(");
     r6[2] = lalr.NT_BASE + N_ES_RPAR;
@@ -784,7 +795,7 @@ lalr.Grammar stmtGrammar()
     r3[0] = lalr.NT_BASE + N_IDENTS;
     r3[1] = termId((u8*)",");
     r3[2] = tok.TOK_IDENT;
-    addProd(&g, i++, lalr.NT_BASE + N_IDENTS, 3, r3, 0, 0, AC_APP);
+    addProd(&g, i++, lalr.NT_BASE + N_IDENTS, 3, r3, 0, 0, AC_APP2);
 
     addProd(&g, i++, lalr.NT_BASE + N_ATTRS, 0, null, PREC_ES, lalr.ASSOC_RIGHT, AC_NONE);
     r5[0] = termId((u8*)"@");
@@ -964,7 +975,7 @@ lalr.Grammar stmtGrammar()
     r3[0] = lalr.NT_BASE + N_EVARIANTS;
     r3[1] = termId((u8*)",");
     r3[2] = tok.TOK_IDENT;
-    addProd(&g, i++, lalr.NT_BASE + N_EVARIANTS, 3, r3, 0, 0, AC_APP);
+    addProd(&g, i++, lalr.NT_BASE + N_EVARIANTS, 3, r3, 0, 0, AC_APP2);
 
     g.nprods = i;
     return g;
@@ -1183,6 +1194,32 @@ pub struct StmtParser
     // two-token lookahead for the typedef ambiguity: in a state with an ES
     // slot, an IDENT that the table would shift into a type starts an
     // expression unless the next token continues a type name
+    // Scan a <...> generic argument list starting at 'lt' (a '<' token).
+    // Stops at the matching '>' (returned in *gt); stops early on tokens
+    // that cannot occur inside a generic argument list. Bounded: the probe
+    // is a heuristic, give up after 16 tokens.
+    bool skipGenericGt(u32 lt, u32* gt)
+    {
+        u32 depth = 0;
+        u32 i = lt;
+        while (i < self.ntoks && i - lt <= 16)
+        {
+            u32 id = self.toks[i].id;
+            if (id == termId((u8*)"<")) depth++;
+            else if (id == termId((u8*)">"))
+            {
+                depth--;
+                if (depth == 0) { *gt = i; return true; }
+            }
+            else if (id == termId((u8*)";") || id == termId((u8*)"(") ||
+                     id == termId((u8*)"=") || id == termId((u8*)"{") ||
+                     id == termId((u8*)"}") || id == termId((u8*)")"))
+                return false;
+            i++;
+        }
+        return false;
+    }
+
     bool identContinuesType(u32 at)
     {
         if (at + 1 >= self.ntoks) return false;
@@ -1190,19 +1227,25 @@ pub struct StmtParser
         if (n == tok.TOK_IDENT) return true;
         if (n == termId((u8*)"<"))
         {
-            if (at + 2 >= self.ntoks) return false;
-            u32 t = self.toks[at + 2].id;
-            if (t != tok.TOK_IDENT && (t < self.tTypeMinId || t > self.tTypeMaxId)) return false;
-            if (at + 3 >= self.ntoks) return true;
-            u32 o = self.toks[at + 3].id;
-            return o == termId((u8*)">") || o == termId((u8*)",");
+            u32 gt;
+            if (!self.skipGenericGt(at + 1, &gt)) return false;
+            if (gt + 1 >= self.ntoks) return false;
+            return self.toks[gt + 1].id == tok.TOK_IDENT;
         }
         if (n != termId((u8*)".")) return false;
         if (at + 2 >= self.ntoks) return false;
         if (self.toks[at + 2].id != tok.TOK_IDENT) return false;
         if (at + 3 >= self.ntoks) return true;
         u32 o = self.toks[at + 3].id;
-        return o != termId((u8*)"(") && o != termId((u8*)"=");
+        if (o == termId((u8*)"<"))
+        {
+            u32 gt;
+            if (!self.skipGenericGt(at + 3, &gt)) return false;
+            if (gt + 1 >= self.ntoks) return false;
+            return self.toks[gt + 1].id == tok.TOK_IDENT;
+        }
+        return o != termId((u8*)"(") && o != termId((u8*)"=") && o != termId((u8*)"[")
+            && o != termId((u8*)"++") && o != termId((u8*)"--");
     }
 
     // runs the expression sub-parser at the current token for an ES slot;
@@ -1220,6 +1263,19 @@ pub struct StmtParser
         u32 consumed = 0;
         res.Result<ast.Expr*, exprP.ParseErr> r = self.exp.parseFrom(
             self.src, self.toks, self.ntoks, self.ip, stops, nstops, &consumed);
+        if (r.isErr() && self.trace)
+        {
+            u8 eb[64];
+            u32 ebl = 0;
+            eb[ebl++] = 'E';
+            self.num(eb, &ebl, r.error.tid);
+            eb[ebl++] = ' ';
+            self.num(eb, &ebl, r.error.row);
+            eb[ebl++] = ':';
+            self.num(eb, &ebl, r.error.col);
+            eb[ebl++] = '\n';
+            libc.write(2, eb, ebl);
+        }
         if (r.isErr()) return false;
         ast.Expr* e = r.value;
         val = (u64)e;
@@ -1468,6 +1524,13 @@ pub struct StmtParser
         {
             SList* l = (SList*)(u64)self.sem[base];
             listAppend(l, self.sem[base + 1]);
+            self.push((u64)l, K_LIST);
+            return;
+        }
+        case AC_APP2:
+        {
+            SList* l = (SList*)(u64)self.sem[base];
+            listAppend(l, self.sem[base + 2]);
             self.push((u64)l, K_LIST);
             return;
         }
@@ -2346,6 +2409,28 @@ pub struct StmtParser
             s->text = str.strView::empty();
             s->type = null;
             s->a = (ast.Expr*)(u64)self.sem[base + 1];
+            s->b = null;
+            s->c = null;
+            s->body = null;
+            s->body2 = null;
+            s->init = null;
+            s->stmts = null;
+            s->nstmts = 0;
+            s->cases = null;
+            s->ncases = 0;
+            s->defaultCase = null;
+            s->line = line;
+            s->col = col;
+            self.push((u64)s, K_STMT);
+            return;
+        }
+        case AC_ASSERT:
+        {
+            ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+            s->kind = ast.ST_ASSERT;
+            s->text = str.strView::empty();
+            s->type = null;
+            s->a = (ast.Expr*)(u64)self.sem[base + 2];
             s->b = null;
             s->c = null;
             s->body = null;
@@ -3420,8 +3505,8 @@ pub struct StmtParser
         }
         case AC_ENUM:
         {
-            str.strView* s = (str.strView*)(u64)self.sem[base + 2];
-            SList* l = (SList*)(u64)self.sem[base + 4];
+            str.strView* s = (str.strView*)(u64)self.sem[base + 3];
+            SList* l = (SList*)(u64)self.sem[base + 5];
             ast.Decl* d = mman.alloc<ast.Decl>(1);
             d->kind = ast.DT_ENUM;
             d->name = *s;

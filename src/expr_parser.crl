@@ -86,6 +86,17 @@ const u32 AC_LISTAPP = 46;
 const u32 AC_CAST = 47;     // U -> ( TC ) U
 const u32 AC_SIZEOF = 48;   // U -> sizeof ( T )
 const u32 AC_TYPELIT = 49;  // TC -> type keyword (tokenNode pre-built it)
+const u32 AC_TCSTAR = 50;   // TC -> TC * : pointer casts
+const u32 AC_PLUSEQ = 51;   // E -> E += E
+const u32 AC_MINUSEQ = 52;
+const u32 AC_MULEQ = 53;
+const u32 AC_DIVEQ = 54;
+const u32 AC_MODEQ = 55;
+const u32 AC_ANDEQ = 56;
+const u32 AC_OREQ = 57;
+const u32 AC_XOREQ = 58;
+const u32 AC_SHLEQ = 59;
+const u32 AC_SHREQ = 60;
 const u32 AC_TIDENT = 50;   // T -> IDENT (wrap as type literal)
 const u32 AC_GENERIC = 51;  // P -> P !< TARGS >
 // nonterminal indices
@@ -181,6 +192,26 @@ lalr.Grammar exprGrammar()
     u32 r3[3];
     r3[0] = NT + N_E; r3[1] = term((u8*)"="); r3[2] = NT + N_E;
     addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_ASSIGN);
+    r3[1] = term((u8*)"+="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_PLUSEQ);
+    r3[1] = term((u8*)"-="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_MINUSEQ);
+    r3[1] = term((u8*)"*="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_MULEQ);
+    r3[1] = term((u8*)"/="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_DIVEQ);
+    r3[1] = term((u8*)"%="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_MODEQ);
+    r3[1] = term((u8*)"&="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_ANDEQ);
+    r3[1] = term((u8*)"|="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_OREQ);
+    r3[1] = term((u8*)"^="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_XOREQ);
+    r3[1] = term((u8*)"<<="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_SHLEQ);
+    r3[1] = term((u8*)">>="); r3[2] = NT + N_E;
+    addProd(&g, i++, NT + N_E, 3, r3, PREC_ASSIGN, lalr.ASSOC_RIGHT, AC_SHREQ);
     u32 r5[5];
     r5[0] = NT + N_E; r5[1] = term((u8*)"?"); r5[2] = NT + N_E;
     r5[3] = term((u8*)":"); r5[4] = NT + N_E;
@@ -359,6 +390,10 @@ lalr.Grammar exprGrammar()
     r1t[0] = term((u8*)"usize");
     addProd(&g, i++, NT + N_TC, 1, r1t, 0, 0, AC_TYPELIT);
 
+    r2[0] = NT + N_TC;
+    r2[1] = term((u8*)"*");
+    addProd(&g, i++, NT + N_TC, 2, r2, 0, 0, AC_TCSTAR);
+
     r1t[0] = NT + N_TC;
     addProd(&g, i++, NT + N_T, 1, r1t, 0, 0, AC_PASS);
     r1t[0] = tok.TOK_IDENT;
@@ -394,6 +429,7 @@ pub struct ExprParser
     u32 tNullId;
     u32 tLtId;
     u32 tGtId;
+    u32 tAssertId;
     u32 tGtGtId;
     u32 tBangLtId;
     u32 tCommaId;
@@ -441,6 +477,7 @@ pub struct ExprParser
         p.tColonColonId = tok.terminalId(str.strView::fromCstr("::"));
         p.tLbraceId = tok.terminalId(str.strView::fromCstr("{"));
         p.tSizeofId = tok.terminalId(str.strView::fromCstr("sizeof"));
+        p.tAssertId = tok.terminalId(str.strView::fromCstr("assert"));
         p.nScr = 0;
         p.nSpl = 0;
         return p;
@@ -522,6 +559,12 @@ pub struct ExprParser
             e->text = s;
             return e;
         }
+        if (t->id == self.tAssertId)
+        {
+            ast.Expr* e = self.mk(ast.EX_IDENT, t->row, t->col);
+            e->text = s;
+            return e;
+        }
         if (t->id == self.tTrueId || t->id == self.tFalseId)
         {
             ast.Expr* e = self.mk(ast.EX_BOOL, t->row, t->col);
@@ -556,12 +599,23 @@ pub struct ExprParser
             v->b = self.sem[base + 2];
             v->c = self.sem[base + 4];
         }
-        else if (pr->action == AC_ASSIGN || (pr->action >= AC_LOR && pr->action <= AC_MOD))
+        else if (pr->action == AC_ASSIGN || (pr->action >= AC_LOR && pr->action <= AC_MOD)
+                 || (pr->action >= AC_PLUSEQ && pr->action <= AC_SHREQ))
         {
             v = self.mk(ast.EX_BINARY, line, col);
             v->a = self.sem[base];
             v->b = self.sem[base + 2];
             if (pr->action == AC_ASSIGN) v->text = str.strView::fromCstr("=");
+            else if (pr->action == AC_PLUSEQ) v->text = str.strView::fromCstr("+=");
+            else if (pr->action == AC_MINUSEQ) v->text = str.strView::fromCstr("-=");
+            else if (pr->action == AC_MULEQ) v->text = str.strView::fromCstr("*=");
+            else if (pr->action == AC_DIVEQ) v->text = str.strView::fromCstr("/=");
+            else if (pr->action == AC_MODEQ) v->text = str.strView::fromCstr("%=");
+            else if (pr->action == AC_ANDEQ) v->text = str.strView::fromCstr("&=");
+            else if (pr->action == AC_OREQ) v->text = str.strView::fromCstr("|=");
+            else if (pr->action == AC_XOREQ) v->text = str.strView::fromCstr("^=");
+            else if (pr->action == AC_SHLEQ) v->text = str.strView::fromCstr("<<=");
+            else if (pr->action == AC_SHREQ) v->text = str.strView::fromCstr(">>=");
             else if (pr->action == AC_LOR) v->text = str.strView::fromCstr("||");
             else if (pr->action == AC_LAND) v->text = str.strView::fromCstr("&&");
             else if (pr->action == AC_BOR) v->text = str.strView::fromCstr("|");
@@ -679,6 +733,17 @@ pub struct ExprParser
             v->text = ty->text;
             mman.dealloc<ast.Expr>(ty);
         }
+        else if (pr->action == AC_TCSTAR)
+        {
+            ast.Expr* t = (ast.Expr*)(u64)self.sem[base];
+            v = self.mk(ast.EX_TYPELIT, line, col);
+            v->text = t->text;
+            str.String sb = str.String::new();
+            if (v->text.len > 0) sb.pushView(v->text);
+            sb.pushView(str.strView::fromCstr("*"));
+            v->text = sb.asView();
+            mman.dealloc<ast.Expr>(t);
+        }
         else if (pr->action == AC_SIZEOF)
         {
             ast.Expr* ty = self.sem[base + 2];
@@ -719,7 +784,8 @@ pub struct ExprParser
         if (tid == tok.TOK_IDENT || tid == tok.TOK_INT || tid == tok.TOK_FLOAT
             || tid == tok.TOK_STR || tid == tok.TOK_CHAR) return true;
         if (tid == self.tTrueId || tid == self.tFalseId || tid == self.tNullId
-            || tid == self.tLbraceId || tid == self.tSizeofId) return true;
+            || tid == self.tLbraceId || tid == self.tSizeofId
+            || tid == self.tAssertId) return true;
         return false;
     }
 
