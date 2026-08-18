@@ -97,8 +97,8 @@ const u32 AC_OREQ = 57;
 const u32 AC_XOREQ = 58;
 const u32 AC_SHLEQ = 59;
 const u32 AC_SHREQ = 60;
-const u32 AC_TIDENT = 50;   // T -> IDENT (wrap as type literal)
-const u32 AC_GENERIC = 51;  // P -> P !< TARGS >
+const u32 AC_TIDENT = 61;   // T -> IDENT (wrap as type literal)
+const u32 AC_GENERIC = 62;  // P -> P !< TARGS >
 // nonterminal indices
 const u32 N_E = 0;
 const u32 N_B = 1;
@@ -157,7 +157,7 @@ lalr.Grammar exprGrammar()
     lalr.Grammar g;
     g.nterms = tok.TOK_ANON_FIRST + tok.NUM_ANON;   // 6..(5+NUM_ANON) anonymous
     g.nnonterms = N_COUNT;
-    g.nprods = 84;
+    g.nprods = 95;
     g.prods = mman.alloc<lalr.Prod>(g.nprods);
     g.start = NT + N_E;
     g.termPrec = mman.alloc<u32>(g.nterms);

@@ -116,7 +116,7 @@ pub u32 terminalId(str.strView s)
     {
         str.strView t = ANON_TERMS[i];
         u32 j = 0;
-        while (j < t.len && t.ptr[j] == s.ptr[j]) j++;
+        while (j < t.len && j < s.len && t.ptr[j] == s.ptr[j]) j++;
         if (j == t.len && j == s.len) return TOK_ANON_FIRST + i;
     }
     return 0xFFFFFFFF;
