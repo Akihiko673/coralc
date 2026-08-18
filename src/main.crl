@@ -113,9 +113,7 @@ i32 main(i32 argc, char** argv)
         libc.write(2, "\n", 1);
         lex.Lexer lx = lex.Lexer::new(src, len);
         lex.LexResult lr = lx.lex();
-        if (dump)
-            dumptoks(src, lr.toks, lr.n, lr.errs, lr.nerrs);
-        else if (lr.nerrs > 0)
+        if (lr.nerrs > 0)
         {
             for (u32 i = 0; i < lr.nerrs; i++)
             {
@@ -127,6 +125,8 @@ i32 main(i32 argc, char** argv)
         }
         else
         {
+            if (dump)
+                dumptoks(src, lr.toks, lr.n, lr.errs, lr.nerrs);
             ast.Program* prog = stp.parseProgram(src, lr.toks, lr.n);
             if (prog == null)
             {
@@ -141,6 +141,10 @@ i32 main(i32 argc, char** argv)
                 selfNum(eb, &el, stp.errRow);
                 eb[el++] = ':';
                 selfNum(eb, &el, stp.errCol);
+                eb[el++] = '\n';
+                libc.write(2, eb, el);
+                el = 0;
+                selfNum(eb, &el, stp.errState);
                 eb[el++] = '\n';
                 libc.write(2, eb, el);
                 fails++;

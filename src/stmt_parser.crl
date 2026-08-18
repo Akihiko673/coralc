@@ -106,6 +106,10 @@ const u32 AC_LSBLOCK = 80;      // SBLOCK -> e (EMPTY K_SITEM list)
 const u32 AC_SITEMW = 81;       // SITEM -> SMETHOD
 const u32 AC_SITEMW0 = 82;      // SITEM -> SMETHOD0
 const u32 AC_EXTERN_FB = 83;    // EXTB -> extern ( STR ) ATTRS TYPE IDENT ( PARAMS ) BLOCK
+const u32 AC_FUNC0G = 84;       // FUNC0 -> TYPE IDENT !< TYPES > ( PARAMS ) BLOCK
+const u32 AC_FUNCP0G = 85;      // FUNC0 -> TYPE IDENT !< TYPES > ( PARAMS ) ;
+const u32 AC_FUNCG = 86;        // FUNC -> PREF TYPE IDENT !< TYPES > ( PARAMS ) BLOCK
+const u32 AC_FUNCPG = 87;       // FUNC -> PREF TYPE IDENT !< TYPES > ( PARAMS ) ;
 
 // nonterminal indices
 const u32 N_PROG = 0;
@@ -384,8 +388,8 @@ lalr.Grammar stmtGrammar()
     u32 r5[5];
     u32 r6[8];
     u32 r7[7];
-    u32 r8[8];
-    u32 r9[9];
+    u32 r8[9];
+    u32 r9[10];
     u32 r10[10];
     u32 r11[11];
 
@@ -433,6 +437,19 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_FUNC, 7, r7, 0, 0, AC_FUNC);
     r7[6] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_FUNC, 7, r7, 0, 0, AC_FUNCP);
+    r9[0] = lalr.NT_BASE + N_PREF;
+    r9[1] = lalr.NT_BASE + N_TYPE;
+    r9[2] = tok.TOK_IDENT;
+    r9[3] = termId((u8*)"!<");
+    r9[4] = lalr.NT_BASE + N_TYPES;
+    r9[5] = termId((u8*)">");
+    r9[6] = termId((u8*)"(");
+    r9[7] = lalr.NT_BASE + N_PARAMS;
+    r9[8] = termId((u8*)")");
+    r9[9] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC, 10, r9, 0, 0, AC_FUNCG);
+    r9[9] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC, 10, r9, 0, 0, AC_FUNCPG);
     r6[0] = lalr.NT_BASE + N_TYPE;
     r6[1] = tok.TOK_IDENT;
     r6[2] = termId((u8*)"(");
@@ -442,6 +459,18 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_FUNC0, 6, r6, 0, 0, AC_FUNC0);
     r6[5] = termId((u8*)";");
     addProd(&g, i++, lalr.NT_BASE + N_FUNC0, 6, r6, 0, 0, AC_FUNCP0);
+    r8[0] = lalr.NT_BASE + N_TYPE;
+    r8[1] = tok.TOK_IDENT;
+    r8[2] = termId((u8*)"!<");
+    r8[3] = lalr.NT_BASE + N_TYPES;
+    r8[4] = termId((u8*)">");
+    r8[5] = termId((u8*)"(");
+    r8[6] = lalr.NT_BASE + N_PARAMS;
+    r8[7] = termId((u8*)")");
+    r8[8] = lalr.NT_BASE + N_BLOCK;
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC0, 9, r8, 0, 0, AC_FUNC0G);
+    r8[8] = termId((u8*)";");
+    addProd(&g, i++, lalr.NT_BASE + N_FUNC0, 9, r8, 0, 0, AC_FUNCP0G);
     addProd(&g, i++, lalr.NT_BASE + N_PREF, 0, null, PREC_PREF, lalr.ASSOC_RIGHT, AC_PREF0);
     r2[0] = lalr.NT_BASE + N_PREF; r2[1] = termId((u8*)"pub");
     addProd(&g, i++, lalr.NT_BASE + N_PREF, 2, r2, 0, 0, AC_PUB);
@@ -891,15 +920,18 @@ pub struct StmtParser
     u32 errRow;
     u32 errCol;
     u32 errTid;
+    u32 errState;
 
     static StmtParser new()
     {
         StmtParser p;
         p.exp = exprP.ExprParser::new();
         p.g = stmtGrammar();
-        lalr.Generator gen = lalr.Generator::new(p.g);
-        gen.build(&p.t);
-        gen.free();
+        {
+            lalr.Generator gen = lalr.Generator::new(p.g);
+            gen.build(&p.t);
+            gen.free();
+        }
         p.src = null;
         p.toks = null;
         p.ntoks = 0;
@@ -990,6 +1022,15 @@ pub struct StmtParser
         if (at + 1 >= self.ntoks) return false;
         u32 n = self.toks[at + 1].id;
         if (n == tok.TOK_IDENT) return true;
+        if (n == termId((u8*)"<"))
+        {
+            if (at + 2 >= self.ntoks) return false;
+            u32 t = self.toks[at + 2].id;
+            if (t != tok.TOK_IDENT && (t < self.tTypeMinId || t > self.tTypeMaxId)) return false;
+            if (at + 3 >= self.ntoks) return true;
+            u32 o = self.toks[at + 3].id;
+            return o == termId((u8*)">") || o == termId((u8*)",");
+        }
         if (n != termId((u8*)".")) return false;
         if (at + 2 >= self.ntoks) return false;
         if (self.toks[at + 2].id != tok.TOK_IDENT) return false;
@@ -1800,10 +1841,13 @@ pub struct StmtParser
         }
         case AC_FUNC0:
         case AC_FUNCP0:
+        case AC_FUNC0G:
+        case AC_FUNCP0G:
         {
+            bool g = pr->action == AC_FUNC0G || pr->action == AC_FUNCP0G;
             ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
             str.strView* s = (str.strView*)(u64)self.sem[base + 1];
-            PList* pl = (PList*)(u64)self.sem[base + 3];
+            PList* pl = (PList*)(u64)self.sem[g ? base + 6 : base + 3];
             ast.Decl* d = mman.alloc<ast.Decl>(1);
             d->kind = ast.DT_FUNC;
             d->name = *s;
@@ -1833,7 +1877,30 @@ pub struct StmtParser
             if (pl->a) mman.dealloc<u64>(pl->a);
             mman.dealloc<PList>(pl);
             d->variadic = variadic;
-            d->body = pr->action == AC_FUNC0 ? (ast.Stmt*)(u64)self.sem[base + 5] : null;
+            if (g)
+            {
+                SList* tl = (SList*)(u64)self.sem[base + 3];
+                if (tl)
+                {
+                    if (tl->n > 0)
+                    {
+                        d->generics = mman.alloc<str.strView>(tl->n);
+                        d->ngenerics = tl->n;
+                        for (u32 k = 0; k < tl->n; k++)
+                        {
+                            ast.TypeExpr* t = (ast.TypeExpr*)(u64)tl->a[k];
+                            d->generics[k] = t->name;
+                            ast.freeType(t);
+                        }
+                    }
+                    if (tl->a) mman.dealloc<u64>(tl->a);
+                    mman.dealloc<SList>(tl);
+                }
+            }
+            if (g)
+                d->body = pr->action == AC_FUNC0G ? (ast.Stmt*)(u64)self.sem[base + 8] : null;
+            else
+                d->body = pr->action == AC_FUNC0 ? (ast.Stmt*)(u64)self.sem[base + 5] : null;
             d->decls = null;
             d->ndecls = 0;
             d->cases = null;
@@ -2424,12 +2491,15 @@ pub struct StmtParser
             return;
         }
         case AC_FUNC:
+        case AC_FUNCG:
+        case AC_FUNCPG:
         {
+            bool g = pr->action != AC_FUNC;
             u32 flags = (u32)(u64)self.sem[base];
             ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base + 1];
             str.strView* s = (str.strView*)(u64)self.sem[base + 2];
-            PList* pl = (PList*)(u64)self.sem[base + 4];
-            ast.Stmt* body = (ast.Stmt*)(u64)self.sem[base + 6];
+            PList* pl = (PList*)(u64)self.sem[base + (g ? 7 : 4)];
+            ast.Stmt* body = g ? (pr->action == AC_FUNCG ? (ast.Stmt*)(u64)self.sem[base + 9] : null) : (ast.Stmt*)(u64)self.sem[base + 6];
             ast.Decl* d = mman.alloc<ast.Decl>(1);
             d->kind = ast.DT_FUNC;
             d->name = *s;
@@ -2459,6 +2529,26 @@ pub struct StmtParser
             if (pl->a) mman.dealloc<u64>(pl->a);
             mman.dealloc<PList>(pl);
             d->variadic = variadic;
+            if (g)
+            {
+                SList* tl = (SList*)(u64)self.sem[base + 4];
+                if (tl)
+                {
+                    if (tl->n > 0)
+                    {
+                        d->generics = mman.alloc<str.strView>(tl->n);
+                        d->ngenerics = tl->n;
+                        for (u32 k = 0; k < tl->n; k++)
+                        {
+                            ast.TypeExpr* t = (ast.TypeExpr*)(u64)tl->a[k];
+                            d->generics[k] = t->name;
+                            ast.freeType(t);
+                        }
+                    }
+                    if (tl->a) mman.dealloc<u64>(tl->a);
+                    mman.dealloc<SList>(tl);
+                }
+            }
             d->body = body;
             d->decls = null;
             d->ndecls = 0;
@@ -3060,6 +3150,18 @@ pub struct StmtParser
                     self.errRow = self.toks[self.ip].row;
                     self.errCol = self.toks[self.ip].col;
                     self.errTid = self.toks[self.ip].id;
+                    self.errState = state;
+                    {
+                        u8 bb[60];
+                        u32 bbl = 0;
+                        u32 ip0 = self.ip; self.num(bb, &bbl, ip0);
+                        bb[bbl++] = ' '; self.num(bb, &bbl, self.toks[ip0].row);
+                        bb[bbl++] = ':'; self.num(bb, &bbl, self.toks[ip0].col);
+                        bb[bbl++] = ' ';
+                        for (u32 zz = 0; zz < self.sp && zz < 6; zz++) { self.num(bb, &bbl, self.stk[self.sp - zz]); bb[bbl++] = ' '; }
+                        bb[bbl++] = '\n';
+                        libc.write(2, bb, bbl);
+                    }
                     self.clearSem();
                     return null;
                 }
@@ -3174,6 +3276,7 @@ pub struct StmtParser
                     self.errRow = self.toks[self.ip].row;
                     self.errCol = self.toks[self.ip].col;
                     self.errTid = self.toks[self.ip].id;
+                    self.errState = state;
                 }
                 self.clearSem();
                 return null;
