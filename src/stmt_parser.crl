@@ -172,7 +172,10 @@ const u32 N_SMETHOD = 56;   // struct method decl
 const u32 N_SMETHOD0 = 57;  // struct method decl (no generics)
 const u32 N_EVARIANTS = 58; // enum variant list
 const u32 N_EXTB = 59;      // extern-with-body decl
-const u32 N_COUNT = 60;
+const u32 N_CSEBODY = 60;   // flag case body: DECL list (distinct from DECLS
+                            // so its epsilon lookahead is not polluted by the
+                            // right-recursive DECLS list states)
+const u32 N_COUNT = 61;
 
 // precedence levels (higher wins)
 const u32 PREC_ES = 1;      // ES / ATTRS epsilon productions
@@ -180,9 +183,13 @@ const u32 PREC_PREF = 3;    // PREF epsilon: must beat type-keyword/IDENT
                             // shifts so function/param decls always push PREF
 const u32 PREC_DECLS = 3;   // DECLS epsilon beats an IDENT shift (flag cases)
 const u32 PREC_IDENT = 2;   // shift IDENT beats epsilon reductions
-const u32 PREC_TYPEKW = 2;
+const u32 PREC_TYPEKW = 4;  // type-keyword shifts beat PREF/DECLS epsilons so
+                            // case bodies etc. start their decl directly
 const u32 PREC_SEMI = 2;    // 'return ;' shifts (empty return)
 const u32 PREC_DEFAULT = 4; // 'default :' shifts over DECLS epsilon
+const u32 PREC_CSEBODY = 4; // case-body epsilon beats PREF epsilon so a next
+                            // case label (IDENT) ends the body instead of
+                            // continuing a DECL
 
 const u32 FLAG_PUB = 1;
 const u32 FLAG_STATIC = 2;
@@ -666,12 +673,16 @@ lalr.Grammar stmtGrammar()
     addProd(&g, i++, lalr.NT_BASE + N_FLAGSECTION, 1, r1, 0, 0, AC_PASS);
     r3[0] = termId((u8*)"default");
     r3[1] = termId((u8*)":");
-    r3[2] = lalr.NT_BASE + N_DECLS;
+    r3[2] = lalr.NT_BASE + N_CSEBODY;
     addProd(&g, i++, lalr.NT_BASE + N_FLAGSECTION, 3, r3, 0, 0, AC_FCASED);
     r3[0] = tok.TOK_IDENT;
     r3[1] = termId((u8*)":");
-    r3[2] = lalr.NT_BASE + N_DECLS;
+    r3[2] = lalr.NT_BASE + N_CSEBODY;
     addProd(&g, i++, lalr.NT_BASE + N_FCASE, 3, r3, 0, 0, AC_FCASEC);
+    addProd(&g, i++, lalr.NT_BASE + N_CSEBODY, 0, null, PREC_CSEBODY, 0, AC_LDECLS);
+    r2[0] = lalr.NT_BASE + N_DECL;
+    r2[1] = lalr.NT_BASE + N_CSEBODY;
+    addProd(&g, i++, lalr.NT_BASE + N_CSEBODY, 2, r2, 0, 0, AC_RAPP);
 
     r6[0] = termId((u8*)"const");
     r6[1] = lalr.NT_BASE + N_TYPE;

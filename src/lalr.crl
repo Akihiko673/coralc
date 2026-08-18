@@ -638,6 +638,20 @@ pub struct Generator
         Entry* en = &out->act[row + t];
         if (en->kind == ACT_REDUCE)
         {
+            Prod* op = &self.g.prods[en->a];
+            Prod* cp = &self.g.prods[p];
+            if (cp->prec != op->prec)
+            {
+                if (cp->prec > op->prec)
+                {
+                    u32 old = en->a;
+                    en->a = p;
+                    self.addConflict(row / self.g.nterms, t, 1, p, old);
+                }
+                else
+                    self.addConflict(row / self.g.nterms, t, 1, en->a, p);
+                return;
+            }
             if (p < en->a)
             {
                 u32 old = en->a;
