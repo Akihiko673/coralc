@@ -1,6 +1,5 @@
 @[no_warn_unsafe]
-
-mod string = import("std/text/string.crl");
+mod string.String = import("std/text/string.crl");
 
 pub u8 encodeCodepoint(u32 cp, u8* out)
 {
@@ -122,9 +121,9 @@ pub bool isValid(const u8* s, u64 len)
     return true;
 }
 
-pub String toLower(const u8* s, u64 len)
+pub string.String toLower(const u8* s, u64 len)
 {
-    String out = String::new();
+    string.String out = string.String::new();
     u64 i = 0;
     while (i < len)
     {
@@ -140,9 +139,9 @@ pub String toLower(const u8* s, u64 len)
     return out;
 }
 
-pub String toUpper(const u8* s, u64 len)
+pub string.String toUpper(const u8* s, u64 len)
 {
-    String out = String::new();
+    string.String out = string.String::new();
     u64 i = 0;
     while (i < len)
     {

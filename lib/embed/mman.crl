@@ -42,7 +42,6 @@ inline void criticalEnter()
     // thogh, on second thought, if you are bulding on bare metal, then you
     // should specify flags
     default:
-        return;
     }
 }
 
@@ -66,7 +65,6 @@ inline void criticalExit()
     riscv32:
         asm { csrrsi x0, mstatus, 0x8 }
     default:
-        return;
     }
 }
 
@@ -545,8 +543,7 @@ pub T* erealloc<T>(T* ptr, u64 newCount)
 pub u64 eused() { return _embeddedAlloc()->used(_embeddedAlloc()->ctx); }
 pub u64 eavail() { return _embeddedAlloc()->avail(_embeddedAlloc()->ctx); }
 
-// ── TLSF (Two-Level Segregated Fit) Allocator ──
-// Constants
+// TLSF (Two-Level Segregated Fit) Allocator
 pub const u64 TLSF_FLI_MAX = 30;
 pub const u64 TLSF_SLI_COUNT = 4;
 pub const u64 TLSF_BLOCK_HEADER_SIZE = 16;

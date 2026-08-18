@@ -6,8 +6,15 @@ pub u8 encodeCodepoint(u32 cp, u8* out)
     if (cp > 0x10FFFF) return 0;
     if (cp < 0x80) { out[0] = (u8)cp; return 1; }
     if (cp < 0x800) { out[0] = (u8)(0xC0 | (cp >> 6)); out[1] = (u8)(0x80 | (cp & 0x3F)); return 2; }
-    if (cp < 0x10000) { out[0] = (u8)(0xE0 | (cp >> 12)); out[1] = (u8)(0x80 | ((cp >> 6) & 0x3F)); out[2] = (u8)(0x80 | (cp & 0x3F)); return 3; }
-    out[0] = (u8)(0xF0 | (cp >> 18)); out[1] = (u8)(0x80 | ((cp >> 12) & 0x3F)); out[2] = (u8)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (u8)(0x80 | (cp & 0x3F));
+    if (cp < 0x10000) {
+        out[0] = (u8)(0xE0 | (cp >> 12));
+        out[1] = (u8)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (u8)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (u8)(0xF0 | (cp >> 18));
+    out[1] = (u8)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (u8)(0x80 | ((cp >> 6) & 0x3F)); out[3] = (u8)(0x80 | (cp & 0x3F));
     return 4;
 }
 
