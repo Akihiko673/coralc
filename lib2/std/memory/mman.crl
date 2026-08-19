@@ -1,0 +1,1385 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+mod tlsf = import("std/memory/tlsf.crl");
+
+pub struct Allocator
+{
+    void* ctx;
+    void*(void*, u64) alloc;
+    void(void*, void*) free;
+    void*(void*, void*, u64) realloc;
+}
+
+// global default allocator
+pub Allocator* defaultAllocator;
+
+void* _defaultAllocHeap;
+u64 _defaultAllocHeapSize;
+
+// Initialize default allocator with TLSF on a 64MB heap
+// Call this once at program start thogh, if you don't usse -flag=def
+pub void initDefaultAllocator()
+{
+    if (defaultAllocator != null) return;
+
+    u64 heapSize = 64u * 1024u * 1024u;
+    void* heap = _mmap(null, heapSize, 3, 0x22, -1, 0);
+    if (heap == null) return;
+
+    _defaultAllocHeap = heap;
+    _defaultAllocHeapSize = heapSize;
+
+    tlsf.Tlsf* _tlsf = (tlsf.Tlsf*)heap;
+    _tlsf.init((u8*)heap + sizeof(tlsf.Tlsf), heapSize - sizeof(tlsf.Tlsf));
+
+    // Allocate a small block to hold the tlsf.Tlsf, then use the rest as heap
+    Allocator* allocPtr = _tlsf.alloc(sizeof(Allocator));
+    if (allocPtr == null) return;
+
+    allocPtr.ctx = (void*)_tlsf;
+    allocPtr.alloc = _tlsfAlloc;
+    allocPtr.free = _tlsfFree;
+    allocPtr.realloc = _tlsfRealloc;
+    defaultAllocator = allocPtr;
+}
+
+// Tear down the default allocator and return the heap to the OS.
+// Only call this when nothing allocated through it is still in use.
+pub void deinitDefaultAllocator()
+{
+    if (defaultAllocator == null) return;
+    defaultAllocator = null;
+    if (_defaultAllocHeap != null)
+    {
+        _munmap(_defaultAllocHeap, _defaultAllocHeapSize);
+        _defaultAllocHeap = null;
+        _defaultAllocHeapSize = 0;
+    }
+}
+
+// Fallback nothing initialized — use the Coral heap
+pub void ensureDefaultAllocator()
+{
+    if (defaultAllocator == null)
+        defaultAllocator = &cAllocator;
+}
+
+void* _tlsfAlloc(void* ctx, u64 size)
+{
+    return ((tlsf.Tlsf*)ctx)->alloc(size);
+}
+
+void _tlsfFree(void* ctx, void* ptr)
+{
+    if (ctx && ptr) ((tlsf.Tlsf*)ctx)->free(ptr);
+}
+
+void* _tlsfRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    return ((tlsf.Tlsf*)ctx)->realloc(ptr, newSize);
+}
+
+// Coral memory primitives (libc-free)
+void _memcpy(void* dst, const void* src, u64 n)
+{
+    if (n == 0) return;
+    u8* d = (u8*)dst;
+    const u8* s = (const u8*)src;
+    u64 i = 0;
+    while (i + 8 <= n)
+    {
+        *(u64*)(d + i) = *(const u64*)(s + i);
+        i += 8;
+    }
+    while (i < n)
+    {
+        d[i] = s[i];
+        i++;
+    }
+}
+
+void _memmove(void* dst, const void* src, u64 n)
+{
+    if (n == 0) return;
+    u8* d = (u8*)dst;
+    const u8* s = (const u8*)src;
+    if (d == s) return;
+    if (d < s)
+    {
+        _memcpy(dst, src, n);
+        return;
+    }
+    u64 i = n;
+    while (i > 0)
+    {
+        i--;
+        d[i] = s[i];
+    }
+}
+
+void _memset(void* dst, u8 val, u64 n)
+{
+    u8* d = (u8*)dst;
+    for (u64 i = 0; i < n; i++)
+        d[i] = val;
+}
+
+i32 _memcmp(const void* a, const void* b, u64 n)
+{
+    const u8* pa = (const u8*)a;
+    const u8* pb = (const u8*)b;
+    for (u64 i = 0; i < n; i++)
+    {
+        if (pa[i] < pb[i]) return -1;
+        if (pa[i] > pb[i]) return 1;
+    }
+    return 0;
+}
+
+extern("kernel32") void* VirtualAlloc(void* lpAddress, u64 dwSize, u32 flAllocationType, u32 flProtect);
+extern("kernel32") bool VirtualFree(void* lpAddress, u64 dwSize, u32 dwFreeType);
+
+void* _mmap(void* addr, u64 length, i32 prot, i32 flags, i32 fd, i64 offset)
+{
+    flag (platform) {
+    LINUX:
+        flag (ARCH) {
+        x86_64:
+            u64 ret;
+            asm volatile {
+                "movq %2, %%rdi\n\t"
+                "movq %3, %%rsi\n\t"
+                "movq %4, %%rdx\n\t"
+                "movq %5, %%r10\n\t"
+                "movq %6, %%r8\n\t"
+                "movq %7, %%r9\n\t"
+                "syscall\n\t"
+                "movq %%rax, %0"
+                : "=a"(ret)
+                : "0"(9u), "D"((u64)addr), "S"(length), "d"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset)
+                : "rcx", "r8", "r9", "r10", "r11", "memory"
+            }
+            if ((i64)ret < 0 && (i64)ret >= -4095) return null;
+            return (void*)ret;
+        x86:
+            u32 ret_x86;
+            u32 pgoffset_x86 = (u32)((u64)offset >> 12);
+            asm volatile {
+                "movl %2, %%ebx\n\t"
+                "movl %3, %%ecx\n\t"
+                "movl %4, %%edx\n\t"
+                "movl %5, %%esi\n\t"
+                "movl %6, %%edi\n\t"
+                "movl %7, %%ebp\n\t"
+                "int $0x80\n\t"
+                "movl %%eax, %0"
+                : "=a"(ret_x86)
+                : "0"(192u), "b"((u32)(size_t)addr), "c"((u32)length), "d"((u32)prot),
+                  "S"((u32)flags), "D"((u32)fd), "r"(pgoffset_x86)
+                : "memory"
+            }
+            if ((i32)ret_x86 < 0 && (i32)ret_x86 >= -4095) return null;
+            return (void*)(size_t)ret_x86;
+        arm64:
+            u64 ret;
+            asm volatile {
+                "mov x8, #222\n\t"
+                "mov x0, %1\n\t"
+                "mov x1, %2\n\t"
+                "mov x2, %3\n\t"
+                "mov x3, %4\n\t"
+                "mov x4, %5\n\t"
+                "mov x5, %6\n\t"
+                "svc #0\n\t"
+                "mov %0, x0"
+                : "=r"(ret)
+                : "r"((u64)addr), "r"(length), "r"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset)
+                : "x0", "x1", "x2", "x3", "x4", "x5", "x8", "memory"
+            }
+            if ((i64)ret < 0 && (i64)ret >= -4095) return null;
+            return (void*)ret;
+        arm32:
+            u32 ret_arm32;
+            u32 pgoffset_arm32 = (u32)((u64)offset >> 12);
+            asm volatile {
+                "mov r7, #192\n\t"
+                "mov r0, %1\n\t"
+                "mov r1, %2\n\t"
+                "mov r2, %3\n\t"
+                "mov r3, %4\n\t"
+                "mov r4, %5\n\t"
+                "mov r5, %6\n\t"
+                "svc #0\n\t"
+                "mov %0, r0"
+                : "=r"(ret_arm32)
+                : "r"((u32)(size_t)addr), "r"((u32)length), "r"((u32)prot),
+                  "r"((u32)flags), "r"((u32)fd), "r"(pgoffset_arm32)
+                : "r0", "r1", "r2", "r3", "r4", "r5", "r7", "memory"
+            }
+            if ((i32)ret_arm32 < 0 && (i32)ret_arm32 >= -4095) return null;
+            return (void*)(size_t)ret_arm32;
+        riscv64:
+            u64 ret;
+            asm volatile {
+                "li a7, 222\n\t"
+                "mv a0, %1\n\t"
+                "mv a1, %2\n\t"
+                "mv a2, %3\n\t"
+                "mv a3, %4\n\t"
+                "mv a4, %5\n\t"
+                "mv a5, %6\n\t"
+                "ecall\n\t"
+                "mv %0, a0"
+                : "=r"(ret)
+                : "r"((u64)addr), "r"(length), "r"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset)
+                : "a0", "a1", "a2", "a3", "a4", "a5", "a7", "memory"
+            }
+            if ((i64)ret < 0 && (i64)ret >= -4095) return null;
+            return (void*)ret;
+        riscv32:
+            u32 ret_riscv32;
+            u32 off_l = (u32)((u64)offset & 0xFFFFFFFFu);
+            asm volatile {
+                "li a7, 222\n\t"
+                "mv a0, %1\n\t"
+                "mv a1, %2\n\t"
+                "mv a2, %3\n\t"
+                "mv a3, %4\n\t"
+                "mv a4, %5\n\t"
+                "mv a5, %6\n\t"
+                "ecall\n\t"
+                "mv %0, a0"
+                : "=r"(ret_riscv32)
+                : "r"((u32)(size_t)addr), "r"((u32)length), "r"((u32)prot),
+                  "r"((u32)flags), "r"((u32)fd), "r"(off_l)
+                : "a0", "a1", "a2", "a3", "a4", "a5", "a7", "memory"
+            }
+            if ((i32)ret_riscv32 < 0 && (i32)ret_riscv32 >= -4095) return null;
+            return (void*)(size_t)ret_riscv32;
+        mips64:
+            u64 ret;
+            asm volatile {
+                "li $v0, 5009\n\t"
+                "move $a0, %1\n\t"
+                "move $a1, %2\n\t"
+                "move $a2, %3\n\t"
+                "move $a3, %4\n\t"
+                "move $a4, %5\n\t"
+                "move $a5, %6\n\t"
+                "syscall\n\t"
+                "move %0, $v0"
+                : "=r"(ret)
+                : "r"((u64)addr), "r"(length), "r"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset)
+                : "a0", "a1", "a2", "a3", "a4", "a5", "v0", "memory"
+            }
+            if ((i64)ret < 0 && (i64)ret >= -4095) return null;
+            return (void*)ret;
+        mips:
+            u32 ret_mips;
+            u32 pgoffset_mips = (u32)((u64)offset >> 12);
+            asm volatile {
+                "addiu $sp, $sp, -32\n\t"
+                "move $a0, %1\n\t"
+                "move $a1, %2\n\t"
+                "move $a2, %3\n\t"
+                "move $a3, %4\n\t"
+                "sw %5, 16($sp)\n\t"
+                "sw %6, 20($sp)\n\t"
+                "li $v0, 4210\n\t"
+                "syscall\n\t"
+                "addiu $sp, $sp, 32\n\t"
+                "move %0, $v0"
+                : "=r"(ret_mips)
+                : "r"((u32)(size_t)addr), "r"((u32)length), "r"((u32)prot),
+                  "r"((u32)flags), "r"((u32)fd), "r"(pgoffset_mips)
+                : "a0", "a1", "a2", "a3", "v0", "memory"
+            }
+            if ((i32)ret_mips < 0 && (i32)ret_mips >= -4095) return null;
+            return (void*)(size_t)ret_mips;
+        ppc64:
+            u64 ret;
+            asm volatile {
+                "li 0, 192\n\t"
+                "mr 3, %1\n\t"
+                "mr 4, %2\n\t"
+                "mr 5, %3\n\t"
+                "mr 6, %4\n\t"
+                "mr 7, %5\n\t"
+                "mr 8, %6\n\t"
+                "sc\n\t"
+                "mr %0, 3"
+                : "=r"(ret)
+                : "r"((u64)addr), "r"(length), "r"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset)
+                : "r3", "r4", "r5", "r6", "r7", "r8", "r0", "memory"
+            }
+            if ((i64)ret < 0 && (i64)ret >= -4095) return null;
+            return (void*)ret;
+        ppc:
+            u32 ret_ppc;
+            u32 pgoffset_ppc = (u32)((u64)offset >> 12);
+            asm volatile {
+                "li 0, 192\n\t"
+                "mr 3, %1\n\t"
+                "mr 4, %2\n\t"
+                "mr 5, %3\n\t"
+                "mr 6, %4\n\t"
+                "mr 7, %5\n\t"
+                "mr 8, %6\n\t"
+                "sc\n\t"
+                "mr %0, 3"
+                : "=r"(ret_ppc)
+                : "r"((u32)(size_t)addr), "r"((u32)length), "r"((u32)prot),
+                  "r"((u32)flags), "r"((u32)fd), "r"(pgoffset_ppc)
+                : "r3", "r4", "r5", "r6", "r7", "r8", "r0", "memory"
+            }
+            if ((i32)ret_ppc < 0 && (i32)ret_ppc >= -4095) return null;
+            return (void*)(size_t)ret_ppc;
+        default:
+            return null;
+        }
+    MACOS:
+        flag (ARCH) {
+        x86_64:
+            u64 ret;
+            u8 carry;
+            asm volatile {
+                "movq %2, %%rdi\n\t"
+                "movq %3, %%rsi\n\t"
+                "movq %4, %%rdx\n\t"
+                "movq %5, %%r10\n\t"
+                "movq %6, %%r8\n\t"
+                "movq %7, %%r9\n\t"
+                "syscall\n\t"
+                "setc %1\n\t"
+                "movq %%rax, %0"
+                : "=a"(ret), "=qm"(carry)
+                : "0"(0x20000C5u), "D"((u64)addr), "S"(length), "d"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset)
+                : "rcx", "r8", "r9", "r10", "r11", "memory"
+            }
+            if (carry) return null;
+            return (void*)ret;
+        arm64:
+            u64 ret;
+            u32 carry;
+            asm volatile {
+                "mov x0, %2\n\t"
+                "mov x1, %3\n\t"
+                "mov x2, %4\n\t"
+                "mov x3, %5\n\t"
+                "mov x4, %6\n\t"
+                "mov x5, %7\n\t"
+                "mov x16, %8\n\t"
+                "svc #0x80\n\t"
+                "cset %w1, cs\n\t"
+                "mov %0, x0"
+                : "=r"(ret), "=r"(carry)
+                : "r"((u64)addr), "r"(length), "r"((u64)prot),
+                  "r"((u64)flags), "r"((u64)fd), "r"((u64)offset),
+                  "r"(0x20000C5u)
+                : "x0", "x1", "x2", "x3", "x4", "x5", "x16", "memory"
+            }
+            if (carry) return null;
+            return (void*)ret;
+        default:
+            return null;
+        }
+    WINDOWS:
+        (void)prot;
+        (void)flags;
+        (void)fd;
+        (void)offset;
+        return (void*)VirtualAlloc(addr, length, 0x3000u, 0x04u);
+    default:
+        return null;
+    }
+    return null;
+}
+
+void _munmap(void* addr, u64 length)
+{
+    flag (platform) {
+    LINUX:
+        flag (ARCH) {
+        x86_64:
+            u64 ret;
+            asm volatile {
+                "syscall\n\t"
+                "movq %%rax, %0"
+                : "=a"(ret)
+                : "0"(11u), "D"((u64)addr), "S"(length)
+                : "rcx", "r11", "memory"
+            }
+            (void)ret;
+        x86:
+            asm volatile {
+                "int $0x80"
+                :
+                : "a"(91u), "b"((u32)(size_t)addr), "c"((u32)length)
+                : "memory"
+            }
+        arm64:
+            asm volatile {
+                "mov x8, #215\n\t"
+                "mov x0, %1\n\t"
+                "mov x1, %2\n\t"
+                "svc #0"
+                :
+                : "r"((u64)addr), "r"(length)
+                : "x0", "x1", "x8", "memory"
+            }
+        arm32:
+            asm volatile {
+                "mov r7, #91\n\t"
+                "mov r0, %1\n\t"
+                "mov r1, %2\n\t"
+                "svc #0"
+                :
+                : "r"((u32)(size_t)addr), "r"((u32)length)
+                : "r0", "r1", "r7", "memory"
+            }
+        riscv64:
+            asm volatile {
+                "li a7, 215\n\t"
+                "mv a0, %1\n\t"
+                "mv a1, %2\n\t"
+                "ecall"
+                :
+                : "r"((u64)addr), "r"(length)
+                : "a0", "a1", "a7", "memory"
+            }
+        riscv32:
+            asm volatile {
+                "li a7, 215\n\t"
+                "mv a0, %1\n\t"
+                "mv a1, %2\n\t"
+                "ecall"
+                :
+                : "r"((u32)(size_t)addr), "r"((u32)length)
+                : "a0", "a1", "a7", "memory"
+            }
+        mips64:
+            asm volatile {
+                "li $v0, 5011\n\t"
+                "move $a0, %1\n\t"
+                "move $a1, %2\n\t"
+                "syscall"
+                :
+                : "r"((u64)addr), "r"(length)
+                : "a0", "a1", "v0", "memory"
+            }
+        mips:
+            asm volatile {
+                "li $v0, 4091\n\t"
+                "move $a0, %1\n\t"
+                "move $a1, %2\n\t"
+                "syscall"
+                :
+                : "r"((u32)(size_t)addr), "r"((u32)length)
+                : "a0", "a1", "v0", "memory"
+            }
+        ppc64:
+            asm volatile {
+                "li 0, 91\n\t"
+                "mr 3, %1\n\t"
+                "mr 4, %2\n\t"
+                "sc"
+                :
+                : "r"((u64)addr), "r"(length)
+                : "r3", "r4", "r0", "memory"
+            }
+        ppc:
+            asm volatile {
+                "li 0, 91\n\t"
+                "mr 3, %1\n\t"
+                "mr 4, %2\n\t"
+                "sc"
+                :
+                : "r"((u32)(size_t)addr), "r"((u32)length)
+                : "r3", "r4", "r0", "memory"
+            }
+        default:
+            return;
+        }
+    MACOS:
+        flag (ARCH) {
+        x86_64:
+            u64 ret;
+            asm volatile {
+                "syscall\n\t"
+                "movq %%rax, %0"
+                : "=a"(ret)
+                : "0"(0x2000049u), "D"((u64)addr), "S"(length)
+                : "rcx", "r11", "memory"
+            }
+            (void)ret;
+        arm64:
+            asm volatile {
+                "mov x0, %1\n\t"
+                "mov x1, %2\n\t"
+                "mov x16, %3\n\t"
+                "svc #0x80"
+                :
+                : "r"((u64)addr), "r"(length), "r"(0x2000049u)
+                : "x0", "x1", "x16", "memory"
+            }
+        default:
+            return;
+        }
+    WINDOWS:
+        (void)length;
+        if (addr) VirtualFree(addr, 0, 0x8000u);
+        return;
+    default:
+        return;
+    }
+}
+
+// libc-free fallback heap (free-list allocator)
+
+const u64 _HB_ALIGN = 16;
+const u64 _HB_HDR = 16;
+const u64 _HB_FREE = 1;
+
+struct _HeapBlock
+{
+    u64 sizeAndFlags; // full block size incl. header; bit0 = free
+    u64 prevPhysSize; // full size of preceding block, 0 for the first
+}
+
+_HeapBlock* _heapFreeHead;
+
+u64 _hbSize(_HeapBlock* b) { return b->sizeAndFlags & ~(u64)_HB_FREE; }
+bool _hbIsFree(_HeapBlock* b) { return (b->sizeAndFlags & _HB_FREE) != 0; }
+
+u64 _hbAlign(u64 v)
+{
+    return (v + _HB_ALIGN - 1u) & ~(_HB_ALIGN - 1u);
+}
+
+_HeapBlock* _hbNext(_HeapBlock* b)
+{
+    return (_HeapBlock*)((u8*)b + _hbSize(b));
+}
+
+void _heapPushFree(_HeapBlock* b)
+{
+    *(_HeapBlock**)((u8*)b + _HB_HDR) = _heapFreeHead;
+    _heapFreeHead = b;
+}
+
+void _heapUnlink(_HeapBlock* b)
+{
+    _HeapBlock* prev = null;
+    _HeapBlock* cur = _heapFreeHead;
+    while (cur != null && cur != b)
+    {
+        prev = cur;
+        cur = *(_HeapBlock**)((u8*)cur + _HB_HDR);
+    }
+    if (cur == null) return;
+    if (prev != null)
+        *(_HeapBlock**)((u8*)prev + _HB_HDR) = *(_HeapBlock**)((u8*)cur + _HB_HDR);
+    else
+        _heapFreeHead = *(_HeapBlock**)((u8*)cur + _HB_HDR);
+}
+
+void* _heapAlloc(void* ctx, u64 size)
+{
+    (void)ctx;
+    if (size == 0) return null;
+    u64 need = _hbAlign(size) + _HB_HDR;
+    for (;;)
+    {
+        _HeapBlock* prev = null;
+        _HeapBlock* cur = _heapFreeHead;
+        while (cur != null)
+        {
+            u64 curSize = _hbSize(cur);
+            if (curSize >= need)
+            {
+                if (prev != null)
+                    *(_HeapBlock**)((u8*)prev + _HB_HDR) = *(_HeapBlock**)((u8*)cur + _HB_HDR);
+                else
+                    _heapFreeHead = *(_HeapBlock**)((u8*)cur + _HB_HDR);
+                u64 rem = curSize - need;
+                if (rem >= _HB_HDR + _HB_ALIGN)
+                {
+                    _HeapBlock* tail = (_HeapBlock*)((u8*)cur + need);
+                    tail->sizeAndFlags = rem | _HB_FREE;
+                    tail->prevPhysSize = need;
+                    cur->sizeAndFlags = need;
+                    _HeapBlock* nn = _hbNext(tail);
+                    nn->prevPhysSize = rem;
+                    _heapPushFree(tail);
+                }
+                else
+                {
+                    cur->sizeAndFlags = curSize;
+                }
+                return (void*)((u8*)cur + _HB_HDR);
+            }
+            prev = cur;
+            cur = *(_HeapBlock**)((u8*)cur + _HB_HDR);
+        }
+        // No fit, map a new region (big free block + sentinel) and retry
+        u64 reg = _hbAlign(need + _HB_HDR + _HB_ALIGN);
+        if (reg < 4096) reg = 4096;
+        u8* mem = (u8*)_mmap(null, reg, 3, 0x22, -1, 0);
+        if (mem == null) return null;
+        _HeapBlock* big = (_HeapBlock*)mem;
+        big->sizeAndFlags = (reg - _HB_HDR) | _HB_FREE;
+        big->prevPhysSize = 0;
+        _HeapBlock* sent = (_HeapBlock*)(mem + reg - _HB_HDR);
+        sent->sizeAndFlags = _HB_HDR;
+        sent->prevPhysSize = reg - _HB_HDR;
+        _heapPushFree(big);
+    }
+}
+
+void _heapFree(void* ctx, void* ptr)
+{
+    (void)ctx;
+    if (ptr == null) return;
+    _HeapBlock* b = (_HeapBlock*)((u8*)ptr - _HB_HDR);
+    _HeapBlock* next = _hbNext(b);
+    if (_hbIsFree(next))
+    {
+        _heapUnlink(next);
+        u64 sz = _hbSize(b) + _hbSize(next);
+        b->sizeAndFlags = sz | _HB_FREE;
+        _HeapBlock* nn = _hbNext(next);
+        nn->prevPhysSize = sz;
+    }
+    else
+    {
+        b->sizeAndFlags = _hbSize(b) | _HB_FREE;
+    }
+    if (b->prevPhysSize != 0)
+    {
+        _HeapBlock* prev = (_HeapBlock*)((u8*)b - b->prevPhysSize);
+        if (_hbIsFree(prev))
+        {
+            _heapUnlink(prev);
+            u64 sz = _hbSize(prev) + _hbSize(b);
+            prev->sizeAndFlags = sz | _HB_FREE;
+            _HeapBlock* nn = _hbNext(b);
+            nn->prevPhysSize = sz;
+            b = prev;
+        }
+    }
+    _heapPushFree(b);
+}
+
+void* _heapRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    (void)ctx;
+    if (ptr == null) return _heapAlloc(null, newSize);
+    if (newSize == 0) { _heapFree(null, ptr); return null; }
+    _HeapBlock* b = (_HeapBlock*)((u8*)ptr - _HB_HDR);
+    u64 curSize = _hbSize(b);
+    u64 need = _hbAlign(newSize) + _HB_HDR;
+    if (need <= curSize)
+    {
+        u64 rem = curSize - need;
+        if (rem >= _HB_HDR + _HB_ALIGN)
+        {
+            _HeapBlock* tail = (_HeapBlock*)((u8*)b + need);
+            tail->sizeAndFlags = rem | _HB_FREE;
+            tail->prevPhysSize = need;
+            b->sizeAndFlags = need;
+            _HeapBlock* nn = _hbNext(tail);
+            nn->prevPhysSize = rem;
+            _heapPushFree(tail);
+        }
+        return ptr;
+    }
+    _HeapBlock* next = _hbNext(b);
+    if (_hbIsFree(next) && curSize + _hbSize(next) >= need)
+    {
+        _heapUnlink(next);
+        u64 total = curSize + _hbSize(next);
+        u64 rem = total - need;
+        if (rem >= _HB_HDR + _HB_ALIGN)
+        {
+            _HeapBlock* tail = (_HeapBlock*)((u8*)b + need);
+            tail->sizeAndFlags = rem | _HB_FREE;
+            tail->prevPhysSize = need;
+            b->sizeAndFlags = need;
+            _HeapBlock* nn = _hbNext(tail);
+            nn->prevPhysSize = rem;
+            _heapPushFree(tail);
+        }
+        else
+        {
+            b->sizeAndFlags = total;
+            _HeapBlock* nn = _hbNext(b);
+            nn->prevPhysSize = total;
+        }
+        return ptr;
+    }
+    void* np = _heapAlloc(null, newSize);
+    if (np == null) return null;
+    u64 copyLen = (curSize - _HB_HDR) < newSize ? (curSize - _HB_HDR) : newSize;
+    _memcpy(np, ptr, copyLen);
+    _heapFree(null, ptr);
+    return np;
+}
+
+// Coral free-list heap as the fallback allocator
+
+pub Allocator cAllocator =
+{
+    .ctx = null,
+    .alloc = _heapAlloc,
+    .free = _heapFree,
+    .realloc = _heapRealloc
+};
+
+pub const u64 pageSize = 4096u;
+
+pub Allocator pageAllocator =
+{
+    null,
+    _pageAlloc,
+    _pageFree,
+    _pageRealloc,
+};
+
+void* _pageAlloc(void* ctx, u64 size)
+{
+    (void)ctx;
+    if (size == 0) return null;
+    u64 aligned = (size + pageSize - 1u) & ~(pageSize - 1u);
+    void* region = _mmap(null, aligned + pageSize, 3, 0x22, -1, 0);
+    if (region == null) return null;
+    *(u64*)region = aligned;
+    return (void*)((u8*)region + pageSize);
+}
+
+void _pageFree(void* ctx, void* ptr)
+{
+    (void)ctx;
+    if (!ptr) return;
+    u8* region = (u8*)ptr - pageSize;
+    u64 size = *(u64*)region;
+    _munmap(region, size + pageSize);
+}
+
+void* _pageRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    (void)ctx;
+    if (newSize == 0)
+    {
+        _pageFree(null, ptr);
+        return null;
+    }
+    void* newPtr = _pageAlloc(null, newSize);
+    if (newPtr == null) return null;
+    if (ptr != null)
+    {
+        u64 oldAligned = *(u64*)((u8*)ptr - pageSize);
+        u64 newAligned = *(u64*)((u8*)newPtr - pageSize);
+        u64 copyLen = oldAligned < newAligned ? oldAligned : newAligned;
+        _memcpy(newPtr, ptr, copyLen);
+        _pageFree(null, ptr);
+    }
+    return newPtr;
+}
+
+pub struct FixedBufferAllocator
+{
+    u8* buffer;
+    u64 cap;
+    u64 used;
+
+    void init(u8* buffer, u64 size)
+    {
+        self.buffer = buffer;
+        self.cap = size;
+        self.used = 0;
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _fbaAlloc;
+        a.free = _fbaFree;
+        a.realloc = _fbaRealloc;
+        return a;
+    }
+
+    void reset()
+    {
+        self.used = 0;
+    }
+
+    u64 remaining(const self*)
+    {
+        return self->cap - self->used;
+    }
+}
+
+void* _fbaAlloc(void* ctx, u64 size)
+{
+    if (!ctx || size == 0) return null;
+    FixedBufferAllocator* alloc = (FixedBufferAllocator*)ctx;
+    u64 aligned = (size + 7u) & ~7u;
+    if (alloc->used + 8u + aligned > alloc->cap) return null;
+    *(u64*)(alloc->buffer + alloc->used) = aligned;
+    void* ptr = (void*)(alloc->buffer + alloc->used + 8u);
+    alloc->used += 8u + aligned;
+    return ptr;
+}
+
+void _fbaFree(void* ctx, void* ptr)
+{
+    (void)ctx;
+    (void)ptr;
+}
+
+void* _fbaRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (!ctx) return null;
+    if (newSize == 0) return null;
+    u64 oldAligned = ptr != null ? *(u64*)((u8*)ptr - 8u) : 0;
+    void* newPtr = _fbaAlloc(ctx, newSize);
+    if (newPtr == null) return null;
+    u64 copyLen = oldAligned < newSize ? oldAligned : newSize;
+    if (ptr != null && copyLen > 0) _memcpy(newPtr, ptr, copyLen);
+    return newPtr;
+}
+
+pub struct StackFallbackAllocator
+{
+    FixedBufferAllocator fba;
+    Allocator* fallback;
+    u8 stackBuf[1024];
+
+    void init(Allocator* fallback)
+    {
+        self.fba.init(self.stackBuf, 1024u);
+        self.fallback = fallback;
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _sfaAlloc;
+        a.free = _sfaFree;
+        a.realloc = _sfaRealloc;
+        return a;
+    }
+}
+
+void* _sfaAlloc(void* ctx, u64 size)
+{
+    if (!ctx) return null;
+    StackFallbackAllocator* alloc = (StackFallbackAllocator*)ctx;
+    void* ptr = _fbaAlloc((void*)&alloc->fba, size);
+    if (ptr != null) return ptr;
+    if (!alloc->fallback) return null;
+    return alloc->fallback->alloc(alloc->fallback->ctx, size);
+}
+
+void _sfaFree(void* ctx, void* ptr)
+{
+    if (!ctx || !ptr) return;
+    StackFallbackAllocator* alloc = (StackFallbackAllocator*)ctx;
+    u8* p = (u8*)ptr;
+    if (p >= alloc->stackBuf && p < alloc->stackBuf + 1024u) return;
+    if (alloc->fallback) alloc->fallback->free(alloc->fallback->ctx, ptr);
+}
+
+void* _sfaRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (!ctx) return null;
+    StackFallbackAllocator* alloc = (StackFallbackAllocator*)ctx;
+    if (newSize == 0)
+    {
+        _sfaFree(ctx, ptr);
+        return null;
+    }
+    u8* p = (u8*)ptr;
+    bool inStack = p >= alloc->stackBuf && p < alloc->stackBuf + 1024u;
+    u64 oldAligned = inStack ? *(u64*)(p - 8u) : 0;
+    void* newPtr = _sfaAlloc(ctx, newSize);
+    if (newPtr == null) return null;
+    u64 copyLen = oldAligned < newSize ? oldAligned : newSize;
+    if (ptr != null && copyLen > 0) _memcpy(newPtr, ptr, copyLen);
+    if (!inStack && alloc->fallback)
+        alloc->fallback->free(alloc->fallback->ctx, ptr);
+    return newPtr;
+}
+
+pub struct ArenaAllocator
+{
+    Allocator* backing;
+    u8* base;
+    u64 cap;
+    u64 used;
+
+    void init(Allocator* backing, u64 initialCap)
+    {
+        self.backing = backing;
+        self.base = (u8*)backing->alloc(backing->ctx, initialCap);
+        self.cap = initialCap;
+        self.used = 0;
+    }
+
+    void deinit()
+    {
+        self.backing->free(self.backing->ctx, (void*)self.base);
+        self.base = null;
+        self.cap = 0;
+        self.used = 0;
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _arenaAlloc;
+        a.free = _arenaFree;
+        a.realloc = _arenaRealloc;
+        return a;
+    }
+
+    void* push(u64 size)
+    {
+        return _arenaAlloc((void*)self, size);
+    }
+
+    T* pushType<T>(u64 count)
+    {
+        return (T*) self.push(sizeof(T) * count);
+    }
+
+    void reset()
+    {
+        self.used = 0;
+    }
+
+    u64 remaining(const self*)
+    {
+        return self->cap - self->used;
+    }
+}
+
+void* _arenaAlloc(void* ctx, u64 size)
+{
+    if (!ctx || size == 0) return null;
+    ArenaAllocator* alloc = (ArenaAllocator*)ctx;
+    if (!alloc->backing) return null;
+    u64 aligned = (size + 7u) & ~7u;
+    if (alloc->used + 8u + aligned > alloc->cap) {
+        u64 newCap = alloc->cap * 2u;
+        u64 need = alloc->used + 8u + aligned;
+        if (newCap < need) newCap = need;
+        u8* newBase = (u8*)alloc->backing->realloc(
+            alloc->backing->ctx, (void*)alloc->base, newCap);
+        if (newBase == null) return null;
+        alloc->base = newBase;
+        alloc->cap = newCap;
+    }
+    *(u64*)(alloc->base + alloc->used) = aligned;
+    void* ptr = (void*)(alloc->base + alloc->used + 8u);
+    alloc->used += 8u + aligned;
+    return ptr;
+}
+
+void _arenaFree(void* ctx, void* ptr)
+{
+    (void)ctx; (void)ptr;
+}
+
+void* _arenaRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (!ctx) return null;
+    ArenaAllocator* alloc = (ArenaAllocator*)ctx;
+    if (newSize == 0) return null;
+    u64 oldAligned = 0;
+    u64 off = 0;
+    if (ptr != null)
+    {
+        oldAligned = *(u64*)((u8*)ptr - 8u);
+        off = (u64)((u8*)ptr - (u8*)alloc->base);
+    }
+    void* newPtr = _arenaAlloc(ctx, newSize);
+    if (newPtr == null) return null;
+    u64 copyLen = oldAligned < newSize ? oldAligned : newSize;
+    if (ptr != null && copyLen > 0) _memcpy(newPtr, (u8*)alloc->base + off, copyLen);
+    return newPtr;
+}
+
+pub struct PoolAllocator
+{
+    void* freeList;
+    u64 blockSize;
+    u64 blockCount;
+    u8* backing;
+    Allocator* source;
+
+    void init(Allocator* source, u64 blockSize, u64 blockCount)
+    {
+        self.source = source;
+        self.blockSize = blockSize > sizeof(void*) ? blockSize : sizeof(void*);
+        self.blockCount = 0;
+        self.backing = source != null
+            ? (u8*)source->alloc(source->ctx, self.blockSize * blockCount)
+            : null;
+        self.freeList = null;
+        if (self.backing == null) return;
+
+        self.blockCount = blockCount;
+        for (u64 i = 0; i < blockCount; i++) {
+            void* block = (void*)(self.backing + i * self.blockSize);
+            *(void**)block = self.freeList;
+            self.freeList = block;
+        }
+    }
+
+    void deinit()
+    {
+        if (self.source != null && self.backing != null)
+            self.source->free(self.source->ctx, (void*)self.backing);
+        self.backing = null;
+        self.freeList = null;
+        self.blockSize = 0;
+        self.blockCount = 0;
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _poolAlloc;
+        a.free = _poolFree;
+        a.realloc = _poolRealloc;
+        return a;
+    }
+
+    void* allocBlock()
+    {
+        return _poolAlloc((void*)self, self.blockSize);
+    }
+
+    void freeBlock(void* block)
+    {
+        _poolFree((void*)self, block);
+    }
+}
+
+void* _poolAlloc(void* ctx, u64 size)
+{
+    if (!ctx) return null;
+    PoolAllocator* alloc = (PoolAllocator*)ctx;
+    if (size > alloc->blockSize) return null;
+    if (alloc->freeList == null) return null;
+    void* block = alloc->freeList;
+    alloc->freeList = *(void**)block;
+    return block;
+}
+
+void _poolFree(void* ctx, void* ptr)
+{
+    if (!ctx || !ptr) return;
+    PoolAllocator* alloc = (PoolAllocator*)ctx;
+    *(void**)ptr = alloc->freeList;
+    alloc->freeList = ptr;
+}
+
+void* _poolRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (!ctx) return null;
+    PoolAllocator* alloc = (PoolAllocator*)ctx;
+    if (newSize > alloc->blockSize) return null;
+    return ptr;
+}
+
+pub struct ScopeAlloc
+{
+    Allocator* backing;
+    void** ptrs;
+    u64* sizes;
+    u64 len;
+    u64 cap;
+
+    void init(Allocator* backing, u64 cap)
+    {
+        self.backing = backing;
+        self.ptrs = backing != null
+            ? (void**)backing->alloc(backing->ctx, cap * sizeof(void*))
+            : null;
+        self.sizes = backing != null
+            ? (u64*)backing->alloc(backing->ctx, cap * sizeof(u64))
+            : null;
+        self.len = 0;
+        if (self.ptrs == null || self.sizes == null)
+        {
+            if (self.ptrs != null) backing->free(backing->ctx, (void*)self.ptrs);
+            if (self.sizes != null) backing->free(backing->ctx, (void*)self.sizes);
+            self.ptrs = null;
+            self.sizes = null;
+            cap = 0;
+        }
+        self.cap = cap;
+    }
+
+    void _grow()
+    {
+        u64 newCap = self.cap > 0 ? self.cap * 2 : 64;
+        void** newPtrs = self.backing->alloc(self.backing->ctx, newCap * sizeof(void*));
+        if (newPtrs == null) return;
+        u64* newSizes = (u64*)self.backing->alloc(self.backing->ctx, newCap * sizeof(u64));
+        if (newSizes == null) { self.backing->free(self.backing->ctx, (void*)newPtrs); return; }
+        if (self.len > 0)
+        {
+            mman.copy<void*>(newPtrs, self.ptrs, self.len);
+            mman.copy<u64>(newSizes, self.sizes, self.len);
+        }
+        if (self.ptrs != null) self.backing->free(self.backing->ctx, (void*)self.ptrs);
+        if (self.sizes != null) self.backing->free(self.backing->ctx, (void*)self.sizes);
+        self.ptrs = newPtrs;
+        self.sizes = newSizes;
+        self.cap = newCap;
+    }
+
+    void* alloc(u64 size)
+    {
+        if (self.backing == null) return null;
+        if (self.ptrs == null || self.len >= self.cap) self._grow();
+        if (self.ptrs == null || self.len >= self.cap) return null;
+        void* ptr = self.backing->alloc(self.backing->ctx, size);
+        if (ptr != null) {
+            self.ptrs[self.len] = ptr;
+            self.sizes[self.len] = size;
+            self.len++;
+        }
+        return ptr;
+    }
+
+    T* allocType<T>(u64 count)
+    {
+        return (T*) self.alloc(sizeof(T) * count);
+    }
+
+    void freeAll()
+    {
+        for (u64 i = 0; i < self.len; i++) {
+            self.backing->free(self.backing->ctx, self.ptrs[i]);
+        }
+        self.len = 0;
+    }
+
+    void deinit()
+    {
+        self.freeAll();
+        self.backing->free(self.backing->ctx, (void*)self.ptrs);
+        self.backing->free(self.backing->ctx, (void*)self.sizes);
+        self.ptrs = null;
+        self.sizes = null;
+        self.cap = 0;
+    }
+
+    u64 bytesUsed(const self*)
+    {
+        u64 total = 0;
+        for (u64 i = 0; i < self->len; i++) total += self->sizes[i];
+        return total;
+    }
+}
+
+pub struct LoggingAllocator
+{
+    Allocator* parent;
+    u64 totalAlloced;
+    u64 totalFreed;
+    u64 currentUsed;
+    u64 allocCount;
+    u64 freeCount;
+    void** trackPtrs;
+    u64* trackSizes;
+    u64 trackLen;
+    u64 trackCap;
+
+    void init(Allocator* parent)
+    {
+        self.parent = parent;
+        self.totalAlloced = 0;
+        self.totalFreed = 0;
+        self.currentUsed = 0;
+        self.allocCount = 0;
+        self.freeCount = 0;
+        self.trackPtrs = parent != null ? (void**)parent->alloc(parent->ctx, 64 * sizeof(void*)) : null;
+        self.trackSizes = parent != null ? (u64*)parent->alloc(parent->ctx, 64 * sizeof(u64)) : null;
+        self.trackLen = 0;
+        if (self.trackPtrs == null || self.trackSizes == null)
+        {
+            if (self.trackPtrs != null && parent != null) parent->free(parent->ctx, (void*)self.trackPtrs);
+            if (self.trackSizes != null && parent != null) parent->free(parent->ctx, (void*)self.trackSizes);
+            self.trackPtrs = null;
+            self.trackSizes = null;
+            self.trackCap = 0;
+        }
+        else self.trackCap = 64;
+    }
+
+    void _trackGrow()
+    {
+        u64 newCap = self.trackCap > 0 ? self.trackCap * 2 : 64;
+        void** newPtrs = self.parent->alloc(self.parent->ctx, newCap * sizeof(void*));
+        if (newPtrs == null) return;
+        u64* newSizes = (u64*)self.parent->alloc(self.parent->ctx, newCap * sizeof(u64));
+        if (newSizes == null) { self.parent->free(self.parent->ctx, (void*)newPtrs); return; }
+        if (self.trackLen > 0)
+        {
+            mman.copy<void*>(newPtrs, self.trackPtrs, self.trackLen);
+            mman.copy<u64>(newSizes, self.trackSizes, self.trackLen);
+        }
+        if (self.trackPtrs != null) self.parent->free(self.parent->ctx, (void*)self.trackPtrs);
+        if (self.trackSizes != null) self.parent->free(self.parent->ctx, (void*)self.trackSizes);
+        self.trackPtrs = newPtrs;
+        self.trackSizes = newSizes;
+        self.trackCap = newCap;
+    }
+
+    void _track(void* ptr, u64 size)
+    {
+        if (self.trackPtrs == null || self.trackLen >= self.trackCap) self._trackGrow();
+        if (self.trackPtrs == null || self.trackLen >= self.trackCap) return;
+        self.trackPtrs[self.trackLen] = ptr;
+        self.trackSizes[self.trackLen] = size;
+        self.trackLen++;
+    }
+
+    u64 _untrack(void* ptr)
+    {
+        for (u64 i = 0; i < self.trackLen; i++)
+        {
+            if (self.trackPtrs[i] == ptr)
+            {
+                u64 size = self.trackSizes[i];
+                self.trackLen--;
+                self.trackPtrs[i] = self.trackPtrs[self.trackLen];
+                self.trackSizes[i] = self.trackSizes[self.trackLen];
+                return size;
+            }
+        }
+        return 0;
+    }
+
+    Allocator allocator()
+    {
+        Allocator a;
+        a.ctx = (void*)self;
+        a.alloc = _logAlloc;
+        a.free = _logFree;
+        a.realloc = _logRealloc;
+        return a;
+    }
+
+    void printStats()
+    {
+    }
+}
+
+void* _logAlloc(void* ctx, u64 size)
+{
+    if (!ctx || size == 0) return null;
+    LoggingAllocator* alloc = (LoggingAllocator*)ctx;
+    if (!alloc->parent) return null;
+    void* ptr = alloc->parent->alloc(alloc->parent->ctx, size);
+    if (ptr != null) {
+        alloc->totalAlloced += size;
+        alloc->currentUsed += size;
+        alloc->allocCount++;
+        alloc->_track(ptr, size);
+    }
+    return ptr;
+}
+
+void _logFree(void* ctx, void* ptr)
+{
+    if (!ctx || !ptr) return;
+    LoggingAllocator* alloc = (LoggingAllocator*)ctx;
+    if (ptr == null) return;
+    alloc->freeCount++;
+    u64 size = alloc->_untrack(ptr);
+    if (size > alloc->currentUsed) size = alloc->currentUsed;
+    alloc->totalFreed += size;
+    alloc->currentUsed -= size;
+    if (alloc->parent) alloc->parent->free(alloc->parent->ctx, ptr);
+}
+
+void* _logRealloc(void* ctx, void* ptr, u64 newSize)
+{
+    if (!ctx || newSize == 0) return null;
+    LoggingAllocator* alloc = (LoggingAllocator*)ctx;
+    if (!alloc->parent) return null;
+    u64 oldSize = ptr != null ? alloc->_untrack(ptr) : 0;
+    void* newPtr = alloc->parent->realloc(alloc->parent->ctx, ptr, newSize);
+    if (newPtr == null)
+    {
+        if (oldSize > 0) alloc->_track(ptr, oldSize);
+        return null;
+    }
+    if (newSize > oldSize) alloc->totalAlloced += newSize - oldSize;
+    else alloc->totalFreed += oldSize - newSize;
+    if (newSize > oldSize) alloc->currentUsed += newSize - oldSize;
+    else alloc->currentUsed -= oldSize - newSize;
+    if (ptr == null) alloc->allocCount++;
+    alloc->_track(newPtr, newSize);
+    return newPtr;
+}
+
+pub T* alloc<T>(u64 count)
+{
+    if (count == 0) return null;
+    ensureDefaultAllocator();
+    if (defaultAllocator == null) return null;
+    return (T*) defaultAllocator->alloc(defaultAllocator->ctx, sizeof(T) * count);
+}
+
+pub void dealloc<T>(T* ptr)
+{
+    if (!ptr) return;
+    ensureDefaultAllocator();
+    if (defaultAllocator == null) return;
+    defaultAllocator->free(defaultAllocator->ctx, (void*)ptr);
+}
+
+pub T* realloc<T>(T* ptr, u64 newCount)
+{
+    if (newCount == 0) { dealloc<T>(ptr); return null; }
+    ensureDefaultAllocator();
+    if (defaultAllocator == null) return null;
+    return (T*) defaultAllocator->realloc(defaultAllocator->ctx, (void*)ptr, sizeof(T) * newCount);
+}
+
+pub void copy<T>(T* dst, T* src, u64 count)
+{
+    if (dst && src && count > 0) _memcpy((void*)dst, (const void*)src, sizeof(T) * count);
+}
+
+pub void move<T>(T* dst, T* src, u64 count) {
+    _memmove((void*)dst, (void*)src, sizeof(T) * count);
+}
+
+pub void zero<T>(T* ptr, u64 count) {
+    _memset((void*)ptr, 0, sizeof(T) * count);
+}
+
+pub bool equal<T>(const T* a, const T* b, u64 count) {
+    return _memcmp((const void*)a, (const void*)b, sizeof(T) * count) == 0;
+}

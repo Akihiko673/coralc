@@ -1,0 +1,222 @@
+// I/O
+@[[no_drop]]
+pub extern i64 read(i32 fd, u8* buf, u64 count);
+pub extern i64 write(i32 fd, const u8* buf, u64 count);
+pub extern i32 getchar();
+pub extern i32 putchar(i32 c);
+pub extern i32 fflush(void* stream);
+// String
+pub extern u64 strlen(const char* s);
+pub extern i32 strcmp(const u8* a, const u8* b);
+pub extern u8* strcpy(u8* dst, const u8* src);
+// Memory
+pub extern void* malloc(u64 size);
+pub extern void free(void* ptr);
+pub extern void* realloc(void* ptr, u64 newSize);
+pub extern void memcpy(void* dst, const void* src, u64 n);
+pub extern void memmove(void* dst, const void* src, u64 n);
+pub extern void memset(void* dst, i32 val, u64 n);
+pub extern i32 memcmp(const void* a, const void* b, u64 n);
+// Formatting
+pub extern i32 snprintf(u8* buf, u64 size, const u8* fmt, ...);
+// Math
+pub extern f64 sin(f64 x);
+pub extern f64 cos(f64 x);
+pub extern f64 tan(f64 x);
+pub extern f64 sqrt(f64 x);
+pub extern f64 pow(f64 x, f64 y);
+pub extern f64 floor(f64 x);
+pub extern f64 ceil(f64 x);
+pub extern f64 fabs(f64 x);
+pub extern f64 asin(f64 x);
+pub extern f64 acos(f64 x);
+pub extern f64 atan(f64 x);
+pub extern f64 atan2(f64 y, f64 x);
+pub extern f64 sinh(f64 x);
+pub extern f64 cosh(f64 x);
+pub extern f64 tanh(f64 x);
+pub extern f64 cbrt(f64 x);
+pub extern f64 exp(f64 x);
+pub extern f64 log(f64 x);
+pub extern f64 log2(f64 x);
+pub extern f64 log10(f64 x);
+pub extern f64 round(f64 x);
+pub extern f64 fmod(f64 x, f64 y);
+pub extern f64 hypot(f64 x, f64 y);
+pub extern f64 erf(f64 x);
+pub extern f64 erfc(f64 x);
+pub extern f64 tgamma(f64 x);
+pub extern f64 lgamma(f64 x);
+pub extern f64 strtod(const char* s, char** end);
+
+// POSIX (all platforms except Windows)
+pub extern void* mmap(void* addr, u64 length, i32 prot, i32 flags, i32 fd, i64 offset);
+pub extern i32 munmap(void* addr, u64 length);
+pub extern i32 open(const char* path, i32 flags, i32 mode);
+pub extern i32 close(i32 fd);
+pub extern i32 stat(const char* path, void* buf);
+pub extern i32 mkdir(const char* path, i32 mode);
+pub extern i32 rmdir(const char* path);
+pub extern i32 unlink(const char* path);
+pub extern i32 rename(const char* old, const char* newName);
+pub extern i32 access(const char* path, i32 mode);
+pub extern void* opendir(const char* path);
+pub extern void* readdir(void* dir);
+pub extern i32 closedir(void* dir);
+
+// Stdio
+pub extern void* fopen(const char* path, const u8* mode);
+pub extern i32 fclose(void* stream);
+pub extern u64 fread(void* ptr, u64 size, u64 count, void* stream);
+pub extern u64 fwrite(const void* ptr, u64 size, u64 count, void* stream);
+pub extern i32 feof(void* stream);
+pub extern i32 ferror(void* stream);
+
+// File operations
+pub extern i64 lseek(i32 fd, i64 offset, i32 whence);
+pub extern i32 mkstemp(u8* templateStr);
+pub extern u8* mkdtemp(u8* templateStr);
+
+// Regex
+pub extern i32 regcomp(void* preg, const char* pattern, i32 cflags);
+pub extern i32 regexec(const void* preg, const char* string, u64 nmatch, void* pmatch, i32 eflags);
+pub extern void regfree(void* preg);
+pub extern u64 regerror(i32 errcode, const void* preg, u8* errbuf, u64 errbufSize);
+
+// Process
+pub extern i32 fork();
+pub extern i32 execvp(const u8* file, const u8** argv);
+pub extern i32 waitpid(i32 pid, i32* status, i32 options);
+pub extern i32 poll(void* fds, u64 nfds, i32 timeout);
+pub extern void _exit(i32 code);
+pub extern i32 pipe(i32* fds);
+pub extern i32 dup2(i32 oldfd, i32 newfd);
+pub extern i32 execvpe(const u8* file, const u8** argv, const u8** envp);
+
+// Signals
+pub extern void(i32) signal(i32 signum, void(i32) handler);
+pub extern i32 kill(i32 pid, i32 sig);
+pub extern i32 raise(i32 sig);
+
+// Environment
+pub extern u8* getenv(const u8* name);
+pub extern i32 setenv(const u8* name, const u8* value, i32 overwrite);
+pub extern i32 unsetenv(const u8* name);
+
+// Time
+pub extern i32 gettimeofday(void* tv, void* tz);
+pub extern u64 time(void* t);
+pub extern i64 clock_gettime(i32 clockId, void* tp);
+pub extern i32 nanosleep(const void* req, void* rem);
+
+// Terminal
+pub extern i32 isatty(i32 fd);
+
+// Thread/Pthread
+pub extern i32 pthread_create(void** thread, const void* attr, void*(void*) start, void* arg);
+pub extern i32 pthread_join(void* thread, void** retval);
+pub extern void pthread_exit(void* retval);
+pub extern void* pthread_self();
+
+pub extern i32 pthread_mutex_init(void* mutex, const void* attr);
+pub extern i32 pthread_mutex_destroy(void* mutex);
+pub extern i32 pthread_mutex_lock(void* mutex);
+pub extern i32 pthread_mutex_unlock(void* mutex);
+pub extern i32 pthread_mutex_trylock(void* mutex);
+pub extern i32 pthread_mutexattr_init(void* attr);
+pub extern i32 pthread_mutexattr_destroy(void* attr);
+pub extern i32 pthread_mutexattr_settype(void* attr, i32 type);
+
+pub extern i32 pthread_cond_init(void* cond, const void* attr);
+pub extern i32 pthread_cond_destroy(void* cond);
+pub extern i32 pthread_cond_wait(void* cond, void* mutex);
+pub extern i32 pthread_cond_signal(void* cond);
+pub extern i32 pthread_cond_broadcast(void* cond);
+
+pub extern i32 pthread_rwlock_init(void* lock, const void* attr);
+pub extern i32 pthread_rwlock_destroy(void* lock);
+pub extern i32 pthread_rwlock_rdlock(void* lock);
+pub extern i32 pthread_rwlock_wrlock(void* lock);
+pub extern i32 pthread_rwlock_unlock(void* lock);
+pub extern i32 pthread_rwlock_tryrdlock(void* lock);
+pub extern i32 pthread_rwlock_trywrlock(void* lock);
+
+pub extern i32 sem_init(void* sem, i32 pshared, u32 value);
+pub extern i32 sem_destroy(void* sem);
+pub extern i32 sem_wait(void* sem);
+pub extern i32 sem_trywait(void* sem);
+pub extern i32 sem_post(void* sem);
+pub extern i32 sem_getvalue(void* sem, i32* sval);
+
+pub extern u8** environ;
+
+// Windows (Win32 API)
+// Kernel32
+pub extern void* GetStdHandle(u32 nStdHandle);
+pub extern bool ReadFile(void* hFile, u8* lpBuffer, u32 nNumberOfBytesToRead, u32* lpNumberOfBytesRead, void* lpOverlapped);
+pub extern bool WriteFile(void* hFile, const u8* lpBuffer, u32 nNumberOfBytesToWrite, u32* lpNumberOfBytesWritten, void* lpOverlapped);
+pub extern void ExitProcess(u32 uExitCode);
+
+// File system
+pub extern void* CreateFileA(const u8* lpFileName, u32 dwDesiredAccess, u32 dwShareMode, void* lpSecurityAttributes, u32 dwCreationDisposition, u32 dwFlagsAndAttributes, void* hTemplateFile);
+pub extern bool CloseHandle(void* hObject);
+pub extern bool DeleteFileA(const u8* lpFileName);
+pub extern bool RemoveDirectoryA(const u8* lpPathName);
+pub extern bool CreateDirectoryA(const u8* lpPathName, void* lpSecurityAttributes);
+pub extern bool MoveFileA(const u8* lpExistingFileName, const u8* lpNewFileName);
+pub extern u32 GetFileAttributesA(const u8* lpFileName);
+
+// Memory mapping
+pub extern void* VirtualAlloc(void* lpAddress, u64 dwSize, u32 flAllocationType, u32 flProtect);
+pub extern bool VirtualFree(void* lpAddress, u64 dwSize, u32 dwFreeType);
+pub extern void* CreateFileMappingA(void* hFile, void* lpAttributes, u32 flProtect, u32 dwMaximumSizeHigh, u32 dwMaximumSizeLow, const u8* lpName);
+pub extern void* MapViewOfFile(void* hFileMappingObject, u32 dwDesiredAccess, u32 dwFileOffsetHigh, u32 dwFileOffsetLow, u64 dwNumberOfBytesToMap);
+pub extern bool UnmapViewOfFile(void* lpBaseAddress);
+
+// Heap
+pub extern void* GetProcessHeap();
+pub extern void* HeapAlloc(void* hHeap, u32 dwFlags, u64 dwBytes);
+pub extern bool HeapFree(void* hHeap, u32 dwFlags, void* lpMem);
+pub extern void* HeapReAlloc(void* hHeap, u32 dwFlags, void* lpMem, u64 dwBytes);
+
+// Process/Thread
+pub extern void* CreateThread(void* lpThreadAttributes, u64 dwStackSize, u32(void*) lpStartAddress, void* lpParameter, u32 dwCreationFlags, u32* lpThreadId);
+pub extern u32 WaitForSingleObject(void* hHandle, u32 dwMilliseconds);
+pub extern bool TerminateThread(void* hThread, u32 dwExitCode);
+pub extern bool GetExitCodeThread(void* hThread, u32* lpExitCode);
+
+// Synchronization
+pub extern void* CreateMutexA(void* lpMutexAttributes, bool bInitialOwner, const u8* lpName);
+pub extern bool ReleaseMutex(void* hMutex);
+pub extern void* CreateSemaphoreA(void* lpSemaphoreAttributes, i32 lInitialCount, i32 lMaximumCount, const u8* lpName);
+pub extern bool ReleaseSemaphore(void* hSemaphore, i32 lReleaseCount, i32* lpPreviousCount);
+pub extern void* CreateEventA(void* lpEventAttributes, bool bManualReset, bool bInitialState, const u8* lpName);
+pub extern bool SetEvent(void* hEvent);
+pub extern bool ResetEvent(void* hEvent);
+
+// Time
+pub extern void GetSystemTimeAsFileTime(void* lpSystemTimeAsFileTime);
+pub extern u32 GetTickCount();
+pub extern void Sleep(u32 dwMilliseconds);
+
+// Environment
+pub extern u8* GetEnvironmentVariableA(const u8* lpName, u8* lpBuffer, u32 nSize);
+pub extern bool SetEnvironmentVariableA(const u8* lpName, const u8* lpValue);
+pub extern u8* GetCommandLineA();
+
+// Console
+pub extern bool GetConsoleMode(void* hConsoleHandle, u32* lpMode);
+pub extern bool SetConsoleMode(void* hConsoleHandle, u32 dwMode);
+
+// Network (Winsock)
+pub extern i32 WSAStartup(u16 wVersionRequired, void* lpWSAData);
+pub extern i32 WSACleanup();
+pub extern void* socket(i32 af, i32 type, i32 protocol);
+pub extern i32 bind(void* s, const void* name, i32 namelen);
+pub extern i32 listen(void* s, i32 backlog);
+pub extern void* accept(void* s, void* addr, i32* addrlen);
+pub extern i32 connect(void* s, const void* name, i32 namelen);
+pub extern i32 send(void* s, const u8* buf, i32 len, i32 flags);
+pub extern i32 recv(void* s, u8* buf, i32 len, i32 flags);
+pub extern i32 closesocket(void* s);
+pub extern i32 setsockopt(void* s, i32 level, i32 optname, const u8* optval, i32 optlen);

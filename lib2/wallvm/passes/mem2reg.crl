@@ -1,0 +1,530 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod domtree = import("wallvm/domtree.crl");
+mod mman = import("std/memory/mman.crl");
+
+struct AllocaInfo
+{
+    ir_types.IrInst* alloca;
+    u32 slot;
+    bool promotable;
+}
+
+struct DefiningBlock
+{
+    ir_types.IrBlock* bb;
+    ir_types.IrValue* value;
+}
+
+struct PlacedPhi
+{
+    ir_types.IrInst* phi;
+    u32 allocaIdx;
+}
+
+static void blockInsertInst(ir_types.IrBlock* bb, u32 idx, ir_types.IrInst* newInst)
+{
+    if (idx > bb.ninsts) return;
+    if (bb.ninsts + 1 > bb.capInsts)
+    {
+        u32 newCap = bb.capInsts ? bb.capInsts * 2 : 8;
+        ir_types.IrInst** newInsts = mman.alloc<ir_types.IrInst*>(newCap);
+        if (bb.insts)
+        {
+            mman.copy<ir_types.IrInst*>(newInsts, bb.insts, bb.ninsts);
+            mman.dealloc<ir_types.IrInst*>(bb.insts);
+        }
+        bb.insts = newInsts;
+        bb.capInsts = newCap;
+    }
+    for (u32 i = bb.ninsts; i > idx; i--)
+        bb.insts[i] = bb.insts[i - 1];
+    bb.insts[idx] = newInst;
+    newInst.parent = bb;
+    bb.ninsts++;
+}
+
+struct RenameState
+{
+    ir_types.IrValue** stack;
+    u32 top;
+    u32 cap;
+}
+
+RenameState rsInit()
+{
+    RenameState rs;
+    rs.stack = mman.alloc<ir_types.IrValue*>(16);
+    rs.top = 0;
+    rs.cap = 16;
+    return rs;
+}
+
+void rsPush(RenameState* rs, ir_types.IrValue* v)
+{
+    if (rs->top >= rs->cap)
+    {
+        u32 nc = rs->cap * 2;
+        ir_types.IrValue** ns = mman.alloc<ir_types.IrValue*>(nc);
+        for (u32 i = 0; i < rs->top; i++) ns[i] = rs->stack[i];
+        mman.dealloc<ir_types.IrValue*>(rs->stack);
+        rs->stack = ns;
+        rs->cap = nc;
+    }
+    rs->stack[rs->top++] = v;
+}
+
+ir_types.IrValue* rsTop(RenameState* rs)
+{
+    if (rs->top == 0) return null;
+    return rs->stack[rs->top - 1];
+}
+
+void rsPop(RenameState* rs)
+{
+    if (rs->top > 0) rs->top--;
+}
+
+void rsFree(RenameState* rs)
+{
+    if (rs->stack) mman.dealloc<ir_types.IrValue*>(rs->stack);
+}
+
+struct IrDomFrontier
+{
+    ir_types.IrBlock** blocks;
+    u32 nblocks;
+};
+
+IrDomFrontier* computeDomFrontier(ir_types.IrFunc* func, domtree.IrDomTree* dt)
+{
+    u32 n = func.nblocks;
+    IrDomFrontier* df = mman.alloc<IrDomFrontier>(n);
+    for (u32 i = 0; i < n; i++)
+    {
+        df[i].blocks = null;
+        df[i].nblocks = 0;
+    }
+
+    for (u32 bi = 0; bi < n; bi++)
+    {
+        ir_types.IrBlock* bb = func.blocks[bi];
+        if (bb.npreds < 2) continue;
+
+        for (u32 pi = 0; pi < bb.npreds; pi++)
+        {
+            ir_types.IrBlock* run = bb.preds[pi];
+            ir_types.IrBlock* idom = null;
+            for (u32 k = 0; k < n; k++)
+                if (dt->blocks[k] == run) { idom = dt->idoms[k]; break; }
+
+            while (idom && idom != bb)
+            {
+                u32 rIdx = n;
+                for (u32 k = 0; k < n; k++)
+                    if (dt->blocks[k] == run) { rIdx = k; break; }
+
+                bool found = false;
+                for (u32 di = 0; di < df[rIdx].nblocks; di++)
+                    if (df[rIdx].blocks[di] == bb) { found = true; break; }
+                if (!found)
+                {
+                    u32 nc = df[rIdx].nblocks + 1;
+                    ir_types.IrBlock** nb = mman.alloc<ir_types.IrBlock*>(nc);
+                    for (u32 di = 0; di < df[rIdx].nblocks; di++)
+                        nb[di] = df[rIdx].blocks[di];
+                    nb[df[rIdx].nblocks] = bb;
+                    if (df[rIdx].blocks) mman.dealloc<ir_types.IrBlock*>(df[rIdx].blocks);
+                    df[rIdx].blocks = nb;
+                    df[rIdx].nblocks = nc;
+                }
+
+                run = idom;
+                for (u32 k = 0; k < n; k++)
+                    if (dt->blocks[k] == run) { rIdx = k; idom = dt->idoms[k]; break; }
+            }
+        }
+    }
+    return df;
+}
+
+void freeDomFrontier(IrDomFrontier* df, u32 n)
+{
+    for (u32 i = 0; i < n; i++)
+        if (df[i].blocks)
+            mman.dealloc<ir_types.IrBlock*>(df[i].blocks);
+    mman.dealloc<IrDomFrontier>(df);
+}
+
+void placePhis(ir_types.IrFunc* func, IrDomFrontier* df, AllocaInfo* ai, u32 nAllocas, ir_types.IrContext* ctx,
+               PlacedPhi** pphis, u32* nphis, u32* capPhis)
+{
+    for (u32 si = 0; si < nAllocas; si++)
+    {
+        if (!ai[si].promotable) continue;
+        ir_types.IrInst* alloca = ai[si].alloca;
+
+        u32 n = func.nblocks;
+        bool* dfHasPhi = mman.alloc<bool>(n);
+        for (u32 i = 0; i < n; i++) dfHasPhi[i] = false;
+
+        bool* workFlags = mman.alloc<bool>(n);
+        for (u32 i = 0; i < n; i++) workFlags[i] = false;
+
+        u32 wlCap = n;
+        ir_types.IrBlock** workList = mman.alloc<ir_types.IrBlock*>(wlCap);
+        u32 wlSize = 0;
+
+        for (u32 bi = 0; bi < n; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+            {
+                if ((bb.insts[ii].opcode == ir_opcodes.IrOpcode::Store &&
+                     bb.insts[ii].nops >= 2 &&
+                     bb.insts[ii].ops[1] == &alloca.base) ||
+                    (bb.insts[ii].opcode == ir_opcodes.IrOpcode::Load &&
+                     bb.insts[ii].nops >= 1 &&
+                     bb.insts[ii].ops[0] == &alloca.base))
+                {
+                    if (!workFlags[bi])
+                    {
+                        workFlags[bi] = true;
+                        workList[wlSize++] = bb;
+                    }
+                    break;
+                }
+            }
+        }
+
+        u32 wi = 0;
+        while (wi < wlSize)
+        {
+            ir_types.IrBlock* bb = workList[wi++];
+            u32 bIdx = n;
+            for (u32 k = 0; k < n; k++)
+                if (func.blocks[k] == bb) { bIdx = k; break; }
+
+            IrDomFrontier* dfb = &df[bIdx];
+            for (u32 di = 0; di < dfb->nblocks; di++)
+            {
+                ir_types.IrBlock* fBlock = dfb->blocks[di];
+                u32 fIdx = n;
+                for (u32 k = 0; k < n; k++)
+                    if (func.blocks[k] == fBlock) { fIdx = k; break; }
+
+                if (!dfHasPhi[fIdx])
+                {
+                    dfHasPhi[fIdx] = true;
+
+                    ir_types.IrType* allocaTy = alloca.base.type;
+                    ir_types.IrType* valTy = allocaTy.kind == ir_types.IrTypeKind::Ptr && allocaTy.elem
+                        ? allocaTy.elem : ctx.tyInt(64);
+
+                    ir_types.IrValue** phiOps = mman.alloc<ir_types.IrValue*>(fBlock.npreds * 2);
+                    u32 nphiOps = 0;
+
+                    for (u32 pi = 0; pi < fBlock.npreds; pi++)
+                    {
+                        ir_types.IrBlock* pred = fBlock.preds[pi];
+                        phiOps[nphiOps++] = ctx.constInt(valTy, 0);
+                        phiOps[nphiOps++] = &pred.base;
+                    }
+
+                    ir_types.IrInst* phiInst = ctx.createInst(ir_opcodes.IrOpcode::Phi, valTy, phiOps, nphiOps, 0, 0);
+                    u32 insertAt = 0;
+                    while (insertAt < fBlock.ninsts && fBlock.insts[insertAt].opcode == ir_opcodes.IrOpcode::Phi)
+                        insertAt++;
+                    blockInsertInst(fBlock, insertAt, phiInst);
+
+                    for (u32 oi = 0; oi < nphiOps; oi++)
+                        phiOps[oi].addUser(phiInst);
+                    mman.dealloc<ir_types.IrValue*>(phiOps);
+
+                    if (*nphis >= *capPhis)
+                    {
+                        u32 nc = *capPhis ? *capPhis * 2 : 16;
+                        PlacedPhi* np = mman.alloc<PlacedPhi>(nc);
+                        for (u32 i = 0; i < *nphis; i++) np[i] = (*pphis)[i];
+                        if (*pphis) mman.dealloc<PlacedPhi>(*pphis);
+                        *pphis = np;
+                        *capPhis = nc;
+                    }
+                    (*pphis)[*nphis].phi = phiInst;
+                    (*pphis)[*nphis].allocaIdx = si;
+                    (*nphis)++;
+
+                    if (!workFlags[fIdx])
+                    {
+                        workFlags[fIdx] = true;
+                        if (wlSize >= wlCap)
+                        {
+                            wlCap *= 2;
+                            ir_types.IrBlock** nwl = mman.alloc<ir_types.IrBlock*>(wlCap);
+                            for (u32 i = 0; i < wlSize; i++) nwl[i] = workList[i];
+                            mman.dealloc<ir_types.IrBlock*>(workList);
+                            workList = nwl;
+                        }
+                        workList[wlSize++] = fBlock;
+                    }
+                }
+            }
+        }
+
+        mman.dealloc<bool>(dfHasPhi);
+        mman.dealloc<bool>(workFlags);
+        mman.dealloc<ir_types.IrBlock*>(workList);
+    }
+}
+
+void renameBlock(ir_types.IrBlock* bb, IrDomFrontier* df, domtree.IrDomTree* dt, AllocaInfo* ai, u32 nAllocas,
+                 RenameState* stacks, ir_types.IrFunc* func, u32 n, PlacedPhi* pphis, u32 nphis,
+                 ir_types.IrContext* ctx)
+{
+    u32* savedTops = mman.alloc<u32>(nAllocas);
+    for (u32 si = 0; si < nAllocas; si++)
+        savedTops[si] = stacks[si].top;
+
+    for (u32 pi = 0; pi < nphis; pi++)
+    {
+        if (pphis[pi].phi.parent != bb) continue;
+        u32 si = pphis[pi].allocaIdx;
+        if (si >= nAllocas || !ai[si].promotable) continue;
+        rsPush(&stacks[si], &pphis[pi].phi.base);
+    }
+
+    for (u32 si = 0; si < nAllocas; si++)
+    {
+        if (!ai[si].promotable) continue;
+
+        u32 ii = 0;
+        while (ii < bb.ninsts)
+        {
+            ir_types.IrInst* inst = bb.insts[ii];
+            if (inst.opcode == ir_opcodes.IrOpcode::Store && inst.nops >= 2 &&
+                inst.ops[1] == &ai[si].alloca.base)
+            {
+                rsPush(&stacks[si], inst.ops[0]);
+
+                for (u32 oi = 0; oi < inst.nops; oi++)
+                    if (inst.ops[oi])
+                        inst.ops[oi].removeUser(inst);
+                for (u32 j = ii; j < bb.ninsts - 1; j++)
+                    bb.insts[j] = bb.insts[j + 1];
+                bb.ninsts--;
+            }
+            else
+            {
+                ii++;
+            }
+        }
+
+        ii = 0;
+        while (ii < bb.ninsts)
+        {
+            ir_types.IrInst* inst = bb.insts[ii];
+            if (inst.opcode == ir_opcodes.IrOpcode::Load && inst.nops >= 1 &&
+                inst.ops[0] == &ai[si].alloca.base)
+            {
+                ir_types.IrValue* repl = rsTop(&stacks[si]);
+                if (repl)
+                {
+                    inst.base.replaceAllUses(repl);
+                    for (u32 oi = 0; oi < inst.nops; oi++)
+                        if (inst.ops[oi])
+                            inst.ops[oi].removeUser(inst);
+                    for (u32 j = ii; j < bb.ninsts - 1; j++)
+                        bb.insts[j] = bb.insts[j + 1];
+                    bb.ninsts--;
+                }
+                else
+                {
+                    ir_types.IrValue* zero = ctx.constInt(inst.base.type, 0);
+                    inst.base.replaceAllUses(zero);
+                    for (u32 oi = 0; oi < inst.nops; oi++)
+                        if (inst.ops[oi])
+                            inst.ops[oi].removeUser(inst);
+                    for (u32 j = ii; j < bb.ninsts - 1; j++)
+                        bb.insts[j] = bb.insts[j + 1];
+                    bb.ninsts--;
+                }
+            }
+            else
+            {
+                ii++;
+            }
+        }
+    }
+
+    for (u32 ci = 0; ci < n; ci++)
+    {
+        if (func.blocks[ci] == bb) continue;
+        ir_types.IrBlock* child = func.blocks[ci];
+        ir_types.IrBlock* childIdom = null;
+        for (u32 k = 0; k < n; k++)
+            if (dt->blocks[k] == child) { childIdom = dt->idoms[k]; break; }
+        if (childIdom == bb)
+            renameBlock(child, df, dt, ai, nAllocas, stacks, func, n, pphis, nphis, ctx);
+    }
+
+    for (u32 sb = 0; sb < bb.nsuccs; sb++)
+    {
+        ir_types.IrBlock* succ = bb.succs[sb];
+        for (u32 pi = 0; pi < nphis; pi++)
+        {
+            if (pphis[pi].phi.parent != succ) continue;
+            u32 si = pphis[pi].allocaIdx;
+            if (si >= nAllocas || !ai[si].promotable) continue;
+            ir_types.IrInst* phi = pphis[pi].phi;
+            for (u32 oi = 1; oi < phi.nops; oi += 2)
+            {
+                if (phi.ops[oi] == &bb.base)
+                {
+                    ir_types.IrValue* v = rsTop(&stacks[si]);
+                    if (v && phi.ops[oi - 1] != v)
+                    {
+                        phi.ops[oi - 1].removeUser(phi);
+                        phi.ops[oi - 1] = v;
+                        v.addUser(phi);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    for (u32 si = 0; si < nAllocas; si++)
+    {
+        while (stacks[si].top > savedTops[si])
+            rsPop(&stacks[si]);
+    }
+
+    mman.dealloc<u32>(savedTops);
+}
+
+pub bool irPassMem2Reg(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func || func.nblocks == 0) return false;
+
+    u32 n = func.nblocks;
+    u32 capAllocas = 16;
+    u32 nAllocas = 0;
+    AllocaInfo* allocas = mman.alloc<AllocaInfo>(capAllocas);
+
+    for (u32 bi = 0; bi < n; bi++)
+    {
+        ir_types.IrBlock* bb = func.blocks[bi];
+        for (u32 ii = 0; ii < bb.ninsts; ii++)
+        {
+            ir_types.IrInst* inst = bb.insts[ii];
+            if (inst.opcode == ir_opcodes.IrOpcode::Alloca)
+            {
+                if (nAllocas >= capAllocas)
+                {
+                    capAllocas *= 2;
+                    AllocaInfo* na = mman.alloc<AllocaInfo>(capAllocas);
+                    for (u32 i = 0; i < nAllocas; i++) na[i] = allocas[i];
+                    mman.dealloc<AllocaInfo>(allocas);
+                    allocas = na;
+                }
+                allocas[nAllocas].alloca = inst;
+                allocas[nAllocas].slot = nAllocas;
+                allocas[nAllocas].promotable = true;
+                nAllocas++;
+            }
+        }
+    }
+
+    if (nAllocas == 0)
+    {
+        mman.dealloc<AllocaInfo>(allocas);
+        return false;
+    }
+
+    // Check promotability, all uses must be load/store directly on the alloca
+    for (u32 si = 0; si < nAllocas; si++)
+    {
+        ir_types.IrInst* alloca = allocas[si].alloca;
+        for (u32 ui = 0; ui < alloca.base.nusers; ui++)
+        {
+            ir_types.IrInst* user = alloca.base.users[ui];
+            if (user.opcode != ir_opcodes.IrOpcode::Load && user.opcode != ir_opcodes.IrOpcode::Store)
+            {
+                // Check if it's used in a phi as well (these were placed by us)
+                if (user.opcode == ir_opcodes.IrOpcode::Phi) continue;
+                allocas[si].promotable = false;
+                break;
+            }
+            if (user.opcode == ir_opcodes.IrOpcode::Store && user.nops >= 1 && user.ops[0] == &alloca.base)
+            {
+                // store alloca, val — this is a store TO the alloca address itself
+                // (not a store through the alloca)
+                allocas[si].promotable = false;
+                break;
+            }
+        }
+    }
+
+    // Build dominator tree
+    domtree.IrDomTree* dt2 = domtree.irDomtreeNew(func);
+    if (!dt2)
+    {
+        mman.dealloc<AllocaInfo>(allocas);
+        return false;
+    }
+
+    // Compute dominance frontiers
+    IrDomFrontier* df = computeDomFrontier(func, dt2);
+
+    // Place phi nodes
+    PlacedPhi* pphis = null;
+    u32 nphis = 0;
+    u32 capPhis = 0;
+    placePhis(func, df, allocas, nAllocas, ctx, &pphis, &nphis, &capPhis);
+
+    // Rename, walk blocks in dominator tree order
+    RenameState* stacks = mman.alloc<RenameState>(nAllocas);
+    for (u32 si = 0; si < nAllocas; si++)
+        stacks[si] = rsInit();
+
+    ir_types.IrBlock* entry = func.blocks[0];
+    renameBlock(entry, df, dt2, allocas, nAllocas, stacks, func, n, pphis, nphis, ctx);
+
+    // Cleanup, remove the allocas that were promoted
+    for (u32 si = 0; si < nAllocas; si++)
+    {
+        if (allocas[si].promotable)
+        {
+            ir_types.IrInst* alloca = allocas[si].alloca;
+            ir_types.IrBlock* parent = alloca.parent;
+            for (u32 ii = 0; ii < parent.ninsts; ii++)
+            {
+                if (parent.insts[ii] == alloca)
+                {
+                    for (u32 j = ii; j < parent.ninsts - 1; j++)
+                        parent.insts[j] = parent.insts[j + 1];
+                    parent.ninsts--;
+                    break;
+                }
+            }
+            alloca.erase();
+        }
+        rsFree(&stacks[si]);
+    }
+
+    mman.dealloc<RenameState>(stacks);
+    if (pphis) mman.dealloc<PlacedPhi>(pphis);
+    freeDomFrontier(df, n);
+    domtree.irDomtreeFree(dt2);
+    mman.dealloc<AllocaInfo>(allocas);
+
+    return true;
+}

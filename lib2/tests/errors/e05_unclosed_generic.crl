@@ -1,0 +1,3 @@
+mod vec = import("std/collections/vec.crl");
+@[[no_drop]]
+u64 x = vec::vec<u64

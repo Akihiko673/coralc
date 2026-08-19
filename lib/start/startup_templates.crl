@@ -48,11 +48,11 @@ flag (platform) {
     LINUX:
         flag (ARCH) {
         x86_64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -64,13 +64,13 @@ flag (platform) {
                 exit(code);
             }
         arm64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // stp x29, x30, [sp, #-16]!; mov x29, sp
             // Kernel args sit at aroud [x29, #16] = argc, [x29, #24] = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -82,13 +82,13 @@ flag (platform) {
                 exit(code);
             }
         arm32:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // push {r11, lr} Kernel args sit at
             // [r11, #8] = argc, [r11, #12] = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -100,13 +100,13 @@ flag (platform) {
                 exit(code);
             }
         riscv64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // addi sp,sp,-F; sd ra,s0; addi s0,sp,F
             // s0 is the kernel entry sp, 0(s0) = argc, 8(s0) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -118,13 +118,13 @@ flag (platform) {
                 exit(code);
             }
         riscv32:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // addi sp,sp,-F; sw ra,s0; addi s0,sp,F
             // s0 is the entry sp, 0(s0) = argc, 4(s0) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -136,14 +136,14 @@ flag (platform) {
                 exit(code);
             }
         ppc64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // mflr r0; std r0,16(r1); stdu r1,-F(r1)
             // stdu writes a backchain at 0(r1) = kernel entry sp,
             // 0(entry) = argc, 8(entry) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 u64 entrySp;
                 i32 argc;
@@ -157,14 +157,14 @@ flag (platform) {
                 exit(code);
             }
         ppc:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // mflr r0; stw r0,F-4(r1); stwu r1,-F(r1)
             // stwu writes a backchain at 0(r1) = entry sp,
             // 0(entry) = argc, 4(entry) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 u32 entrySp;
                 i32 argc;
@@ -178,14 +178,14 @@ flag (platform) {
                 exit(code);
             }
         mips64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // move t0,sp; daddiu sp,sp,-F; sd t0,0(sp); sd ra,8(sp)
             // The backchain at 0($sp) = kernel entry sp:
             // 0(entry) = argc, 8(entry) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 u64 entrySp;
                 i32 argc;
@@ -199,14 +199,14 @@ flag (platform) {
                 exit(code);
             }
         mips:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // move t0,sp; addiu sp,sp,-F; sw t0,0(sp); sw ra,8(sp)
             // The backchain at 0($sp) = kernel entry sp:
             // 0(entry) = argc, 4(entry) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 u32 entrySp;
                 i32 argc;
@@ -220,13 +220,13 @@ flag (platform) {
                 exit(code);
             }
         sparc64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
             // save %sp, -F, %sp The register window makes
             // %fp the kernel entry sp: [%fp] = argc, [%fp+8] = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -238,11 +238,11 @@ flag (platform) {
                 exit(code);
             }
         default:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
 
             i32 main(i32 argc, u8** argv);
 
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 _bootstrapAllocator();
                 i32 code = main(0, null);
@@ -253,12 +253,12 @@ flag (platform) {
     MACOS:
         flag (ARCH) {
         x86_64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
             i32 main(i32 argc, u8** argv);
 
             // push rbp; mov rbp,rsp Kernel args sit at
             // 8(%rbp) = argc, 16(%rbp) = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -270,12 +270,12 @@ flag (platform) {
                 exit(code);
             }
         arm64:
-            extern("c") @[noret] void exit(i32 code);
+            extern("c") [[noret]] void exit(i32 code);
             i32 main(i32 argc, u8** argv);
 
             // stp x29, x30, [sp, #-16]!; mov x29, sp
             // Kernel args sit at [x29, #16] = argc, [x29, #24] = argv
-            @[noret] void _start()
+            [[noret]] void _start()
             {
                 i32 argc;
                 u8** argv;
@@ -291,7 +291,7 @@ flag (platform) {
     // and gui apps use WinMainCRTStartup
     WINDOWS:
         extern("kernel32") u16* GetCommandLineW();
-        extern("kernel32") @[noret] void ExitProcess(u32 code);
+        extern("kernel32") [[noret]] void ExitProcess(u32 code);
 
         i32 main(i32 argc, u8** argv);
 
@@ -424,7 +424,7 @@ flag (platform) {
 
         flag (ARCH) {
         x86_64:
-            @[noret] void mainCRTStartup()
+            [[noret]] void mainCRTStartup()
             {
                 _bootstrapAllocator();
                 i32 argc = 0;
@@ -435,7 +435,7 @@ flag (platform) {
             }
         x86:
         // same pattern, stdcall/fastcall
-            @[noret] void mainCRTStartup()
+            [[noret]] void mainCRTStartup()
             {
                 _bootstrapAllocator();
                 i32 argc = 0;
@@ -445,7 +445,7 @@ flag (platform) {
                 ExitProcess((u32)code);
             }
         arm64:
-            @[noret] void mainCRTStartup()
+            [[noret]] void mainCRTStartup()
             {
                 _bootstrapAllocator();
                 i32 argc = 0;
@@ -455,7 +455,7 @@ flag (platform) {
                 ExitProcess((u32)code);
             }
         arm32:
-            @[noret] void mainCRTStartup()
+            [[noret]] void mainCRTStartup()
             {
                 _bootstrapAllocator();
                 i32 argc = 0;

@@ -1,0 +1,1088 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod mman = import("std/memory/mman.crl");
+
+struct WasmLocal
+{
+    const char* wasmType;
+}
+
+pub struct Wasm32Codegen
+{
+    ir_types.IrContext* ctx;
+    asm_rules.ABIRules abi;
+    bool isWasm64;
+    char* out;
+    u32 outLen;
+    u32 outCap;
+    ir_types.IrFunc* func;
+    WasmLocal* locals;
+    u32 nlocals;
+    u32 capLocals;
+    u32* valueLocals;
+    u32 valueLocalsLen;
+    u32 valueLocalsCap;
+    u32 blockLabels;
+    u32 funcIdx;
+    u32 nextLabel;
+    u32 curBlockIdx;
+
+    Wasm32Codegen new(ir_types.IrContext* ctx, bool is64)
+    {
+        Wasm32Codegen c;
+        c.ctx = ctx;
+        c.abi = asm_rules.wasm32Abi();
+        c.isWasm64 = is64;
+        c.out = null; c.outLen = 0; c.outCap = 0;
+        c.func = null;
+        c.locals = null; c.nlocals = 0; c.capLocals = 0;
+        c.valueLocals = null; c.valueLocalsLen = 0; c.valueLocalsCap = 0;
+        c.blockLabels = 0;
+        c.funcIdx = 0;
+        c.nextLabel = 0;
+        c.curBlockIdx = 0;
+        return c;
+    }
+
+    void grow(u32 n)
+    {
+        if (self.outCap >= self.outLen + n) return;
+        u32 nc = self.outCap ? self.outCap * 2 : 4096;
+        while (nc < self.outLen + n) nc *= 2;
+        char* nb = mman.alloc<char>(nc);
+        if (self.out)
+        {
+            for (u32 i = 0; i < self.outLen; i++) nb[i] = self.out[i];
+            mman.dealloc<char>(self.out);
+        }
+        self.out = nb;
+        self.outCap = nc;
+    }
+
+    void c(char ch) { self.grow(1); self.out[self.outLen++] = ch; }
+
+    void s(const char* p)
+    {
+        if (!p) return;
+        u32 l = 0; while (p[l]) l++;
+        if (!l) return;
+        self.grow(l);
+        for (u32 i = 0; i < l; i++) self.out[self.outLen++] = p[i];
+    }
+
+    void u(u64 v)
+    {
+        if (v == 0) { self.c('0'); return; }
+        char b[24]; u32 p = 24;
+        while (v) { b[--p] = (char)('0' + (v % 10)); v /= 10; }
+        while (p < 24) self.c(b[p++]);
+    }
+
+    void indent() { self.c(' '); self.c(' '); }
+
+    void wasmType(ir_types.IrType* ty)
+    {
+        if (!ty) { self.s("i32"); return; }
+        switch (ty->kind)
+        {
+        case ir_types.IrTypeKind::Void: break;
+        case ir_types.IrTypeKind::Int:
+            if (ty->width == 1 || ty->width == 8 || ty->width == 16 || ty->width == 32)
+                { self.s("i32"); }
+            else if (ty->width == 64)
+                { self.s("i64"); }
+            else
+                { self.s("i32"); }
+            break;
+        case ir_types.IrTypeKind::Float:
+            self.s(ty->width == 64 ? "f64" : "f32");
+            break;
+        case ir_types.IrTypeKind::Ptr:
+            self.s(self.isWasm64 ? "i64" : "i32");
+            break;
+        case ir_types.IrTypeKind::Array:
+            self.s(self.isWasm64 ? "i64" : "i32");
+            break;
+        case ir_types.IrTypeKind::Func:
+            self.s(self.isWasm64 ? "i64" : "i32");
+            break;
+        }
+    }
+
+    u32 ensureLocal(ir_types.IrValue* v)
+    {
+        if (!v) return 0;
+        u32 id = v->id;
+        if (id >= self.valueLocalsCap)
+        {
+            u32 nc = self.valueLocalsCap ? self.valueLocalsCap * 2 : 64;
+            while (nc <= id) nc *= 2;
+            u32* nv = mman.alloc<u32>(nc);
+            for (u32 i = 0; i < self.valueLocalsLen; i++) nv[i] = self.valueLocals[i];
+            for (u32 i = self.valueLocalsLen; i < nc; i++) nv[i] = 0xFFFFFFFF;
+            if (self.valueLocals) mman.dealloc<u32>(self.valueLocals);
+            self.valueLocals = nv;
+            self.valueLocalsCap = nc;
+            if (id >= self.valueLocalsLen) self.valueLocalsLen = id + 1;
+        }
+        if (id >= self.valueLocalsLen) self.valueLocalsLen = id + 1;
+
+        if (self.valueLocals[id] != 0xFFFFFFFF)
+            { return self.valueLocals[id]; }
+
+        u32 idx = self.nlocals;
+        if (idx >= self.capLocals)
+        {
+            u32 nc = self.capLocals ? self.capLocals * 2 : 64;
+            WasmLocal* nl = mman.alloc<WasmLocal>(nc);
+            for (u32 i = 0; i < self.nlocals; i++) nl[i] = self.locals[i];
+            if (self.locals) mman.dealloc<WasmLocal>(self.locals);
+            self.locals = nl;
+            self.capLocals = nc;
+        }
+
+        WasmLocal l;
+        l.wasmType = null;
+
+        ir_types.IrType* ty = v->type;
+        if (ty)
+        {
+            switch (ty->kind)
+            {
+            case ir_types.IrTypeKind::Int:
+                l.wasmType = (ty->width == 64) ? "i64" : "i32";
+                break;
+            case ir_types.IrTypeKind::Float:
+                l.wasmType = (ty->width == 64) ? "f64" : "f32";
+                break;
+            case ir_types.IrTypeKind::Ptr:
+            case ir_types.IrTypeKind::Array:
+            case ir_types.IrTypeKind::Func:
+                l.wasmType = self.isWasm64 ? "i64" : "i32";
+                break;
+            default:
+                l.wasmType = "i32";
+                break;
+            }
+        }
+        else
+        {
+            l.wasmType = "i32";
+        }
+
+        self.locals[idx] = l;
+        self.valueLocals[id] = idx;
+        self.nlocals = idx + 1;
+
+        // For ConstInt/ConstFloat/Block/Func, no local needed (they are in ValData or are block references)
+        if (v->kind == ir_types.IrValueKind::ConstInt || v->kind == ir_types.IrValueKind::ConstFloat ||
+            v->kind == ir_types.IrValueKind::Block || v->kind == ir_types.IrValueKind::Func)
+            return 0xFFFFFFFF;
+
+        return idx;
+    }
+
+    void pushValue(ir_types.IrValue* v)
+    {
+        if (!v) { self.s("i32.const 0"); return; }
+
+        ir_types.IrValueKind k = v->kind;
+        if (k == ir_types.IrValueKind::ConstInt)
+        {
+            u64 n = v->valData;
+            ir_types.IrType* ty = v->type;
+            if (ty && ty->kind == ir_types.IrTypeKind::Int && ty->width == 64)
+                { self.s("i64.const "); }
+            else
+                { self.s("i32.const "); }
+            // Signed representation for negative small values
+            if ((n & 0x80000000) && !(n >> 32))
+            {  self.s("-"); self.u((~n & 0x7FFFFFFF) + 1); }
+            else
+            { self.u(n); }
+            return;
+        }
+        if (k == ir_types.IrValueKind::ConstFloat)
+        {
+            f64 fv;
+            mman.copy<u8>(cast<u8*>(&fv), cast<u8*>(&v->valData), 8);
+            ir_types.IrType* ty = v->type;
+            if (ty && ty->kind == ir_types.IrTypeKind::Float && ty->width == 32)
+                { self.s("f32.const "); }
+            else
+                { self.s("f64.const "); }
+            self.u((u64)fv);
+            return;
+        }
+        if (k == ir_types.IrValueKind::Block)
+        {
+            self.s("block $blk_");
+            self.u(v->id);
+            return;
+        }
+
+        u32 li = self.ensureLocal(v);
+        if (li == 0xFFFFFFFF) { self.s("i32.const 0"); return; }
+        self.s("local.get $l");
+        self.u(li);
+    }
+
+    void setLocal(ir_types.IrValue* v)
+    {
+        u32 li = self.ensureLocal(v);
+        if (li == 0xFFFFFFFF) return;
+        self.s("local.set $l");
+        self.u(li);
+    }
+
+    void getLocal(ir_types.IrValue* v)
+    {
+        u32 li = self.ensureLocal(v);
+        if (li == 0xFFFFFFFF) { self.pushValue(v); return; }
+        self.s("local.get $l");
+        self.u(li);
+    }
+
+    void emitFuncDecl(ir_types.IrFunc* f)
+    {
+        self.s("  (func $f");
+        self.u(self.funcIdx);
+        self.funcIdx++;
+
+        // Function name
+        if (f->base.name && f->base.name[0])
+        {
+            self.c('_');
+            // Sanitize name for WAT identifiers
+            for (u32 i = 0; f->base.name[i]; i++)
+            {
+                char ch = f->base.name[i];
+                if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')
+                    self.c(ch);
+                else
+                    { self.c('_'); }
+            }
+        }
+
+        // Params
+        for (u32 i = 0; i < f->nparams; i++)
+        {
+            self.s(" (param $p");
+            self.u(i);
+            self.c(' ');
+            self.wasmType(f->paramTypes[i]);
+        }
+
+        // Results
+        if (f->retType && f->retType->kind != ir_types.IrTypeKind::Void)
+        {
+            self.s(" (result ");
+            self.wasmType(f->retType);
+            self.c(')');
+        }
+
+        self.c('\n');
+    }
+
+    void emitLocals()
+    {
+        for (u32 i = 0; i < self.nlocals; i++)
+        {
+            self.s("    (local $l");
+            self.u(i);
+            self.c(' ');
+            self.s(self.locals[i].wasmType ? self.locals[i].wasmType : "i32");
+            self.c(')');
+            self.c('\n');
+        }
+    }
+
+    void emitBlock(ir_types.IrBlock* bb, u32 bi, ir_types.IrFunc* func)
+    {
+        u32 label = bi;
+        self.s("    block $blk");
+        self.u(label);
+        self.c('\n');
+        self.curBlockIdx = bi;
+
+        for (u32 ii = 0; ii < bb->ninsts; ii++)
+        {
+            ir_types.IrInst* inst = bb->insts[ii];
+            self.emitInst(inst, func);
+        }
+
+        self.s("    end\n");
+    }
+
+    void emitPhiEdges(ir_types.IrValue* tgt, ir_types.IrFunc* func, u32 depth)
+    {
+        if (!tgt) return;
+        if (tgt->id >= func->nblocks) return;
+        ir_types.IrBlock* tb = func->blocks[tgt->id];
+        for (u32 i = 0; i < tb->ninsts; i++)
+        {
+            ir_types.IrInst* phi = tb->insts[i];
+            if (phi->opcode != ir_opcodes.IrOpcode::Phi) break;
+            for (u32 j = 0; j + 1 < phi->nops; j += 2)
+            {
+                if (phi->ops[j + 1] != null && phi->ops[j + 1]->id == self.curBlockIdx)
+                {
+                    for (u32 d = 0; d < depth; d++) self.indent();
+                    self.getLocal(phi->ops[j]); self.c('\n');
+                    for (u32 d = 0; d < depth; d++) self.indent();
+                    self.setLocal(&phi->base); self.c('\n');
+                    break;
+                }
+            }
+        }
+    }
+
+    void emitInst(ir_types.IrInst* inst, ir_types.IrFunc* func)
+    {
+        ir_opcodes.IrOpcode op = inst->opcode;
+        ir_types.IrType* ty = inst->base.type;
+
+        switch (op)
+        {
+        case ir_opcodes.IrOpcode::Br:
+        {
+            if (inst->nops >= 1)
+            {
+                ir_types.IrValue* target = inst->ops[0];
+                self.emitPhiEdges(target, func, 1);
+                self.indent(); self.s("br $blk");
+                self.u(target->id);
+                self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::CondBr:
+        {
+            if (inst->nops >= 3)
+            {
+                ir_types.IrValue* cond = inst->ops[0];
+                ir_types.IrValue* trueTarget = inst->ops[1];
+                ir_types.IrValue* falseTarget = inst->ops[2];
+
+                self.indent(); self.getLocal(cond);
+                self.s("if\n");
+                self.indent(); self.indent(); self.emitPhiEdges(trueTarget, func, 2);
+                self.indent(); self.indent(); self.s("br $blk");
+                self.u(trueTarget->id); self.c('\n');
+                self.indent(); self.s("else\n");
+                self.indent(); self.indent(); self.emitPhiEdges(falseTarget, func, 2);
+                self.indent(); self.indent(); self.s("br $blk");
+                self.u(falseTarget->id); self.c('\n');
+                self.indent(); self.s("end\n");
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Ret:
+        {
+            if (inst->nops >= 1 && inst->ops[0])
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+            }
+            self.indent(); self.s("return\n");
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Unreachable:
+        {
+            self.indent(); self.s("unreachable\n");
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Noret:
+        {
+            self.indent(); self.s("unreachable\n");
+            break;
+        }
+
+        // Unary arithmetic
+        case ir_opcodes.IrOpcode::Neg:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                bool isFloat = ty && ty->kind == ir_types.IrTypeKind::Float;
+                self.indent();
+                if (isFloat && ty->width == 64) self.s("f64.neg\n");
+                else if (isFloat) self.s("f32.neg\n");
+                else if (ty && ty->width == 64) self.s("i64.sub\n");
+                else self.s("i32.sub\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Not:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.s("i32.eqz\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Abs:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                bool isFloat = ty && ty->kind == ir_types.IrTypeKind::Float;
+                self.indent();
+                if (isFloat && ty->width == 64) self.s("f64.abs\n");
+                else if (isFloat) self.s("f32.abs\n");
+                else self.s("i32.const 0x7FFFFFFF; local.get 0; i32.and\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FAbs:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent();
+                self.s(ty && ty->width == 64 ? "f64.abs\n" : "f32.abs\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FSqrt:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent();
+                self.s(ty && ty->width == 64 ? "f64.sqrt\n" : "f32.sqrt\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // Binary arithmetic
+        case ir_opcodes.IrOpcode::Add:
+        case ir_opcodes.IrOpcode::Sub:
+        case ir_opcodes.IrOpcode::Mul:
+        case ir_opcodes.IrOpcode::SDiv:
+        case ir_opcodes.IrOpcode::UDiv:
+        case ir_opcodes.IrOpcode::SRem:
+        case ir_opcodes.IrOpcode::URem:
+        case ir_opcodes.IrOpcode::And:
+        case ir_opcodes.IrOpcode::Or:
+        case ir_opcodes.IrOpcode::Xor:
+        case ir_opcodes.IrOpcode::Shl:
+        case ir_opcodes.IrOpcode::Ashr:
+        case ir_opcodes.IrOpcode::Lshr:
+        case ir_opcodes.IrOpcode::Rotl:
+        case ir_opcodes.IrOpcode::Rotr:
+        case ir_opcodes.IrOpcode::SMin:
+        case ir_opcodes.IrOpcode::SMax:
+        case ir_opcodes.IrOpcode::UMin:
+        case ir_opcodes.IrOpcode::UMax:
+        {
+            if (inst->nops >= 2)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.getLocal(inst->ops[1]); self.c('\n');
+
+                bool isFloat = ty && ty->kind == ir_types.IrTypeKind::Float;
+                bool is64 = ty && (ty->kind == ir_types.IrTypeKind::Int && ty->width == 64);
+                isFloat |= ty && (ty->kind == ir_types.IrTypeKind::Float && ty->width == 64);
+
+                const char* prefix;
+                if (isFloat)
+                    { prefix = (ty->width == 64) ? "f64." : "f32."; }
+                else if (is64)
+                    { prefix = "i64."; }
+                else
+                    { prefix = "i32."; }
+
+                self.indent(); self.s(prefix);
+                switch (op)
+                {
+                case ir_opcodes.IrOpcode::Add: self.s("add\n"); break;
+                case ir_opcodes.IrOpcode::Sub: self.s("sub\n"); break;
+                case ir_opcodes.IrOpcode::Mul: self.s("mul\n"); break;
+                case ir_opcodes.IrOpcode::SDiv: self.s(isFloat ? "div\n" : "div_s\n"); break;
+                case ir_opcodes.IrOpcode::UDiv: self.s("div_u\n"); break;
+                case ir_opcodes.IrOpcode::SRem: self.s("rem_s\n"); break;
+                case ir_opcodes.IrOpcode::URem: self.s("rem_u\n"); break;
+                case ir_opcodes.IrOpcode::And: self.s("and\n"); break;
+                case ir_opcodes.IrOpcode::Or: self.s("or\n"); break;
+                case ir_opcodes.IrOpcode::Xor: self.s("xor\n"); break;
+                case ir_opcodes.IrOpcode::Shl: self.s("shl\n"); break;
+                case ir_opcodes.IrOpcode::Ashr: self.s("shr_s\n"); break;
+                case ir_opcodes.IrOpcode::Lshr: self.s("shr_u\n"); break;
+                case ir_opcodes.IrOpcode::Rotl: self.s("rotl\n"); break;
+                case ir_opcodes.IrOpcode::Rotr: self.s("rotr\n"); break;
+                case ir_opcodes.IrOpcode::SMin: self.s("min\n"); break;
+                case ir_opcodes.IrOpcode::SMax: self.s("max\n"); break;
+                case ir_opcodes.IrOpcode::UMin: self.s("min_u\n"); break;
+                case ir_opcodes.IrOpcode::UMax: self.s("max_u\n"); break;
+                default: self.s("add\n"); break;
+                }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // Memory
+        case ir_opcodes.IrOpcode::Alloca:
+        {
+            // In WASM, alloca adjusts the shadow stack pointer (global $__stack_pointer)
+            // We allocate 8 bytes per alloca and bump the stack pointer
+            self.indent(); self.s("global.get $__stack_pointer\n");
+            self.indent(); self.s(self.isWasm64 ? "i64.const 8\ni64.sub\n" : "i32.const 8\ni32.sub\n");
+            self.indent(); self.s("global.set $__stack_pointer\n");
+            self.indent(); self.s("global.get $__stack_pointer\n");
+            self.indent(); self.setLocal(&inst->base); self.c('\n');
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Load:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent();
+                if (!ty)
+                {
+                    self.s("i32.load\n");
+                }
+                else if (ty->kind == ir_types.IrTypeKind::Int)
+                {
+                    if (ty->width == 8) self.s("i32.load8_s\n");
+                    else if (ty->width == 16) self.s("i32.load16_s\n");
+                    else if (ty->width == 64) self.s("i64.load\n");
+                    else self.s("i32.load\n");
+                }
+                else if (ty->kind == ir_types.IrTypeKind::Float)
+                {
+                    self.s(ty->width == 64 ? "f64.load\n" : "f32.load\n");
+                }
+                else if (ty->kind == ir_types.IrTypeKind::Ptr)
+                {
+                    self.s(self.isWasm64 ? "i64.load\n" : "i32.load\n");
+                }
+                else
+                {
+                    self.s("i32.load\n");
+                }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Store:
+        {
+            if (inst->nops >= 2)
+            {
+                ir_types.IrValue* val = inst->ops[0];
+                ir_types.IrValue* ptr = inst->ops[1];
+                self.indent(); self.getLocal(ptr); self.c('\n');
+                self.indent(); self.getLocal(val); self.c('\n');
+                self.indent();
+                ir_types.IrType* valTy = val ? val->type : null;
+                if (!valTy)
+                {
+                    self.s("i32.store\n");
+                }
+                else if (valTy->kind == ir_types.IrTypeKind::Int)
+                {
+                    if (valTy->width == 8) self.s("i32.store8\n");
+                    else if (valTy->width == 16) self.s("i32.store16\n");
+                    else if (valTy->width == 64) self.s("i64.store\n");
+                    else self.s("i32.store\n");
+                }
+                else if (valTy->kind == ir_types.IrTypeKind::Float)
+                {
+                    self.s(valTy->width == 64 ? "f64.store\n" : "f32.store\n");
+                }
+                else
+                {
+                    self.s("i32.store\n");
+                }
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Gep:
+        {
+            // GEP, ptr + sum of indices * element size
+            if (inst->nops >= 2)
+            {
+                ir_types.IrValue* ptr = inst->ops[0];
+                self.indent(); self.getLocal(ptr); self.c('\n');
+                for (u32 i = 1; i < inst->nops; i++)
+                {
+                    self.indent(); self.getLocal(inst->ops[i]); self.c('\n');
+                    self.indent(); self.s(self.isWasm64 ? "i64.const 1\ni64.mul\n" : "i32.const 1\ni32.mul\n");
+                    self.indent(); self.s(self.isWasm64 ? "i64.add\n" : "i32.add\n");
+                }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // Cast
+        case ir_opcodes.IrOpcode::Trunc:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                u32 dstBits = ty ? ty->width : 32;
+                u32 srcBits = inst->ops[0]->type ? inst->ops[0]->type->width : 32;
+                if (srcBits <= 32 && dstBits == 64)
+                { { self.indent(); self.s("i64.extend_i32_s\n"); } }
+                else if (srcBits == 64 && dstBits <= 32)
+                { { self.indent(); self.s("i32.wrap_i64\n"); } }
+                else
+                { { self.indent(); self.s("nop\n"); } }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Zext:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                u32 dstBits = ty ? ty->width : 32;
+                u32 srcBits = inst->ops[0]->type ? inst->ops[0]->type->width : 32;
+                if (srcBits <= 32 && dstBits == 64)
+                    { { self.indent(); self.s("i64.extend_i32_u\n"); } }
+                else if (srcBits <= 8)
+                    { { self.indent(); self.s("i32.const 0xFF\ni32.and\n"); } }
+                else if (srcBits <= 16)
+                    { { self.indent(); self.s("i32.const 0xFFFF\ni32.and\n"); } }
+                else
+                    { { self.indent(); self.s("nop\n"); } }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Sext:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                u32 dstBits = ty ? ty->width : 32;
+                u32 srcBits = inst->ops[0]->type ? inst->ops[0]->type->width : 32;
+                if (srcBits <= 8)
+                    { { self.indent(); self.s("i32.extend8_s\n"); } }
+                else if (srcBits <= 16)
+                    { { self.indent(); self.s("i32.extend16_s\n"); } }
+                else if (srcBits <= 32 && dstBits == 64)
+                    { { self.indent(); self.s("i64.extend_i32_s\n"); } }
+                else
+                    { self.indent(); self.s("nop\n"); }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Bitcast:
+        {
+            if (inst->nops >= 1)
+            {
+                // WASM has no bitcast — values stay on stack in their original type
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FpToSi:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                ir_types.IrType* srcTy = inst->ops[0]->type;
+                u32 dstBits = ty ? ty->width : 32;
+                bool srcIsDouble = srcTy && srcTy->width == 64;
+                if (dstBits == 64)
+                    { { self.indent(); self.s(srcIsDouble ? "i64.trunc_f64_s\n" : "i64.trunc_f32_s\n"); } }
+                else
+                    { self.indent(); self.s(srcIsDouble ? "i32.trunc_f64_s\n" : "i32.trunc_f32_s\n"); }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FpToUi:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                ir_types.IrType* srcTy = inst->ops[0]->type;
+                u32 dstBits = ty ? ty->width : 32;
+                bool srcIsDouble = srcTy && srcTy->width == 64;
+                if (dstBits == 64)
+                    { { self.indent(); self.s(srcIsDouble ? "i64.trunc_f64_u\n" : "i64.trunc_f32_u\n"); } }
+                else
+                    { self.indent(); self.s(srcIsDouble ? "i32.trunc_f64_u\n" : "i32.trunc_f32_u\n"); }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::SiToFp:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                ir_types.IrType* dstTy = inst->base.type;
+                u32 srcBits = inst->ops[0]->type ? inst->ops[0]->type->width : 32;
+                bool dstIsDouble = dstTy && dstTy->width == 64;
+                if (srcBits == 64)
+                    { { self.indent(); self.s(dstIsDouble ? "f64.convert_i64_s\n" : "f32.convert_i64_s\n"); } }
+                else
+                    { self.indent(); self.s(dstIsDouble ? "f64.convert_i32_s\n" : "f32.convert_i32_s\n"); }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::UiToFp:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                ir_types.IrType* dstTy = inst->base.type;
+                u32 srcBits = inst->ops[0]->type ? inst->ops[0]->type->width : 32;
+                bool dstIsDouble = dstTy && dstTy->width == 64;
+                if (srcBits == 64)
+                    { { self.indent(); self.s(dstIsDouble ? "f64.convert_i64_u\n" : "f32.convert_i64_u\n"); } }
+                else
+                    { self.indent(); self.s(dstIsDouble ? "f64.convert_i32_u\n" : "f32.convert_i32_u\n"); }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FpTrunc:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.s("f32.demote_f64\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FpExt:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.s("f64.promote_f32\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // Compare
+        case ir_opcodes.IrOpcode::ICmp:
+        {
+            if (inst->nops >= 2)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.getLocal(inst->ops[1]); self.c('\n');
+                bool is64 = inst->ops[0]->type && inst->ops[0]->type->width == 64;
+                const char* p = is64 ? "i64." : "i32.";
+                self.indent(); self.s(p);
+                switch (inst->icmpPred)
+                {
+                case ir_opcodes.IrICmpPred::Eq: self.s("eq\n"); break;
+                case ir_opcodes.IrICmpPred::Ne: self.s("ne\n"); break;
+                case ir_opcodes.IrICmpPred::Slt: self.s("lt_s\n"); break;
+                case ir_opcodes.IrICmpPred::Sle: self.s("le_s\n"); break;
+                case ir_opcodes.IrICmpPred::Sgt: self.s("gt_s\n"); break;
+                case ir_opcodes.IrICmpPred::Sge: self.s("ge_s\n"); break;
+                case ir_opcodes.IrICmpPred::Ult: self.s("lt_u\n"); break;
+                case ir_opcodes.IrICmpPred::Ule: self.s("le_u\n"); break;
+                case ir_opcodes.IrICmpPred::Ugt: self.s("gt_u\n"); break;
+                case ir_opcodes.IrICmpPred::Uge: self.s("ge_u\n"); break;
+                }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::FCmp:
+        {
+            if (inst->nops >= 2)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.getLocal(inst->ops[1]); self.c('\n');
+                bool is64 = inst->ops[0]->type && inst->ops[0]->type->width == 64;
+                const char* p = is64 ? "f64." : "f32.";
+                self.indent(); self.s(p);
+                switch (inst->fcmpPred)
+                {
+                case ir_opcodes.IrFCmpPred::Oeq: self.s("eq\n"); break;
+                case ir_opcodes.IrFCmpPred::One: self.s("ne\n"); break;
+                case ir_opcodes.IrFCmpPred::Olt: self.s("lt\n"); break;
+                case ir_opcodes.IrFCmpPred::Ole: self.s("le\n"); break;
+                case ir_opcodes.IrFCmpPred::Ogt: self.s("gt\n"); break;
+                case ir_opcodes.IrFCmpPred::Oge: self.s("ge\n"); break;
+                case ir_opcodes.IrFCmpPred::Ueq: self.s("eq\n"); break;
+                case ir_opcodes.IrFCmpPred::Une: self.s("ne\n"); break;
+                case ir_opcodes.IrFCmpPred::Ult: self.s("lt\n"); break;
+                case ir_opcodes.IrFCmpPred::Ule: self.s("le\n"); break;
+                case ir_opcodes.IrFCmpPred::Ugt: self.s("gt\n"); break;
+                case ir_opcodes.IrFCmpPred::Uge: self.s("ge\n"); break;
+                }
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // Bit manipulation
+        case ir_opcodes.IrOpcode::CtPop:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                bool is64 = ty && ty->width == 64;
+                self.indent(); self.s(is64 ? "i64.popcnt\n" : "i32.popcnt\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::CtLz:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                bool is64 = ty && ty->width == 64;
+                self.indent(); self.s(is64 ? "i64.clz\n" : "i32.clz\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::CtTz:
+        {
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                bool is64 = ty && ty->width == 64;
+                self.indent(); self.s(is64 ? "i64.ctz\n" : "i32.ctz\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        case ir_opcodes.IrOpcode::Bswap:
+        {
+            // WASM has no bswap — emit rotate-based idiom or use i32.extend + shifts
+            if (inst->nops >= 1)
+            {
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                bool is64 = ty && ty->width == 64;
+                self.indent(); self.s(is64 ? "i64.const 56\ni64.shr_u\n" : "i32.const 24\ni32.shr_u\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // Call
+        case ir_opcodes.IrOpcode::Call:
+        {
+            if (inst->nops >= 1)
+            {
+                ir_types.IrValue* callee = inst->ops[0];
+                // Push args
+                for (u32 i = 1; i < inst->nops; i++)
+                {
+                    self.indent(); self.getLocal(inst->ops[i]); self.c('\n');
+                }
+
+                if (callee->kind == ir_types.IrValueKind::Func)
+                {
+                    ir_types.IrFunc* cf = (ir_types.IrFunc*)callee;
+                    self.indent(); self.s("call $f");
+                    // We need to find the function index — for now use 0 for indirect
+                    self.u(callee->id);
+                    self.c('\n');
+                }
+                else
+                {
+                    // Indirect call
+                    self.indent(); self.getLocal(callee); self.c('\n');
+                    self.indent(); self.s("call_indirect (type $t0)\n");
+                }
+
+                if (ty && ty->kind != ir_types.IrTypeKind::Void)
+                {
+                    self.indent(); self.setLocal(&inst->base); self.c('\n');
+                }
+            }
+            break;
+        }
+
+        // Phi
+        case ir_opcodes.IrOpcode::Phi:
+        {
+            // Phi results are materialized on incoming edges (emitPhiEdges).
+            break;
+        }
+
+        // Select
+        case ir_opcodes.IrOpcode::Select:
+        {
+            if (inst->nops >= 3)
+            {
+                ir_types.IrValue* cond = inst->ops[0];
+                ir_types.IrValue* tVal = inst->ops[1];
+                ir_types.IrValue* fVal = inst->ops[2];
+
+                self.indent(); self.getLocal(cond); self.c('\n');
+                self.indent(); self.s("if (result ");
+                self.wasmType(ty);
+                self.s(")\n");
+                self.indent(); self.indent(); self.getLocal(tVal); self.c('\n');
+                self.indent(); self.s("else\n");
+                self.indent(); self.indent(); self.getLocal(fVal); self.c('\n');
+                self.indent(); self.s("end\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        // FMA — not natively supported in wasm
+        case ir_opcodes.IrOpcode::Fma:
+        {
+            if (inst->nops >= 3)
+            {
+                // Emit as a*b + c
+                self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
+                self.indent(); self.getLocal(inst->ops[1]); self.c('\n');
+                bool is64 = ty && ty->width == 64;
+                self.indent(); self.s(is64 ? "f64.mul\n" : "f32.mul\n");
+                self.indent(); self.getLocal(inst->ops[2]); self.c('\n');
+                self.indent(); self.s(is64 ? "f64.add\n" : "f32.add\n");
+                self.indent(); self.setLocal(&inst->base); self.c('\n');
+            }
+            break;
+        }
+
+        default:
+            self.indent(); self.s("nop\n");
+            break;
+        }
+    }
+
+    void emitModule(ir_types.IrModule* mod_)
+    {
+        // Module header
+        self.s("(module\n");
+
+        // Stack pointer global
+        self.s("  (global $__stack_pointer (mut ");
+        self.s(self.isWasm64 ? "i64" : "i32");
+        self.s(") (");
+        self.s(self.isWasm64 ? "i64" : "i32");
+        self.s(".const 0))\n");
+
+        // Memory declaration
+        self.s("  (memory (pub \"memory\") 1)\n");
+
+        // Type table for indirect calls
+        self.s("  (type $t0 (func");
+        self.s("))\n");
+
+        // Emit all functions
+        for (u32 fi = 0; fi < mod_->nfuncs; fi++)
+        {
+            ir_types.IrFunc* f = mod_->funcs[fi];
+            if (!f) continue;
+
+            self.func = f;
+            self.nlocals = 0;
+
+            // Pre-assign locals for all value IDs used in the function
+            // First pass, scan and assign locals
+            for (u32 bi = 0; bi < f->nblocks; bi++)
+            {
+                ir_types.IrBlock* bb = f->blocks[bi];
+                for (u32 ii = 0; ii < bb->ninsts; ii++)
+                {
+                    ir_types.IrInst* inst = bb->insts[ii];
+                    // Assign local for this instruction's result (if it produces one)
+                    if (inst->opcode != ir_opcodes.IrOpcode::Store &&
+                        inst->opcode != ir_opcodes.IrOpcode::Br &&
+                        inst->opcode != ir_opcodes.IrOpcode::CondBr &&
+                        inst->opcode != ir_opcodes.IrOpcode::Ret &&
+                        inst->opcode != ir_opcodes.IrOpcode::Unreachable &&
+                        inst->opcode != ir_opcodes.IrOpcode::Noret)
+                    {
+                        self.ensureLocal(&inst->base);
+                    }
+                    // Also assign locals for referenced values
+                    for (u32 oi = 0; oi < inst->nops; oi++)
+                    {
+                        ir_types.IrValue* op = inst->ops[oi];
+                        if (op && (op->kind == ir_types.IrValueKind::Inst ||
+                                   op->kind == ir_types.IrValueKind::ConstInt ||
+                                   op->kind == ir_types.IrValueKind::ConstFloat))
+                            self.ensureLocal(op);
+                    }
+                }
+            }
+
+            // Emit function declaration
+            self.emitFuncDecl(f);
+
+            // Emit locals declaration
+            self.emitLocals();
+
+            // Emit blocks
+            for (u32 bi = 0; bi < f->nblocks; bi++)
+            {
+                ir_types.IrBlock* bb = f->blocks[bi];
+                self.emitBlock(bb, bi, f);
+            }
+
+            self.s("  )\n");
+        }
+
+        self.s(")\n");
+    }
+}
+
+pub bool irCodegenWasm32(ir_types.IrModule* mod_, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !mod_) return false;
+    Wasm32Codegen cg = Wasm32Codegen::new(ctx, false);
+    cg.emitModule(mod_);
+    // Output stored in cg.out — caller is responsible for reading and freeing
+    // For now we just verify the output is non-empty
+    if (cg.outLen == 0) return false;
+    mman.dealloc<char>(cg.out);
+    return true;
+}

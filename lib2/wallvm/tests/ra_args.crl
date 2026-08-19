@@ -1,0 +1,147 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+
+mod wallvm = import("wallvm/wallvm.crl");
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_builder = import("wallvm/ir_builder.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod x86_64 = import("wallvm/target/x86_64/x86_64.crl");
+mod ra_arena = import("wallvm/tests/ra_arena.crl");
+mod libc = import("std/platform/libc.crl");
+mod string = import("std/text/string.crl");
+
+ir_types.IrModule* buildArgs(ir_types.IrContext* ctx)
+{
+    ir_types.IrType* ty64 = ctx.tyInt(64);
+    ir_types.IrType* tyF64 = ctx.tyDouble();
+
+    ir_types.IrModule* m = ctx.createModule("ra_args");
+
+    ir_types.IrType* p2[2];
+    p2[0] = ty64;
+    p2[1] = ty64;
+    ir_types.IrType* addTy = ctx.tyFunc(ty64, p2, 2, false);
+    ir_types.IrGlobal* argAdd = ctx.createGlobal("arg_add", addTy, true, true, null, 0);
+    m.addGlobal(argAdd);
+
+    ir_types.IrFunc* fa = ctx.createFunc("ra_args_add", (ty64), p2, 2);
+    m.addFunc(fa);
+    ir_types.IrBlock* ba = ctx.createBlock("entry");
+    fa.addBlock(ba);
+    ir_builder.IrBuilder bda = ir_builder.IrBuilder::new(ctx);
+    bda.pos(ba, null);
+    ir_types.IrValue* c30 = ctx.constInt((ty64), 30);
+    ir_types.IrValue* c12 = ctx.constInt((ty64), 12);
+    ir_types.IrValue* aa[2];
+    aa[0] = c30;
+    aa[1] = c12;
+    ir_types.IrInst* ca = bda.call(&argAdd.base, aa, 2);
+    bda.ret(&ca->base);
+
+    ir_types.IrType* p10[10];
+    for (u32 i = 0; i < 10; i++) p10[i] = ty64;
+    ir_types.IrType* manyTy = ctx.tyFunc(ty64, p10, 10, false);
+    ir_types.IrGlobal* argMany = ctx.createGlobal("arg_many", manyTy, true, true, null, 0);
+    m.addGlobal(argMany);
+
+    ir_types.IrFunc* fm = ctx.createFunc("ra_args_many", (ty64), null, 0);
+    m.addFunc(fm);
+    ir_types.IrBlock* bm = ctx.createBlock("entry");
+    fm.addBlock(bm);
+    ir_builder.IrBuilder bdm = ir_builder.IrBuilder::new(ctx);
+    bdm.pos(bm, null);
+    ir_types.IrValue* am[10];
+    for (u32 i = 0; i < 10; i++) am[i] = ctx.constInt((ty64), i + 1);
+    ir_types.IrInst* cm = bdm.call(&argMany.base, am, 10);
+    bdm.ret(&cm->base);
+
+    ir_types.IrType* p2f[2];
+    p2f[0] = tyF64;
+    p2f[1] = tyF64;
+    ir_types.IrType* faddTy = ctx.tyFunc(tyF64, p2f, 2, false);
+    ir_types.IrGlobal* argFadd = ctx.createGlobal("arg_fadd", faddTy, true, true, null, 0);
+    m.addGlobal(argFadd);
+
+    ir_types.IrFunc* ff = ctx.createFunc("ra_fadd", (tyF64), null, 0);
+    m.addFunc(ff);
+    ir_types.IrBlock* bf = ctx.createBlock("entry");
+    ff.addBlock(bf);
+    ir_builder.IrBuilder bdf = ir_builder.IrBuilder::new(ctx);
+    bdf.pos(bf, null);
+    ir_types.IrValue* f25 = ctx.constFloat(tyF64, 2.5);
+    ir_types.IrValue* f65 = ctx.constFloat(tyF64, 6.5);
+    ir_types.IrValue* af[2];
+    af[0] = f25;
+    af[1] = f65;
+    ir_types.IrInst* cf = bdf.call(&argFadd.base, af, 2);
+    bdf.ret(&cf->base);
+
+    return m;
+}
+
+i32 main(i32 argc, char** argv)
+{
+    ra_arena.install();
+    if (argc < 2) return 1;
+    const char* outdir = argv[1];
+    u32 cc = (u32)asm_rules.CallingConvention::SystemV;
+    bool intel = false;
+    if (argc > 2 && argv[2][0] == 'i') intel = true;
+
+    ir_types.IrContext* ctx = ir_types.irCtxCreate();
+    ir_types.IrModule* m = buildArgs(ctx);
+    if (m == null) return 1;
+
+    const char* s = wallvm.irCompileAsm(m, ctx, (asm_rules.CallingConvention)cc, 0);
+    if (s == null)
+    {
+        libc.write(2, "irCompileAsm failed\n", 20);
+        return 1;
+    }
+    if (intel)
+    {
+        s = x86_64.irCodegenX86_64Asm(m, (void*)ctx, false);
+        if (s == null)
+        {
+            libc.write(2, "irCodegenX86_64Asm failed\n", 26);
+            return 1;
+        }
+    }
+    u64 n = 0;
+    while (s[n]) n++;
+    if (n == 0) return 1;
+
+    u8 path[256];
+    u32 pl = 0;
+    while (outdir[pl]) { path[pl] = (u8)outdir[pl]; pl++; }
+    path[pl++] = '/';
+    path[pl++] = 'r';
+    path[pl++] = 'a';
+    path[pl++] = '_';
+    path[pl++] = 'a';
+    path[pl++] = 'r';
+    path[pl++] = 'g';
+    path[pl++] = 's';
+    path[pl++] = '.';
+    path[pl++] = 's';
+    path[pl] = 0;
+
+    i32 fd = libc.open((const char*)path, 0x241, 0x1A4);
+    if (fd < 0)
+    {
+        libc.write(2, "can't open output file\n", 23);
+        return 1;
+    }
+    u64 off = 0;
+    while (off < n)
+    {
+        i64 w = libc.write(fd, s + off, n - off);
+        if (w <= 0) break;
+        off += (u64)w;
+    }
+    libc.close(fd);
+    return 0;
+}

@@ -1,0 +1,2 @@
+// semantic, static and analysis go here.
+// stuff like implicit conversions without cast, and other thigns

@@ -1,0 +1,6 @@
+i32 main()
+@[[no_drop]]
+{
+    u64 n = strlen("hello);
+    return 0;
+}

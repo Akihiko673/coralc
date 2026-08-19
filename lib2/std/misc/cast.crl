@@ -1,0 +1,7 @@
+mod any = import("any");
+@[[no_drop]]
+
+pub T cast<T>(any val)
+{
+    return (T)val.ptr();
+}

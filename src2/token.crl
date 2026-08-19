@@ -34,7 +34,7 @@ pub str.strView KW_TERMS[] = {
     "case", "default", "break", "continue",
     "return", "defer", "comptime", "flag",
     "asm", "volatile", "sizeof", "true",
-    "false", "null", "i8", "i16", "i32", "i64",
+    "false", "null", "self", "i8", "i16", "i32", "i64",
     "u8", "u16", "u32", "u64", "f32", "f64",
     "bool", "char", "void", "isize", "usize",
     "assert",
@@ -80,7 +80,7 @@ pub str.strView ANON_TERMS[] = {
     "return", "defer", "comptime",
     "flag", "asm", "volatile",
     "sizeof", "true", "false",
-    "null", "i8", "i16", "i32",
+    "null", "self", "i8", "i16", "i32",
     "i64", "u8", "u16", "u32",
     "u64", "f32", "f64",
     "bool", "char", "void",
@@ -108,7 +108,7 @@ pub str.strView ANON_TERMS[] = {
 };
 
 pub const u32 NUM_OP = 59;      // OP_TERMS length (scanPunct bound)
-pub const u32 NUM_ANON = 108;   // ANON_TERMS length
+pub const u32 NUM_ANON = 109;   // ANON_TERMS length
 
 pub u32 terminalId(str.strView s)
 {

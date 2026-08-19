@@ -1,0 +1,956 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod mman = import("std/memory/mman.crl");
+
+// Optional IR-based borrow check. This is a diagnostic pass, it never
+// rewrites the IR, it only reports suspicious alias patterns.
+//
+// The IR carries no explicit borrow annotations, so the check is a sound
+// conservative model of the source-level rule "a value read from a region may
+// not stay live while that region is handed to a callee with write access".
+// Three rules are checked:
+//
+//   1. StaleLoadAcrossCall, a load from a region that stays live across a
+//      call that may write through a pointer argument to an overlapping
+//      region. Only callees with write capability on that argument
+//      threaten the region.
+//   2. AliasingCallArgs, two pointer arguments of one call that overlap
+//      the same region, when the callee can write through either.
+//   3. StoreVsLiveLoad, a store to a region while a load of it is still
+//      live afterwards.
+//
+// Model details:
+// - A region is a base pointer plus a constant offset; GEP constant
+//   indices scale by 8 bytes (the backend's addressing unit). Two regions
+//   overlap when their bases are the same SSA value and their byte ranges
+//   intersect; variable-index addresses are unknown and only overlap on an
+//   identical SSA value.
+// - Bitcasts and phis are unioned (union-find), so casts and merges do
+//   not hide aliasing.
+// - Per function, a write-capability bit is computed for every parameter
+//   (stores through it, or passing it to a callee that writes its own),
+//   to a fixed point over the module.
+// - Pointers loaded from a global slot resolve to the regions stored into
+//   that slot; loads with no recorded stores are unknown provenance and
+//   overlap everything.
+// - Liveness is real CFG liveness (per-block live-in/live-out bitvecs).
+//
+// Reporting, violations carry the debugLoc file:line:col of the offending
+// instruction. BorrowCheckOptions.collect keeps the records (read via
+// violation(i), freed by deinit()); options.warn fires a reporter
+// callback per violation.
+//
+// Not part of any standard pipeline; run it explicitly for diagnostics.
+pub enum BorrowCheckKind
+{
+    StaleLoadAcrossCall,
+    AliasingCallArgs,
+    StoreVsLiveLoad,
+}
+
+pub struct BorrowViolation
+{
+    BorrowCheckKind kind;
+    const char* file;
+    u32 line;
+    u32 col;
+    const char* message;
+}
+
+pub struct BorrowCheckOptions
+{
+    bool collect;
+    bool warn;
+    void(BorrowViolation*) reporter;
+}
+
+pub struct BorrowCheckPass
+{
+    ir_types.IrContext* ctx;
+    ir_types.IrModule* module;
+    ir_types.IrFunc* curFunc;
+    u32 curNblocks;
+    u64 violations;
+    u64 maxParams;
+    bool* caps;
+    BorrowCheckOptions options;
+    BorrowViolation* violList;
+    u32 violLen;
+    u32 violCap;
+
+    BorrowCheckPass new(ir_types.IrContext* ctx, BorrowCheckOptions* options)
+    {
+        BorrowCheckPass p;
+        p.ctx = ctx;
+        p.module = null;
+        p.curFunc = null;
+        p.curNblocks = 0;
+        p.violations = 0;
+        p.maxParams = 0;
+        p.caps = null;
+        if (options)
+        {
+            p.options.collect = options.collect;
+            p.options.warn = options.warn;
+            p.options.reporter = options.reporter;
+        }
+        else
+        {
+            p.options.collect = false;
+            p.options.warn = false;
+            p.options.reporter = null;
+        }
+        p.violList = null;
+        p.violLen = 0;
+        p.violCap = 0;
+        p.alSlotBases = null;
+        p.alSlotOffs = null;
+        p.alStoredBases = null;
+        p.alStoredOffs = null;
+        p.alLen = 0;
+        p.alCap = 0;
+        p.ufKeys = null;
+        p.ufPars = null;
+        p.ufLen = 0;
+        p.ufCap = 0;
+        return p;
+    }
+
+    u64 violationsCount()
+    {
+        return self.violations;
+    }
+
+    BorrowViolation* violation(u32 i)
+    {
+        if (i < self.violLen) return &self.violList[i];
+        return null;
+    }
+
+    const char* messageFor(BorrowCheckKind kind)
+    {
+        switch (kind)
+        {
+        case BorrowCheckKind::StaleLoadAcrossCall:
+            return "load stays live across a call that may write the region";
+        case BorrowCheckKind::AliasingCallArgs:
+            return "two pointer arguments alias the same region";
+        case BorrowCheckKind::StoreVsLiveLoad:
+            return "store to a region with a still-live load of it";
+        }
+        return "borrow check violation";
+    }
+
+    void recordViolation(BorrowCheckKind kind, ir_types.IrInst* at)
+    {
+        self.violations++;
+        BorrowViolation v;
+        v.kind = kind;
+        v.message = self.messageFor(kind);
+        if (at && at.debugLoc.file)
+        {
+            v.file = at.debugLoc.file;
+            v.line = at.debugLoc.line;
+            v.col = at.debugLoc.col;
+        }
+        else
+        {
+            v.file = null;
+            v.line = 0;
+            v.col = 0;
+        }
+        if (self.options.collect)
+        {
+            if (self.violLen >= self.violCap)
+            {
+                u32 nc = self.violCap ? self.violCap * 2 : 16;
+                BorrowViolation* nl = mman.alloc<BorrowViolation>(nc);
+                for (u32 i = 0; i < self.violLen; i++)
+                    nl[i] = self.violList[i];
+                if (self.violList) mman.dealloc<BorrowViolation>(self.violList);
+                self.violList = nl;
+                self.violCap = nc;
+            }
+            self.violList[self.violLen++] = v;
+        }
+        if (self.options.warn && self.options.reporter)
+            self.options.reporter(&v);
+    }
+
+    void deinit()
+    {
+        if (self.violList) mman.dealloc<BorrowViolation>(self.violList);
+        self.violList = null;
+        self.violLen = 0;
+        self.violCap = 0;
+    }
+
+    // ── Union-find over SSA values ──
+    // A bitcast keeps the same address as its operand, and a phi may be any
+    // of its incoming values, so those values denote the same region base.
+    // Unifying them makes the region model chase across casts and merges.
+    ir_types.IrValue** ufKeys;
+    ir_types.IrValue** ufPars;
+    u32 ufLen;
+    u32 ufCap;
+
+    void ufGrow()
+    {
+        if (self.ufLen < self.ufCap) return;
+        u32 nc = self.ufCap ? self.ufCap * 2 : 16;
+        ir_types.IrValue** nk = mman.alloc<ir_types.IrValue*>(nc);
+        ir_types.IrValue** np = mman.alloc<ir_types.IrValue*>(nc);
+        for (u32 i = 0; i < self.ufLen; i++)
+        {
+            nk[i] = self.ufKeys[i];
+            np[i] = self.ufPars[i];
+        }
+        if (self.ufKeys)
+        {
+            mman.dealloc<ir_types.IrValue*>(self.ufKeys);
+            mman.dealloc<ir_types.IrValue*>(self.ufPars);
+        }
+        self.ufKeys = nk;
+        self.ufPars = np;
+        self.ufCap = nc;
+    }
+
+    u32 ufIndex(ir_types.IrValue* v)
+    {
+        for (u32 i = 0; i < self.ufLen; i++)
+            if (self.ufKeys[i] == v) return i;
+        self.ufGrow();
+        self.ufKeys[self.ufLen] = v;
+        self.ufPars[self.ufLen] = v;
+        self.ufLen++;
+        return self.ufLen - 1;
+    }
+
+    ir_types.IrValue* ufFind(ir_types.IrValue* v)
+    {
+        if (!v) return v;
+        u32 i = self.ufIndex(v);
+        u32 root = i;
+        while (self.ufPars[root] != self.ufKeys[root])
+            root = self.ufIndex(self.ufPars[root]);
+        while (self.ufPars[i] != self.ufKeys[root])
+        {
+            u32 next = self.ufIndex(self.ufPars[i]);
+            self.ufPars[i] = self.ufKeys[root];
+            i = next;
+        }
+        return self.ufKeys[root];
+    }
+
+    void ufUnion(ir_types.IrValue* a, ir_types.IrValue* b)
+    {
+        if (!a || !b) return;
+        ir_types.IrValue* ra = self.ufFind(a);
+        ir_types.IrValue* rb = self.ufFind(b);
+        if (ra == rb) return;
+        self.ufPars[self.ufIndex(rb)] = ra;
+    }
+
+    void ufBuild(ir_types.IrFunc* func)
+    {
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                if (inst.opcode == ir_opcodes.IrOpcode::Bitcast)
+                {
+                    if (inst.nops >= 1 && inst.ops[0])
+                        self.ufUnion((ir_types.IrValue*)inst, inst.ops[0]);
+                }
+                else if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                {
+                    // Interleaved val, block, val, block...
+                    for (u32 oi = 0; oi + 1 < inst.nops; oi += 2)
+                        if (inst.ops[oi])
+                            self.ufUnion((ir_types.IrValue*)inst, inst.ops[oi]);
+                }
+            }
+        }
+    }
+
+    void ufFree()
+    {
+        if (self.ufKeys)
+        {
+            mman.dealloc<ir_types.IrValue*>(self.ufKeys);
+            mman.dealloc<ir_types.IrValue*>(self.ufPars);
+        }
+        self.ufKeys = null;
+        self.ufPars = null;
+        self.ufLen = 0;
+        self.ufCap = 0;
+    }
+
+    void buildCaps()
+    {
+        if (!self.module) return;
+        self.maxParams = 0;
+        for (u32 fi = 0; fi < self.module.nfuncs; fi++)
+            if (self.module.funcs[fi].nparams > self.maxParams)
+                self.maxParams = self.module.funcs[fi].nparams;
+        if (self.maxParams == 0) return;
+        if (self.module.nfuncs == 0) return;
+
+        self.caps = mman.alloc<bool>(self.module.nfuncs * self.maxParams);
+        for (u64 i = 0; i < self.module.nfuncs * self.maxParams; i++)
+            self.caps[i] = false;
+
+        // Fixed point, capabilities only turn on, so a bounded number of
+        // full sweeps converges.
+        bool changed = true;
+        u32 guard = 0;
+        while (changed && guard < self.module.nfuncs + 4)
+        {
+            changed = false;
+            guard++;
+            for (u32 fi = 0; fi < self.module.nfuncs; fi++)
+            {
+                ir_types.IrFunc* f = self.module.funcs[fi];
+                if (f.isExtern || f.nblocks == 0) continue;
+
+                for (u32 bi = 0; bi < f.nblocks; bi++)
+                {
+                    ir_types.IrBlock* bb = f.blocks[bi];
+                    for (u32 ii = 0; ii < bb.ninsts; ii++)
+                    {
+                        ir_types.IrInst* inst = bb.insts[ii];
+                        if (inst.opcode == ir_opcodes.IrOpcode::Store && inst.nops >= 2)
+                        {
+                            i32 pi = self.paramIndexOf(f, inst.ops[1]);
+                            if (pi < 0) continue;
+                            u64 bit = (u64)fi * self.maxParams + (u64)pi;
+                            if (!self.caps[bit]) { self.caps[bit] = true; changed = true; }
+                        }
+                        else if (inst.opcode == ir_opcodes.IrOpcode::Call && inst.nops >= 2)
+                        {
+                            ir_types.IrValue* calleeVal = inst.ops[0];
+                            if (!calleeVal || calleeVal.kind != ir_types.IrValueKind::Func) continue;
+                            ir_types.IrFunc* g = (ir_types.IrFunc*)calleeVal;
+                            if (g.isExtern || g.nblocks == 0) continue;
+                            i32 gi = -1;
+                            for (u32 x = 0; x < self.module.nfuncs; x++)
+                                if (self.module.funcs[x] == g) { gi = (i32)x; break; }
+                            if (gi < 0) continue;
+
+                            for (u32 ai = 1; ai < inst.nops; ai++)
+                            {
+                                i32 pi = self.paramIndexOf(f, inst.ops[ai]);
+                                if (pi < 0) continue;
+                                u32 gk = ai - 1;
+                                if (gk >= g.nparams) continue;
+                                u64 fbit = (u64)fi * self.maxParams + (u64)pi;
+                                u64 gbit = (u64)gi * self.maxParams + (u64)gk;
+                                if (self.caps[gbit] && !self.caps[fbit])
+                                {
+                                    self.caps[fbit] = true;
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    void freeCaps()
+    {
+        if (self.caps)
+        {
+            mman.dealloc<bool>(self.caps);
+            self.caps = null;
+        }
+        self.maxParams = 0;
+    }
+
+    // A parameter is one of the leading instructions of the entry block
+    // (the transpiler's convention; inlining maps them from there).
+    i32 paramIndexOf(ir_types.IrFunc* f, ir_types.IrValue* v)
+    {
+        if (!v || v.kind != ir_types.IrValueKind::Inst) return -1;
+        if (f.nblocks == 0 || f.nparams == 0) return -1;
+        ir_types.IrBlock* entry = f.blocks[0];
+        u32 n = f.nparams;
+        if (entry.ninsts < n) n = entry.ninsts;
+        for (u32 i = 0; i < n; i++)
+            if (entry.insts[i] == v) return (i32)i;
+        return -1;
+    }
+
+    // Can the callee write through the argument at param position argIdx?
+    // Unknown callees (extern, bodyless, non-function values) are assumed
+    // to write, preserving the conservative baseline.
+    bool calleeWrites(ir_types.IrValue* calleeVal, u32 argIdx)
+    {
+        if (!calleeVal || calleeVal.kind != ir_types.IrValueKind::Func) return true;
+        ir_types.IrFunc* g = (ir_types.IrFunc*)calleeVal;
+        if (g.isExtern || g.nblocks == 0) return true;
+        if (self.caps == null) return true;
+        if (argIdx >= g.nparams) return true;
+        if (!self.module) return true;
+        for (u32 x = 0; x < self.module.nfuncs; x++)
+        {
+            if (self.module.funcs[x] == g)
+            {
+                u64 bit = (u64)x * self.maxParams + (u64)argIdx;
+                return self.caps[bit];
+            }
+        }
+        return true;
+    }
+
+    bool run(ir_types.IrFunc* func)
+    {
+        self.violations = 0;
+        if (!func || func.nblocks == 0) return false;
+
+        self.module = func.parent;
+        self.curFunc = func;
+        self.curNblocks = func.nblocks;
+        self.buildCaps();
+        self.buildGlobalAliases();
+        self.ufBuild(func);
+        self.buildLiveness(func);
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+            self.checkBlock(func.blocks[bi]);
+        self.freeLiveness();
+        self.ufFree();
+        self.alFree();
+        self.freeCaps();
+
+        return self.violations > 0;
+    }
+
+    // Chase GEP chains of constant indices to a base pointer and a byte
+    // offset. Returns false when the address is not statically known, in
+    // which case the value still aliases its own SSA value.
+    bool regionOf(ir_types.IrValue* v, ir_types.IrValue** base, u64* off)
+    {
+        ir_types.IrValue* cur = v;
+        u64 acc = 0;
+        while (cur && cur.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* inst = (ir_types.IrInst*)cur;
+            if (inst.opcode != ir_opcodes.IrOpcode::Gep) break;
+            for (u32 i = 1; i < inst.nops; i++)
+            {
+                ir_types.IrValue* idx = inst.ops[i];
+                if (!idx || idx.kind != ir_types.IrValueKind::ConstInt) return false;
+                acc += idx.valData * 8;
+            }
+            cur = inst.ops[0];
+        }
+        *base = self.ufFind(cur);
+        *off = acc;
+        return true;
+    }
+
+    // Byte extent of a region. Pointer arguments are treated as covering one
+    // 8-byte unit of the backend's addressing model.
+    u64 regionWidth(ir_types.IrValue* v, bool isLoad)
+    {
+        if (isLoad)
+        {
+            if (v && v.type) return self.ctx.irTypeSizeOf(v.type);
+        }
+        return 8;
+    }
+
+    // ── Global slot tracking ──
+    // A pointer loaded from a global slot may be any pointer previously
+    // stored there. Stores to global slots are recorded so loaded pointers
+    // resolve to the stored regions; a load from a slot with no recorded
+    // stores (extern code may have written it) is unknown provenance and
+    // overlaps everything.
+    ir_types.IrValue** alSlotBases;
+    u64* alSlotOffs;
+    ir_types.IrValue** alStoredBases;
+    u64* alStoredOffs;
+    u32 alLen;
+    u32 alCap;
+
+    void alAdd(ir_types.IrValue* sb, u64 so, ir_types.IrValue* vb, u64 vo)
+    {
+        if (!sb || !vb) return;
+        if (self.alLen >= self.alCap)
+        {
+            u32 nc = self.alCap ? self.alCap * 2 : 16;
+            ir_types.IrValue** nsb = mman.alloc<ir_types.IrValue*>(nc);
+            u64* nso = mman.alloc<u64>(nc);
+            ir_types.IrValue** nvb = mman.alloc<ir_types.IrValue*>(nc);
+            u64* nvo = mman.alloc<u64>(nc);
+            for (u32 i = 0; i < self.alLen; i++)
+            {
+                nsb[i] = self.alSlotBases[i];
+                nso[i] = self.alSlotOffs[i];
+                nvb[i] = self.alStoredBases[i];
+                nvo[i] = self.alStoredOffs[i];
+            }
+            if (self.alSlotBases)
+            {
+                mman.dealloc<ir_types.IrValue*>(self.alSlotBases);
+                mman.dealloc<u64>(self.alSlotOffs);
+                mman.dealloc<ir_types.IrValue*>(self.alStoredBases);
+                mman.dealloc<u64>(self.alStoredOffs);
+            }
+            self.alSlotBases = nsb;
+            self.alSlotOffs = nso;
+            self.alStoredBases = nvb;
+            self.alStoredOffs = nvo;
+            self.alCap = nc;
+        }
+        self.alSlotBases[self.alLen] = sb;
+        self.alSlotOffs[self.alLen] = so;
+        self.alStoredBases[self.alLen] = vb;
+        self.alStoredOffs[self.alLen] = vo;
+        self.alLen++;
+    }
+
+    bool isFuncValue(ir_types.IrValue* v)
+    {
+        if (!v || v.kind != ir_types.IrValueKind::Func) return false;
+        if (!self.module) return false;
+        for (u32 i = 0; i < self.module.nfuncs; i++)
+            if (self.module.funcs[i] == (ir_types.IrFunc*)v) return true;
+        return false;
+    }
+
+    void buildGlobalAliases()
+    {
+        if (!self.module) return;
+        for (u32 fi = 0; fi < self.module.nfuncs; fi++)
+        {
+            ir_types.IrFunc* f = self.module.funcs[fi];
+            if (f.isExtern || f.nblocks == 0) continue;
+            for (u32 bi = 0; bi < f.nblocks; bi++)
+            {
+                ir_types.IrBlock* bb = f.blocks[bi];
+                for (u32 ii = 0; ii < bb.ninsts; ii++)
+                {
+                    ir_types.IrInst* inst = bb.insts[ii];
+                    if (inst.opcode != ir_opcodes.IrOpcode::Store || inst.nops < 2) continue;
+                    ir_types.IrValue* slotB = null;
+                    u64 slotO = 0;
+                    self.regionOf(inst.ops[1], &slotB, &slotO);
+                    if (!slotB || slotB.kind != ir_types.IrValueKind::Func) continue;
+                    if (self.isFuncValue(slotB)) continue;
+                    ir_types.IrValue* valB = null;
+                    u64 valO = 0;
+                    self.regionOf(inst.ops[0], &valB, &valO);
+                    if (!valB) continue;
+                    self.alAdd(slotB, slotO, valB, valO);
+                }
+            }
+        }
+    }
+
+    void alFree()
+    {
+        if (self.alSlotBases)
+        {
+            mman.dealloc<ir_types.IrValue*>(self.alSlotBases);
+            mman.dealloc<u64>(self.alSlotOffs);
+            mman.dealloc<ir_types.IrValue*>(self.alStoredBases);
+            mman.dealloc<u64>(self.alStoredOffs);
+        }
+        self.alSlotBases = null;
+        self.alSlotOffs = null;
+        self.alStoredBases = null;
+        self.alStoredOffs = null;
+        self.alLen = 0;
+        self.alCap = 0;
+    }
+
+    // Is this value a pointer that came out of a memory load?
+    bool isLoadedPointer(ir_types.IrValue* v)
+    {
+        if (!v || v.kind != ir_types.IrValueKind::Inst) return false;
+        ir_types.IrInst* inst = (ir_types.IrInst*)v;
+        return inst.opcode == ir_opcodes.IrOpcode::Load;
+    }
+
+    // Region (sb, so, known) vs value b's region, identity + range only.
+    bool regionOverlapsValue(ir_types.IrValue* sb, u64 so, bool sKnown,
+                             ir_types.IrValue* b, bool bLoad)
+    {
+        ir_types.IrValue* bb = null;
+        u64 bo = 0;
+        bool bk = self.regionOf(b, &bb, &bo);
+        if (!bb) return false;
+        if (sb != bb) return false;
+        if (!sKnown || !bk) return true;
+        u64 sw = self.regionWidth(sb, false);
+        u64 bw = self.regionWidth(b, bLoad);
+        if (so < bo + bw && bo < so + sw) return true;
+        return false;
+    }
+
+    // The load's address slot, as a region.
+    bool slotOf(ir_types.IrValue* v, ir_types.IrValue** sb, u64* so)
+    {
+        if (!self.isLoadedPointer(v)) return false;
+        ir_types.IrInst* load = (ir_types.IrInst*)v;
+        return self.regionOf(load.ops[0], sb, so);
+    }
+
+    bool regionsOverlap(ir_types.IrValue* a, bool aLoad, ir_types.IrValue* b, bool bLoad)
+    {
+        ir_types.IrValue* ab = null;
+        ir_types.IrValue* bb = null;
+        u64 ao = 0;
+        u64 bo = 0;
+        bool ak = self.regionOf(a, &ab, &ao);
+        bool bk = self.regionOf(b, &bb, &bo);
+        if (!ab || !bb) return false;
+
+        // Pointers read from memory have unknown provenance unless the
+        // slot they came from has recorded stores; unknown overlaps all.
+        if (self.isLoadedPointer(a))
+        {
+            ir_types.IrValue* slotB = null;
+            u64 slotO = 0;
+            if (!self.slotOf(a, &slotB, &slotO)) return true;
+            bool any = false;
+            for (u32 i = 0; i < self.alLen; i++)
+            {
+                if (self.alSlotBases[i] != slotB) continue;
+                if (self.alSlotOffs[i] != slotO) continue;
+                any = true;
+                ir_types.IrValue* stored = self.alStoredBases[i];
+                u64 storedO = self.alStoredOffs[i];
+                if (self.isLoadedPointer(stored))
+                {
+                    if (self.regionsOverlap(stored, false, b, bLoad)) return true;
+                    continue;
+                }
+                if (self.regionOverlapsValue(stored, storedO, true, b, bLoad)) return true;
+            }
+            return !any;
+        }
+        if (self.isLoadedPointer(b))
+        {
+            ir_types.IrValue* slotB = null;
+            u64 slotO = 0;
+            if (!self.slotOf(b, &slotB, &slotO)) return true;
+            bool any = false;
+            for (u32 i = 0; i < self.alLen; i++)
+            {
+                if (self.alSlotBases[i] != slotB) continue;
+                if (self.alSlotOffs[i] != slotO) continue;
+                any = true;
+                ir_types.IrValue* stored = self.alStoredBases[i];
+                u64 storedO = self.alStoredOffs[i];
+                if (self.isLoadedPointer(stored))
+                {
+                    if (self.regionsOverlap(a, aLoad, stored, false)) return true;
+                    continue;
+                }
+                if (self.regionOverlapsValue(stored, storedO, true, a, aLoad)) return true;
+            }
+            return !any;
+        }
+
+        if (ab != bb) return false;
+        if (!ak || !bk) return true;
+
+        u64 aw = self.regionWidth(a, aLoad);
+        u64 bw = self.regionWidth(b, bLoad);
+        if (ao < bo + bw && bo < ao + aw) return true;
+        return false;
+    }
+
+    bool isPointerValue(ir_types.IrValue* v)
+    {
+        if (!v) return false;
+        if (v.kind == ir_types.IrValueKind::Inst)
+        {
+            ir_types.IrInst* inst = (ir_types.IrInst*)v;
+            if (inst.opcode == ir_opcodes.IrOpcode::Gep ||
+                inst.opcode == ir_opcodes.IrOpcode::Alloca ||
+                inst.opcode == ir_opcodes.IrOpcode::Load) return true;
+        }
+        if (v.type && v.type.kind == ir_types.IrTypeKind::Ptr) return true;
+        return false;
+    }
+
+    u32 instIndex(ir_types.IrBlock* bb, ir_types.IrInst* target)
+    {
+        for (u32 i = 0; i < bb.ninsts; i++)
+            if (bb.insts[i] == target) return i;
+        return bb.ninsts;
+    }
+
+    // ── Liveness (per-block live-in/live-out bitvecs) ──
+    // A value is live at a program point if it is used later in the block
+    // or flows out of the block (or into it from a predecessor). This
+    // replaces the previous heuristic that any user in another block made
+    // the value live, now only blocks reachable from the call count.
+    ir_types.IrInst** liveOrder;
+    u32 liveN;
+    u64** liveIn;
+    u64** liveOut;
+    u32 liveWords;
+
+    u32 bitOf(ir_types.IrValue* v)
+    {
+        for (u32 i = 0; i < self.liveN; i++)
+            if (self.liveOrder[i] == v) return i;
+        return self.liveN;
+    }
+
+    void setBit(u64* set, u32 bit)
+    {
+        if (bit < self.liveN) set[bit >> 6] |= 1u << (bit & 63);
+    }
+
+    bool getBit(const u64* set, u32 bit)
+    {
+        if (bit >= self.liveN) return false;
+        return (set[bit >> 6] & (1u << (bit & 63))) != 0;
+    }
+
+    void buildLiveness(ir_types.IrFunc* func)
+    {
+        self.liveN = 0;
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+            self.liveN += func.blocks[bi].ninsts;
+        if (self.liveN == 0) return;
+        self.liveWords = (self.liveN + 63) / 64;
+
+        self.liveOrder = mman.alloc<ir_types.IrInst*>(self.liveN);
+        u32 oi = 0;
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+                self.liveOrder[oi++] = bb.insts[ii];
+        }
+
+        u32 nb = func.nblocks;
+        self.liveIn = mman.alloc<u64*>(nb);
+        self.liveOut = mman.alloc<u64*>(nb);
+        u64** use = mman.alloc<u64*>(nb);
+        for (u32 bi = 0; bi < nb; bi++)
+        {
+            self.liveIn[bi] = mman.alloc<u64>(self.liveWords);
+            self.liveOut[bi] = mman.alloc<u64>(self.liveWords);
+            use[bi] = mman.alloc<u64>(self.liveWords);
+            for (u32 w = 0; w < self.liveWords; w++)
+            {
+                self.liveIn[bi][w] = 0;
+                self.liveOut[bi][w] = 0;
+                use[bi][w] = 0;
+            }
+        }
+
+        // Uses, every operand that is an instruction of this function.
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+        {
+            ir_types.IrBlock* bb = func.blocks[bi];
+            for (u32 ii = 0; ii < bb.ninsts; ii++)
+            {
+                ir_types.IrInst* inst = bb.insts[ii];
+                for (u32 oi = 0; oi < inst.nops; oi++)
+                {
+                    if (!inst.ops[oi] || inst.ops[oi].kind != ir_types.IrValueKind::Inst) continue;
+                    u32 bit = self.bitOf(inst.ops[oi]);
+                    if (bit < self.liveN) self.setBit(use[bi], bit);
+                }
+            }
+        }
+
+        // Fixed point, liveIn(B) = use(B) ∪ (liveOut(B) − def(B));
+        // liveOut(B) = ∪ liveIn(succ).
+        bool changed = true;
+        u32 guard = 0;
+        while (changed && guard < nb + 4)
+        {
+            changed = false;
+            guard++;
+            for (u32 bi = 0; bi < nb; bi++)
+            {
+                ir_types.IrBlock* bb = func.blocks[bi];
+                u64* out = self.liveOut[bi];
+                bool outSet = false;
+                for (u32 si = 0; si < bb.nsuccs; si++)
+                {
+                    u32 sii = self.blockIndex(func, bb.succs[si]);
+                    if (sii >= nb) continue;
+                    for (u32 w = 0; w < self.liveWords; w++)
+                    {
+                        u64 nw = out[w] | self.liveIn[sii][w];
+                        if (nw != out[w]) outSet = true;
+                        out[w] = nw;
+                    }
+                }
+                if (outSet) changed = true;
+
+                u64* in = self.liveIn[bi];
+                for (u32 w = 0; w < self.liveWords; w++)
+                {
+                    u64 target = use[bi][w] | (out[w] & ~self.defsWord(func.blocks[bi], w));
+                    if (target != in[w]) changed = true;
+                    in[w] = target;
+                }
+            }
+        }
+
+        for (u32 bi = 0; bi < nb; bi++)
+            mman.dealloc<u64>(use[bi]);
+        mman.dealloc<u64*>(use);
+    }
+
+    u32 blockIndex(ir_types.IrFunc* func, ir_types.IrBlock* bb)
+    {
+        for (u32 bi = 0; bi < func.nblocks; bi++)
+            if (func.blocks[bi] == bb) return bi;
+        return func.nblocks;
+    }
+
+    // Definitions of a block, every instruction it holds.
+    u64 defsWord(ir_types.IrBlock* bb, u32 w)
+    {
+        u64 mask = 0;
+        for (u32 i = 0; i < bb.ninsts; i++)
+        {
+            u32 bit = self.bitOf((ir_types.IrValue*)bb.insts[i]);
+            if (bit < self.liveN && (bit >> 6) == w)
+                mask |= 1u << (bit & 63);
+        }
+        return mask;
+    }
+
+    void freeLiveness()
+    {
+        if (self.liveOrder)
+        {
+            mman.dealloc<ir_types.IrInst*>(self.liveOrder);
+            if (self.liveIn)
+            {
+                for (u32 bi = 0; bi < self.curNblocks; bi++)
+                    mman.dealloc<u64>(self.liveIn[bi]);
+                mman.dealloc<u64*>(self.liveIn);
+            }
+            if (self.liveOut)
+            {
+                for (u32 bi = 0; bi < self.curNblocks; bi++)
+                    mman.dealloc<u64>(self.liveOut[bi]);
+                mman.dealloc<u64*>(self.liveOut);
+            }
+        }
+        self.liveOrder = null;
+        self.liveIn = null;
+        self.liveOut = null;
+        self.liveN = 0;
+        self.liveWords = 0;
+    }
+
+    // The value is still live when the call executes if it is used after
+    // the call in this block, or it flows into/out of the block.
+    bool usedAfter(ir_types.IrInst* load, u32 callIdx, ir_types.IrBlock* bb)
+    {
+        for (u32 ji = callIdx + 1; ji < bb.ninsts; ji++)
+        {
+            ir_types.IrInst* user = bb.insts[ji];
+            for (u32 oi = 0; oi < user.nops; oi++)
+                if (user.ops[oi] == (ir_types.IrValue*)load) return true;
+        }
+        u32 bit = self.bitOf((ir_types.IrValue*)load);
+        if (bit >= self.liveN) return false;
+        u32 bi = self.blockIndex(self.curFunc, bb);
+        if (bi >= self.curNblocks) return false;
+        if (self.getBit(self.liveOut[bi], bit)) return true;
+        if (self.getBit(self.liveIn[bi], bit)) return true;
+        return false;
+    }
+
+    void checkBlock(ir_types.IrBlock* bb)
+    {
+        // Rule, a store to a region invalidates any still-live load of
+        // that region. For every store, any preceding load from an
+        // overlapping region that is still used after the store is a
+        // violation, the used value is already stale.
+        for (u32 si = 0; si < bb.ninsts; si++)
+        {
+            ir_types.IrInst* store = bb.insts[si];
+            if (store.opcode != ir_opcodes.IrOpcode::Store) continue;
+            if (store.nops < 2) continue;
+
+            for (u32 li = 0; li < si; li++)
+            {
+                ir_types.IrInst* load = bb.insts[li];
+                if (load.opcode != ir_opcodes.IrOpcode::Load) continue;
+                if (!self.regionsOverlap(load.ops[0], true, store.ops[1], false)) continue;
+                if (self.usedAfter(load, si, bb))
+                    self.recordViolation(BorrowCheckKind::StoreVsLiveLoad, store);
+            }
+        }
+
+        for (u32 ci = 0; ci < bb.ninsts; ci++)
+        {
+            ir_types.IrInst* call = bb.insts[ci];
+            if (call.opcode != ir_opcodes.IrOpcode::Call || call.nops < 2) continue;
+
+            // Rule, no two pointer arguments may alias the same region
+            // when the callee can write through either of them.
+            for (u32 ai = 1; ai < call.nops; ai++)
+            {
+                ir_types.IrValue* argA = call.ops[ai];
+                if (!self.isPointerValue(argA)) continue;
+                if (!self.calleeWrites(call.ops[0], ai - 1)) continue;
+                for (u32 aj = ai + 1; aj < call.nops; aj++)
+                {
+                    ir_types.IrValue* argB = call.ops[aj];
+                    if (!self.isPointerValue(argB)) continue;
+                    if (self.regionsOverlap(argA, false, argB, false))
+                        self.recordViolation(BorrowCheckKind::AliasingCallArgs, call);
+                }
+            }
+
+            for (u32 ai = 1; ai < call.nops; ai++)
+            {
+                ir_types.IrValue* arg = call.ops[ai];
+                if (!self.isPointerValue(arg)) continue;
+                // Only callees that can write through this argument
+                // threaten the region.
+                if (!self.calleeWrites(call.ops[0], ai - 1)) continue;
+
+                for (u32 li = 0; li < ci; li++)
+                {
+                    ir_types.IrInst* load = bb.insts[li];
+                    if (load.opcode != ir_opcodes.IrOpcode::Load) continue;
+                    if (!self.regionsOverlap(load.ops[0], true, arg, false)) continue;
+                    if (self.usedAfter(load, ci, bb))
+                        self.recordViolation(BorrowCheckKind::StaleLoadAcrossCall, call);
+                }
+            }
+        }
+    }
+}
+
+pub bool irPassBorrowCheck(ir_types.IrFunc* func, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    BorrowCheckOptions opts;
+    opts.collect = false;
+    opts.warn = false;
+    opts.reporter = null;
+    BorrowCheckPass pass = BorrowCheckPass::new(ctx, &opts);
+    bool bad = pass.run(func);
+    pass.deinit();
+    return bad;
+}

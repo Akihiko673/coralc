@@ -1,0 +1,996 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod mman = import("std/memory/mman.crl");
+
+pub struct ArmCodegen
+{
+    ir_types.IrContext* ctx;
+    asm_rules.ABIRules abi;
+    char* out;
+    u32 outLen;
+    u32 outCap;
+    ir_types.IrFunc* func;
+    u32 frameSize;
+    u32* stackSlots;
+    u32 stackSlotsLen;
+    u32 stackSlotsCap;
+    u32 popcntLabel;
+
+    ArmCodegen new(ir_types.IrContext* ctx)
+    {
+        ArmCodegen c;
+        c.ctx = ctx;
+        c.abi = asm_rules.aapcsAbi();
+        c.out = null; c.outLen = 0; c.outCap = 0;
+        c.func = null;
+        c.frameSize = 0;
+        c.stackSlots = null; c.stackSlotsLen = 0; c.stackSlotsCap = 0;
+        c.popcntLabel = 0;
+        return c;
+    }
+
+    void grow(u32 n)
+    {
+        if (self.outCap >= self.outLen + n) return;
+        u32 nc = self.outCap ? self.outCap * 2 : 4096;
+        while (nc < self.outLen + n) nc *= 2;
+        char* nb = mman.alloc<char>(nc);
+        if (self.out)
+        {
+            for (u32 i = 0; i < self.outLen; i++) nb[i] = self.out[i];
+            mman.dealloc<char>(self.out);
+        }
+        self.out = nb;
+        self.outCap = nc;
+    }
+
+    void c(char ch) { self.grow(1); self.out[self.outLen++] = ch; }
+
+    void s(const char* p)
+    {
+        if (!p) return;
+        u32 l = 0; while (p[l]) l++;
+        if (!l) return;
+        self.grow(l);
+        for (u32 i = 0; i < l; i++) self.out[self.outLen++] = p[i];
+    }
+
+    void u(u64 v)
+    {
+        if (v == 0) { self.c('0'); return; }
+        char b[24]; u32 p = 24;
+        while (v) { b[--p] = (char)('0' + (v % 10)); v /= 10; }
+        while (p < 24) self.c(b[p++]);
+    }
+
+    void pad() { self.c(' '); self.c(' '); self.c(' '); self.c(' '); }
+
+    void inst0(const char* m) { self.pad(); self.s(m); self.c('\n'); }
+
+    void inst1(const char* m, const char* a)
+    {
+        self.pad(); self.s(m); self.c(' '); self.s(a); self.c('\n');
+    }
+
+    void inst2(const char* m, const char* a, const char* b)
+    {
+        self.pad(); self.s(m); self.c(' '); self.s(a); self.s(", "); self.s(b); self.c('\n');
+    }
+
+    void inst3(const char* m, const char* a, const char* b, const char* c)
+    {
+        self.pad(); self.s(m); self.c(' '); self.s(a); self.s(", "); self.s(b); self.s(", "); self.s(c); self.c('\n');
+    }
+
+    void inst4(const char* m, const char* a, const char* b, const char* c, const char* d)
+    {
+        self.pad(); self.s(m); self.c(' '); self.s(a); self.s(", "); self.s(b); self.s(", "); self.s(c); self.s(", "); self.s(d); self.c('\n');
+    }
+
+    void emitLabel(const char* n) { self.s(n); self.s(":\n"); }
+
+    void ensureSlots(u32 id)
+    {
+        if (id < self.stackSlotsCap) return;
+        u32 nc = self.stackSlotsCap ? self.stackSlotsCap * 2 : 64;
+        while (nc <= id) nc *= 2;
+        u32* ns = mman.alloc<u32>(nc);
+        for (u32 i = 0; i < self.stackSlotsCap; i++) ns[i] = self.stackSlots[i];
+        for (u32 i = self.stackSlotsCap; i < nc; i++) ns[i] = 0;
+        if (self.stackSlots) mman.dealloc<u32>(self.stackSlots);
+        self.stackSlots = ns;
+        self.stackSlotsCap = nc;
+        if (id >= self.stackSlotsLen) self.stackSlotsLen = id + 1;
+    }
+
+    u32 slot(ir_types.IrValue* v)
+    {
+        if (!v) return 0;
+        u32 id = v->id;
+        if (id >= self.stackSlotsCap) self.ensureSlots(id);
+        if (self.stackSlots[id] == 0) { self.frameSize += 8; self.stackSlots[id] = self.frameSize; }
+        return self.stackSlots[id];
+    }
+
+    bool isConst(ir_types.IrValue* v)
+    {
+        if (!v) return true;
+        ir_types.IrValueKind k = v->kind;
+        return k == ir_types.IrValueKind::ConstInt || k == ir_types.IrValueKind::ConstFloat;
+    }
+
+    void emitSlot(ir_types.IrValue* v)
+    {
+        self.c('['); self.s("fp, #-"); self.u(self.slot(v)); self.c(']');
+    }
+
+    void emitImm(ir_types.IrValue* v)
+    {
+        u64 n = v->valData;
+        if (n <= 0xFFFF) { self.u(n); return; }
+        self.s("0x");
+        u32 val = (u32)n;
+        bool lead = true;
+        for (i64 i = 28; i >= 0; i -= 4)
+        {
+            u32 nib = (val >> i) & 0xF;
+            if (nib == 0 && lead && i > 0) continue;
+            lead = false;
+            if (nib < 10) self.c((char)('0' + nib));
+            else self.c((char)('a' + nib - 10));
+        }
+    }
+
+    void load(ir_types.IrValue* v, const char* r)
+    {
+        if (!v) { self.inst2("mov", r, "#0"); return; }
+        if (self.isConst(v))
+        {
+            self.pad(); self.s("mov "); self.s(r); self.s(", #"); self.emitImm(v); self.c('\n');
+            return;
+        }
+        self.pad(); self.s("ldr "); self.s(r); self.s(", "); self.emitSlot(v); self.c('\n');
+    }
+
+    void loadArith(ir_types.IrValue* v, const char* r)
+    {
+        if (!v) { self.inst2("mov", r, "#0"); return; }
+        if (self.isConst(v)) { self.load(v, r); return; }
+        self.load(v, r);
+    }
+
+    void store(ir_types.IrValue* v, const char* r)
+    {
+        if (!v) return;
+        self.pad(); self.s("str "); self.s(r); self.s(", "); self.emitSlot(v); self.c('\n');
+    }
+
+    u32 resolveBlock(ir_types.IrValue* bv)
+    {
+        for (u32 i = 0; i < self.func.nblocks; i++)
+            if (&self.func.blocks[i].base == bv) return i;
+        return ~0u;
+    }
+
+    void emitArith(ir_types.IrInst* inst, const char* mne)
+    {
+        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(lhs, "r0");
+        if (rhs && self.isConst(rhs))
+        {
+            self.pad(); self.s(mne);
+            self.s(" r0, r0, #");
+            self.emitImm(rhs); self.c('\n');
+        }
+        else if (rhs)
+        {
+            self.loadArith(rhs, "r1");
+            self.inst3(mne, "r0", "r0", "r1");
+        }
+        self.store(res, "r0");
+    }
+
+    void emitDivRem(ir_types.IrInst* inst, bool sig, bool isRem)
+    {
+        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        const char* divOp = sig ? "sdiv" : "udiv";
+        self.loadArith(lhs, "r0");
+        self.loadArith(rhs, "r1");
+        if (isRem)
+        {
+            self.inst3(divOp, "r2", "r0", "r1");
+            self.inst4("msub", "r0", "r2", "r1", "r0");
+        }
+        else
+            self.inst3(divOp, "r0", "r0", "r1");
+        self.store(res, "r0");
+    }
+
+    void emitShift(ir_types.IrInst* inst, const char* mne)
+    {
+        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(val, "r0");
+        if (cnt && self.isConst(cnt))
+        {
+            self.pad(); self.s(mne); self.s(" r0, r0, #"); self.emitImm(cnt); self.c('\n');
+        }
+        else if (cnt)
+        {
+            self.loadArith(cnt, "r1");
+            self.inst3(mne, "r0", "r0", "r1");
+        }
+        self.store(res, "r0");
+    }
+
+    void emitUnary(ir_types.IrInst* inst, const char* mne)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(src, "r0");
+        self.inst2(mne, "r0", "r0");
+        self.store(res, "r0");
+    }
+
+    void emitICmp(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        ir_opcodes.IrICmpPred p = inst->icmpPred;
+        self.loadArith(lhs, "r0");
+        self.loadArith(rhs, "r1");
+        self.inst2("cmp", "r0", "r1");
+        self.inst2("mov", "r0", "#0");
+        switch (p)
+        {
+        case ir_opcodes.IrICmpPred::Eq: self.inst2("moveq", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Ne: self.inst2("movne", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Slt: self.inst2("movlt", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Sle: self.inst2("movle", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Sgt: self.inst2("movgt", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Sge: self.inst2("movge", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Ult: self.inst2("movcc", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Ule: self.inst2("movls", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Ugt: self.inst2("movhi", "r0", "#1"); break;
+        case ir_opcodes.IrICmpPred::Uge: self.inst2("movcs", "r0", "#1"); break;
+        default: break;
+        }
+        self.store(res, "r0");
+    }
+
+    void emitFCmp(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        ir_opcodes.IrFCmpPred p = inst->fcmpPred;
+        bool isDouble = lhs && lhs->type && lhs->type->width == 64;
+
+        if (lhs && self.isConst(lhs))
+        {
+            self.loadArith(lhs, "r0");
+            self.inst2("vmov", isDouble ? "d0" : "s0", isDouble ? "r0, r1" : "r0");
+        }
+        else if (lhs)
+        {
+            self.pad(); self.s(isDouble ? "vldr d0, " : "vldr s0, "); self.emitSlot(lhs); self.c('\n');
+        }
+        else
+            self.inst0(isDouble ? "veor d0, d0, d0" : "veor s0, s0, s0");
+
+        if (rhs && self.isConst(rhs))
+        {
+            self.loadArith(rhs, "r0");
+            self.inst2("vmov", isDouble ? "d1" : "s1", isDouble ? "r0, r1" : "r0");
+        }
+        else if (rhs)
+        {
+            self.pad(); self.s(isDouble ? "vldr d1, " : "vldr s1, "); self.emitSlot(rhs); self.c('\n');
+        }
+        else
+            self.inst0(isDouble ? "veor d1, d1, d1" : "veor s1, s1, s1");
+
+        self.inst1(isDouble ? "vcmp.f64" : "vcmp.f32", isDouble ? "d0, d1" : "s0, s1");
+        self.inst0("fmstat");
+        self.inst2("mov", "r0", "#0");
+
+        switch (p)
+        {
+        case ir_opcodes.IrFCmpPred::Oeq: self.inst2("moveq", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::One: self.inst2("movmi", "r0", "#1"); self.inst2("movgt", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Olt: self.inst2("movmi", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Ole: self.inst2("movls", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Ogt: self.inst2("movgt", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Oge: self.inst2("movge", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Ueq: self.inst2("moveq", "r0", "#1"); self.inst2("movvs", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Une: self.inst2("movne", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Ult: self.inst2("movlt", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Ule: self.inst2("movle", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Ugt: self.inst2("movhi", "r0", "#1"); break;
+        case ir_opcodes.IrFCmpPred::Uge: self.inst2("movcs", "r0", "#1"); break;
+        default: break;
+        }
+        self.store(res, "r0");
+    }
+
+    void emitCall(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* callee = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        u32 nArgs = inst->nops > 0 ? inst->nops - 1 : 0;
+
+        for (u32 i = 0; i < nArgs && i < self.abi.numArgRegs; i++)
+        {
+            ir_types.IrValue* arg = inst->ops[i + 1];
+            self.load(arg, self.abi.argRegs[i]);
+        }
+
+        for (u32 i = nArgs; i > self.abi.numArgRegs; i--)
+        {
+            ir_types.IrValue* arg = inst->ops[i];
+            self.load(arg, "r0");
+            self.inst1("push", "{r0}");
+        }
+
+        if (callee && callee->kind == ir_types.IrValueKind::Func && callee->name && callee->name[0])
+            self.inst1("bl", callee->name);
+        else
+        {
+            self.load(callee, "r0");
+            self.inst0("blx r0");
+        }
+
+        if (res->type && res->type->kind != ir_types.IrTypeKind::Void)
+        {
+                self.store(res, "r0");
+        }
+
+        if (nArgs > self.abi.numArgRegs)
+        {
+            u32 extra = nArgs - self.abi.numArgRegs;
+            self.pad(); self.s("add sp, sp, #"); self.u(extra * 4); self.c('\n');
+        }
+    }
+
+    void emitLoad(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        ir_types.IrType* ty = res->type;
+        u32 w = ty ? ty->width : 32;
+        self.load(ptr, "r0");
+        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        {
+            if (w == 64)
+            {
+                self.inst1("vldr", "d0, [r0]");
+                self.inst3("vmov", "r0", "r1", "d0");
+            }
+            else
+            {
+                self.inst1("vldr", "s0, [r0]");
+                self.inst2("vmov", "r0", "s0");
+            }
+        }
+        else if (w <= 8)
+            self.inst1("ldrb", "r0, [r0]");
+        else if (w <= 16)
+            self.inst1("ldrh", "r0, [r0]");
+        else
+            self.inst1("ldr", "r0, [r0]");
+        self.store(res, "r0");
+    }
+
+    void emitStore(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* ptr = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrType* ty = val ? val->type : null;
+        u32 w = ty ? ty->width : 32;
+        self.load(ptr, "r1");
+        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        {
+            if (w == 64)
+            {
+                self.pad(); self.s("vldr d0, "); self.emitSlot(val); self.c('\n');
+                self.inst1("vstr", "d0, [r1]");
+            }
+            else
+            {
+                self.pad(); self.s("vldr s0, "); self.emitSlot(val); self.c('\n');
+                self.inst1("vstr", "s0, [r1]");
+            }
+        }
+        else
+        {
+            self.load(val, "r0");
+            if (w <= 8)
+                self.inst1("strb", "r0, [r1]");
+            else if (w <= 16)
+                self.inst1("strh", "r0, [r1]");
+            else
+                self.inst1("str", "r0, [r1]");
+        }
+    }
+
+    void emitAlloca(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* res = &inst->base;
+        u32 sz = 8;
+        if (res->type && res->type->kind == ir_types.IrTypeKind::Ptr && res->type->elem)
+        {
+            u32 ew = res->type->elem->width;
+            if (ew == 0) ew = 8;
+            sz = ((ew + 7) / 8) * 4;
+            if (sz < 4) sz = 4;
+        }
+        self.pad(); self.s("sub sp, sp, #"); self.u(sz); self.c('\n');
+        self.inst3("add", "r0", "sp", "#0");
+        self.store(res, "r0");
+    }
+
+    void emitGep(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        u32 nidxs = inst->nops > 1 ? inst->nops - 1 : 0;
+        u32 elemSize = 4;
+        if (res->type && res->type->kind == ir_types.IrTypeKind::Ptr && res->type->elem)
+        {
+            u32 ew = res->type->elem->width;
+            if (ew > 0) elemSize = (ew + 7) / 8;
+        }
+        if (elemSize == 0) elemSize = 4;
+        self.load(ptr, "r0");
+        for (u32 i = 0; i < nidxs; i++)
+        {
+            ir_types.IrValue* idx = inst->ops[i + 1];
+            if (self.isConst(idx))
+            {
+                u64 off = idx->valData * elemSize;
+                if (off > 0)
+                    self.pad(); self.s("add r0, r0, #"); self.u(off); self.c('\n');
+            }
+            else
+            {
+                self.loadArith(idx, "r1");
+                u32 shift = 0;
+                u32 es = elemSize;
+                while (es > 1) { shift++; es /= 2; }
+                self.pad(); self.s("add r0, r0, r1");
+                if (shift > 0) { self.s(", lsl #"); self.u(shift); }
+                self.c('\n');
+            }
+        }
+        self.store(res, "r0");
+    }
+
+    void emitCast(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        ir_types.IrType* st = src ? src->type : null;
+        ir_types.IrType* dt = res->type;
+        u32 sw = st ? st->width : 32;
+        u32 dw = dt ? dt->width : 32;
+
+        switch (inst->opcode)
+        {
+        case ir_opcodes.IrOpcode::Trunc:
+            self.load(src, "r0"); self.store(res, "r0"); break;
+        case ir_opcodes.IrOpcode::Zext:
+            self.load(src, "r0");
+            if (dw > sw)
+            {
+                if (sw <= 8) self.inst2("uxtb", "r0", "r0");
+                else if (sw <= 16) self.inst2("uxth", "r0", "r0");
+            }
+            self.store(res, "r0");
+            break;
+        case ir_opcodes.IrOpcode::Sext:
+            self.load(src, "r0");
+            if (dw > sw)
+            {
+                if (sw <= 8) self.inst2("sxtb", "r0", "r0");
+                else if (sw <= 16) self.inst2("sxth", "r0", "r0");
+            }
+            self.store(res, "r0");
+            break;
+        case ir_opcodes.IrOpcode::FpTrunc:
+            self.pad(); self.s("vldr d0, "); self.emitSlot(src); self.c('\n');
+            self.inst0("vcvt.f32.f64 s0, d0");
+            self.pad(); self.s("vstr s0, "); self.emitSlot(res); self.c('\n');
+            break;
+        case ir_opcodes.IrOpcode::FpExt:
+            self.pad(); self.s("vldr s0, "); self.emitSlot(src); self.c('\n');
+            self.inst0("vcvt.f64.f32 d0, s0");
+            self.pad(); self.s("vstr d0, "); self.emitSlot(res); self.c('\n');
+            break;
+        case ir_opcodes.IrOpcode::FpToSi:
+        case ir_opcodes.IrOpcode::FpToUi:
+        {
+            bool fromDouble = st && st->width == 64;
+            bool toSigned = inst->opcode == ir_opcodes.IrOpcode::FpToSi;
+            const char* cvt;
+            if (fromDouble)
+                cvt = toSigned ? "vcvt.s32.f64 s0, d0" : "vcvt.u32.f64 s0, d0";
+            else
+                cvt = toSigned ? "vcvt.s32.f32 s0, s0" : "vcvt.u32.f32 s0, s0";
+            if (fromDouble) { self.pad(); self.s("vldr d0, "); self.emitSlot(src); self.c('\n'); }
+            else { self.pad(); self.s("vldr s0, "); self.emitSlot(src); self.c('\n'); }
+            self.inst0(cvt);
+            self.inst2("vmov", "r0", "s0");
+            self.store(res, "r0");
+            break;
+        }
+        case ir_opcodes.IrOpcode::SiToFp:
+        case ir_opcodes.IrOpcode::UiToFp:
+        {
+            bool toDouble = dw == 64;
+            bool fromSigned = inst->opcode == ir_opcodes.IrOpcode::SiToFp;
+            const char* cvt;
+            if (toDouble)
+                cvt = fromSigned ? "vcvt.f64.s32 d0, s0" : "vcvt.f64.u32 d0, s0";
+            else
+                cvt = fromSigned ? "vcvt.f32.s32 s0, s0" : "vcvt.f32.u32 s0, s0";
+            self.load(src, "r0");
+            self.inst2("vmov", "s0", "r0");
+            self.inst0(cvt);
+            if (toDouble) { self.pad(); self.s("vstr d0, "); self.emitSlot(res); self.c('\n'); }
+            else { self.pad(); self.s("vstr s0, "); self.emitSlot(res); self.c('\n'); }
+            break;
+        }
+        case ir_opcodes.IrOpcode::Bitcast:
+            self.load(src, "r0"); self.store(res, "r0"); break;
+        default: break;
+        }
+    }
+
+    void emitSelect(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* tval = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* fval = inst->nops > 2 ? inst->ops[2] : null;
+        ir_types.IrValue* res = &inst->base;
+        bool isFloat = res->type && res->type->kind == ir_types.IrTypeKind::Float;
+        bool isDouble = isFloat && res->type->width == 64;
+
+        if (isFloat)
+        {
+            if (fval) { self.pad(); self.s(isDouble ? "vldr d0, " : "vldr s0, "); self.emitSlot(fval); self.c('\n'); }
+            else self.inst0(isDouble ? "veor d0, d0, d0" : "veor s0, s0, s0");
+            if (tval) { self.pad(); self.s(isDouble ? "vldr d1, " : "vldr s1, "); self.emitSlot(tval); self.c('\n'); }
+            else self.inst0(isDouble ? "veor d1, d1, d1" : "veor s1, s1, s1");
+            self.loadArith(cond, "r0");
+            self.inst2("cmp", "r0", "#0");
+            self.inst1(isDouble ? "vmovne.f64" : "vmovne.f32", "d0, d1");
+            if (isDouble) { self.pad(); self.s("vstr d0, "); self.emitSlot(res); self.c('\n'); }
+            else { self.pad(); self.s("vstr s0, "); self.emitSlot(res); self.c('\n'); }
+        }
+        else
+        {
+            self.loadArith(fval, "r0");
+            self.loadArith(tval, "r1");
+            self.loadArith(cond, "r2");
+            self.inst2("cmp", "r2", "#0");
+            self.inst2("movne", "r0", "r1");
+            self.store(res, "r0");
+        }
+    }
+
+    void emitPhi(ir_types.IrInst* inst)
+    {
+        // Phi results are materialized on incoming edges (emitPhiEdges).
+    }
+
+    void emitPhiEdges(ir_types.IrBlock* pred, ir_types.IrValue* tgt)
+    {
+        if (!pred || !tgt) return;
+        u32 tbi = self.resolveBlock(tgt);
+        if (tbi == ~0u) return;
+        ir_types.IrBlock* tb = self.func.blocks[tbi];
+        for (u32 i = 0; i < tb->ninsts; i++)
+        {
+            ir_types.IrInst* phi = tb->insts[i];
+            if (phi->opcode != ir_opcodes.IrOpcode::Phi) break;
+            for (u32 j = 0; j + 1 < phi->nops; j += 2)
+            {
+                if (phi->ops[j + 1] == &pred->base)
+                {
+                    self.loadArith(phi->ops[j], "r0");
+                    self.store(&phi->base, "r0");
+                    break;
+                }
+            }
+        }
+    }
+
+    void emitCtPop(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        u32 lbl = self.popcntLabel++;
+        self.loadArith(src, "r0");
+        self.inst2("mov", "r1", "#0");
+        self.s(".Lpopcnt"); self.u(lbl); self.s(":\n");
+        self.inst2("cmp", "r0", "#0");
+        self.s("    beq .Lpopcnt_done"); self.u(lbl); self.c('\n');
+        self.inst3("sub", "r2", "r0", "#1");
+        self.inst3("ands", "r0", "r0", "r2");
+        self.inst3("add", "r1", "r1", "#1");
+        self.s("    b .Lpopcnt"); self.u(lbl); self.c('\n');
+        self.s(".Lpopcnt_done"); self.u(lbl); self.s(":\n");
+        self.inst2("mov", "r0", "r1");
+        self.store(res, "r0");
+    }
+
+    void emitCtLz(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(src, "r0");
+        self.inst2("clz", "r0", "r0");
+        self.store(res, "r0");
+    }
+
+    void emitCtTz(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(src, "r0");
+        self.inst2("rbit", "r0", "r0");
+        self.inst2("clz", "r0", "r0");
+        self.store(res, "r0");
+    }
+
+    void emitBswap(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(src, "r0");
+        self.inst2("rev", "r0", "r0");
+        self.store(res, "r0");
+    }
+
+    void emitRot(ir_types.IrInst* inst, bool isLeft)
+    {
+        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(val, "r0");
+        if (cnt && self.isConst(cnt))
+        {
+            u32 shift = (u32)(cnt->valData & 0x1F);
+            if (isLeft) shift = (32 - shift) & 0x1F;
+            self.pad(); self.s("ror r0, r0, #"); self.u(shift); self.c('\n');
+        }
+        else if (cnt)
+        {
+            if (isLeft)
+            {
+                self.loadArith(cnt, "r1");
+                self.inst3("rsb", "r1", "r1", "#32");
+                self.inst3("ror", "r0", "r0", "r1");
+            }
+            else
+            {
+                self.loadArith(cnt, "r1");
+                self.inst3("ror", "r0", "r0", "r1");
+            }
+        }
+        self.store(res, "r0");
+    }
+
+    void emitMinMax(ir_types.IrInst* inst, bool sig, bool max)
+    {
+        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* res = &inst->base;
+        const char* cc;
+        if (sig)
+            cc = max ? "movlt" : "movgt";
+        else
+            cc = max ? "movcc" : "movhi";
+        self.loadArith(lhs, "r0");
+        self.loadArith(rhs, "r1");
+        self.inst2("cmp", "r0", "r1");
+        self.inst2(cc, "r0", "r1");
+        self.store(res, "r0");
+    }
+
+    void emitAbs(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        self.loadArith(src, "r0");
+        self.inst2("cmp", "r0", "#0");
+        self.inst3("rsblt", "r0", "r0", "#0");
+        self.store(res, "r0");
+    }
+
+    void emitFma(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* a = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* b = inst->nops > 1 ? inst->ops[1] : null;
+        ir_types.IrValue* c = inst->nops > 2 ? inst->ops[2] : null;
+        ir_types.IrValue* res = &inst->base;
+        bool isDouble = res->type && res->type->width == 64;
+
+        if (c) { self.pad(); self.s(isDouble ? "vldr d0, " : "vldr s0, "); self.emitSlot(c); self.c('\n'); }
+        else self.inst0(isDouble ? "veor d0, d0, d0" : "veor s0, s0, s0");
+        if (a) { self.pad(); self.s(isDouble ? "vldr d1, " : "vldr s1, "); self.emitSlot(a); self.c('\n'); }
+        else self.inst0(isDouble ? "veor d1, d1, d1" : "veor s1, s1, s1");
+        if (b) { self.pad(); self.s(isDouble ? "vldr d2, " : "vldr s2, "); self.emitSlot(b); self.c('\n'); }
+        else self.inst0(isDouble ? "veor d2, d2, d2" : "veor s2, s2, s2");
+
+        self.inst3(isDouble ? "vfma.f64" : "vfma.f32", isDouble ? "d0" : "s0", isDouble ? "d1" : "s1", isDouble ? "d2" : "s2");
+
+        if (isDouble) { self.pad(); self.s("vstr d0, "); self.emitSlot(res); self.c('\n'); }
+        else { self.pad(); self.s("vstr s0, "); self.emitSlot(res); self.c('\n'); }
+    }
+
+    void emitFAbs(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        bool isDouble = res->type && res->type->width == 64;
+
+        if (src) { self.pad(); self.s(isDouble ? "vldr d0, " : "vldr s0, "); self.emitSlot(src); self.c('\n'); }
+        else self.inst0(isDouble ? "veor d0, d0, d0" : "veor s0, s0, s0");
+        self.inst2(isDouble ? "vabs.f64" : "vabs.f32", isDouble ? "d0" : "s0", isDouble ? "d0" : "s0");
+
+        if (isDouble) { self.pad(); self.s("vstr d0, "); self.emitSlot(res); self.c('\n'); }
+        else { self.pad(); self.s("vstr s0, "); self.emitSlot(res); self.c('\n'); }
+    }
+
+    void emitFSqrt(ir_types.IrInst* inst)
+    {
+        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        ir_types.IrValue* res = &inst->base;
+        bool isDouble = res->type && res->type->width == 64;
+
+        if (src) { self.pad(); self.s(isDouble ? "vldr d0, " : "vldr s0, "); self.emitSlot(src); self.c('\n'); }
+        else self.inst0(isDouble ? "veor d0, d0, d0" : "veor s0, s0, s0");
+        self.inst2(isDouble ? "vsqrt.f64" : "vsqrt.f32", isDouble ? "d0" : "s0", isDouble ? "d0" : "s0");
+
+        if (isDouble) { self.pad(); self.s("vstr d0, "); self.emitSlot(res); self.c('\n'); }
+        else { self.pad(); self.s("vstr s0, "); self.emitSlot(res); self.c('\n'); }
+    }
+
+    bool genFunc(ir_types.IrFunc* func)
+    {
+        if (!func) return false;
+        if (func->isExtern) { if (func->base.name && func->base.name[0]) { self.pad(); self.s(".globl "); self.s(func->base.name); self.c('\n'); } return true; }
+        self.func = func;
+        self.frameSize = 0;
+        self.popcntLabel = 0;
+
+        for (u32 bi = 0; bi < func->nblocks; bi++)
+        {
+            ir_types.IrBlock* blk = func->blocks[bi];
+            for (u32 ii = 0; ii < blk->ninsts; ii++)
+            {
+                ir_types.IrInst* inst = blk->insts[ii];
+                ir_types.IrValue* res = &inst->base;
+                if (res->type && res->type->kind != ir_types.IrTypeKind::Void)
+                    self.slot(res);
+                for (u32 oi = 0; oi < inst->nops; oi++)
+                {
+                    ir_types.IrValue* op = inst->ops[oi];
+                    if (op && !self.isConst(op) && op->kind != ir_types.IrValueKind::Block)
+                        self.slot(op);
+                }
+            }
+        }
+
+        if (func->base.name && func->base.name[0])
+        {
+            self.s(".global "); self.s(func->base.name); self.c('\n');
+            self.emitLabel(func->base.name);
+        }
+        else
+            self.emitLabel(".Lanon");
+
+        self.inst0("push {r11, lr}");
+        self.inst2("mov", "r11", "sp");
+        if (self.frameSize > 0)
+        {
+            u32 aligned = ((self.frameSize + 3) / 4) * 4;
+            self.pad(); self.s("sub sp, sp, #"); self.u(aligned); self.c('\n');
+        }
+
+        for (u32 bi = 0; bi < func->nblocks; bi++)
+        {
+            ir_types.IrBlock* blk = func->blocks[bi];
+            if (bi > 0) self.c('\n');
+            self.s(".LBB"); self.u(bi); self.s(":\n");
+
+            for (u32 ii = 0; ii < blk->ninsts; ii++)
+            {
+                ir_types.IrInst* inst = blk->insts[ii];
+
+                switch (inst->opcode)
+                {
+                case ir_opcodes.IrOpcode::Br:
+                {
+                    ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null;
+                    if (tgt)
+                    {
+                        self.emitPhiEdges(blk, tgt);
+                        u32 tbi = self.resolveBlock(tgt);
+                        if (tbi != ~0u) { self.s("    b .LBB"); self.u(tbi); self.c('\n'); }
+                    }
+                    break;
+                }
+                case ir_opcodes.IrOpcode::CondBr:
+                {
+                    ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
+                    ir_types.IrValue* tv = inst->nops > 1 ? inst->ops[1] : null;
+                    ir_types.IrValue* ev = inst->nops > 2 ? inst->ops[2] : null;
+                    u32 tbi = tv ? self.resolveBlock(tv) : ~0u;
+                    u32 ebi = ev ? self.resolveBlock(ev) : ~0u;
+                    self.emitPhiEdges(blk, tv);
+                    self.emitPhiEdges(blk, ev);
+                    self.loadArith(cond, "r0");
+                    self.inst2("cmp", "r0", "#0");
+                    if (tbi != ~0u) { self.s("    bne .LBB"); self.u(tbi); self.c('\n'); }
+                    if (ebi != ~0u) { self.s("    b .LBB"); self.u(ebi); self.c('\n'); }
+                    break;
+                }
+                case ir_opcodes.IrOpcode::Ret:
+                {
+                    ir_types.IrValue* rv = inst->nops > 0 ? inst->ops[0] : null;
+                    ir_types.IrType* rt = func->retType;
+                    if (rv && rt && rt->kind != ir_types.IrTypeKind::Void)
+                    {
+                        if (rt->kind == ir_types.IrTypeKind::Float)
+                        {
+                            if (rt->width == 64)
+                            {
+                                self.pad(); self.s("vldr d0, "); self.emitSlot(rv); self.c('\n');
+                            }
+                            else
+                            {
+                                self.pad(); self.s("vldr s0, "); self.emitSlot(rv); self.c('\n');
+                            }
+                        }
+                        else
+                            self.load(rv, "r0");
+                    }
+                    self.inst0("mov sp, r11");
+                    self.inst0("pop {r11, lr}");
+                    self.inst0("bx lr");
+                    break;
+                }
+                case ir_opcodes.IrOpcode::Unreachable:
+                    self.inst0("udf #0"); break;
+                case ir_opcodes.IrOpcode::Noret:
+                {
+                    const char* tmpl = asm_rules.noretTemplate(&self.abi);
+                    for (u32 i = 0; tmpl[i]; i++)
+                    {
+                        if (tmpl[i] == '$' && tmpl[i+1] == 'e' && tmpl[i+2] == 'x' &&
+                            tmpl[i+3] == 'i' && tmpl[i+4] == 't' && tmpl[i+5] == '_' &&
+                            tmpl[i+6] == 'c' && tmpl[i+7] == 'o' && tmpl[i+8] == 'd' &&
+                            tmpl[i+9] == 'e')
+                        {
+                            self.s("0");
+                            i += 9;
+                        }
+                        else
+                            self.c(tmpl[i]);
+                    }
+                    self.c('\n');
+                    break;
+                }
+
+                case ir_opcodes.IrOpcode::Neg:
+                {
+                    ir_types.IrValue* ns = inst->nops > 0 ? inst->ops[0] : null;
+                    self.loadArith(ns, "r0");
+                    self.inst3("rsb", "r0", "r0", "#0");
+                    self.store(&inst->base, "r0");
+                    break;
+                }
+                case ir_opcodes.IrOpcode::Not: self.emitUnary(inst, "mvn"); break;
+
+                case ir_opcodes.IrOpcode::Add: self.emitArith(inst, "add"); break;
+                case ir_opcodes.IrOpcode::Sub: self.emitArith(inst, "sub"); break;
+                case ir_opcodes.IrOpcode::Mul: self.emitArith(inst, "mul"); break;
+                case ir_opcodes.IrOpcode::SDiv: self.emitDivRem(inst, true, false); break;
+                case ir_opcodes.IrOpcode::UDiv: self.emitDivRem(inst, false, false); break;
+                case ir_opcodes.IrOpcode::SRem: self.emitDivRem(inst, true, true); break;
+                case ir_opcodes.IrOpcode::URem: self.emitDivRem(inst, false, true); break;
+
+                case ir_opcodes.IrOpcode::And: self.emitArith(inst, "and"); break;
+                case ir_opcodes.IrOpcode::Or: self.emitArith(inst, "orr"); break;
+                case ir_opcodes.IrOpcode::Xor: self.emitArith(inst, "eor"); break;
+                case ir_opcodes.IrOpcode::Shl: self.emitShift(inst, "lsl"); break;
+                case ir_opcodes.IrOpcode::Ashr: self.emitShift(inst, "asr"); break;
+                case ir_opcodes.IrOpcode::Lshr: self.emitShift(inst, "lsr"); break;
+
+                case ir_opcodes.IrOpcode::CtPop: self.emitCtPop(inst); break;
+                case ir_opcodes.IrOpcode::CtLz: self.emitCtLz(inst); break;
+                case ir_opcodes.IrOpcode::CtTz: self.emitCtTz(inst); break;
+                case ir_opcodes.IrOpcode::Rotl: self.emitRot(inst, true); break;
+                case ir_opcodes.IrOpcode::Rotr: self.emitRot(inst, false); break;
+                case ir_opcodes.IrOpcode::Bswap: self.emitBswap(inst); break;
+
+                case ir_opcodes.IrOpcode::SMin: self.emitMinMax(inst, true, false); break;
+                case ir_opcodes.IrOpcode::SMax: self.emitMinMax(inst, true, true); break;
+                case ir_opcodes.IrOpcode::UMin: self.emitMinMax(inst, false, false); break;
+                case ir_opcodes.IrOpcode::UMax: self.emitMinMax(inst, false, true); break;
+                case ir_opcodes.IrOpcode::Abs: self.emitAbs(inst); break;
+
+                case ir_opcodes.IrOpcode::Fma: self.emitFma(inst); break;
+                case ir_opcodes.IrOpcode::FAbs: self.emitFAbs(inst); break;
+                case ir_opcodes.IrOpcode::FSqrt: self.emitFSqrt(inst); break;
+
+                case ir_opcodes.IrOpcode::Alloca: self.emitAlloca(inst); break;
+                case ir_opcodes.IrOpcode::Load: self.emitLoad(inst); break;
+                case ir_opcodes.IrOpcode::Store: self.emitStore(inst); break;
+                case ir_opcodes.IrOpcode::Gep: self.emitGep(inst); break;
+
+                case ir_opcodes.IrOpcode::Trunc:
+                case ir_opcodes.IrOpcode::Zext:
+                case ir_opcodes.IrOpcode::Sext:
+                case ir_opcodes.IrOpcode::FpTrunc:
+                case ir_opcodes.IrOpcode::FpExt:
+                case ir_opcodes.IrOpcode::FpToSi:
+                case ir_opcodes.IrOpcode::SiToFp:
+                case ir_opcodes.IrOpcode::FpToUi:
+                case ir_opcodes.IrOpcode::UiToFp:
+                case ir_opcodes.IrOpcode::Bitcast:
+                    self.emitCast(inst); break;
+
+                case ir_opcodes.IrOpcode::ICmp: self.emitICmp(inst); break;
+                case ir_opcodes.IrOpcode::FCmp: self.emitFCmp(inst); break;
+
+                case ir_opcodes.IrOpcode::Call: self.emitCall(inst); break;
+                case ir_opcodes.IrOpcode::Phi: self.emitPhi(inst); break;
+                case ir_opcodes.IrOpcode::Select: self.emitSelect(inst); break;
+                }
+            }
+        }
+
+        self.inst0("mov sp, r11");
+        self.inst0("pop {r11, lr}");
+        self.inst0("bx lr");
+        return true;
+    }
+
+    bool generate(ir_types.IrModule* mod_)
+    {
+        if (!mod_) return false;
+        self.s(".text\n");
+        for (u32 i = 0; i < mod_->nfuncs; i++)
+        {
+            if (!self.genFunc(mod_->funcs[i]))
+                return false;
+            self.c('\n');
+        }
+        return true;
+    }
+}
+
+pub bool irCodegenArm(ir_types.IrModule* mod_, void* userdata)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !mod_) return false;
+    ArmCodegen cg = ArmCodegen::new(ctx);
+    return cg.generate(mod_);
+}

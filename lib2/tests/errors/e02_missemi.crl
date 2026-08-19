@@ -1,0 +1,7 @@
+i32 main()
+@[[no_drop]]
+{
+    u64 a = 5
+    u64 b = a + 1;
+    return b;
+}

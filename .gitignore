@@ -4,3 +4,6 @@
 #py/
 #*.py
 **/__pycache__/
+*.sh
+*.git/
+*.gitignore

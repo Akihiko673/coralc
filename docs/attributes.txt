@@ -1,17 +1,17 @@
-\\    comptime
-\\   {
-\\        if (sizeof(BigStruct) > 4096u)
-\\            @[throw_error] : ("BigStruct too large for the DMA ring");
-\\    }
-@[throw_error_allow] : ("error message"); allows compilation, but throws an error warning
-@[throw_error] : ("error message"); has to be in a comptime block. causes an error to be thrown if certain condition is met at compile time.
-@[no_warn_unsafe] the usual,
-@packed packed for packed structs
-@reorder_packed not just packed, but reordered to optimize memory layout
-@no_null // type can never be null, runtime enforced strongly. this will come in self host when wallvm is used. .e.g., @[no_null] char** data;
-more attributes need adding.
-@[forced_pointer]
-@[forced_unsafe_cast]
-@[forced_null_deref]
-@[forced..series] these will be added to std, so that, if a user is using borrow cheker and other safety features turned on, std will compile. then under them, the @[no_warn_unsafe] will be used to turn off all the warnings that it may want to make.
 
+file level
+@[[no_warn_unsafe]] the usual,
+more attributes need adding.
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+@[[forced..series]] these will be added to std, so that, if a user is using borrow cheker and other safety features turned on, std will compile. then under them, the @[no_warn_unsafe] will be used to turn off all the warnings that it may want to make
+@[[no_drop]]
+
+other
+[[no_null]] // type can never be null, runtime enforced strongly. this will come in self host when wallvm is used. .e.g., [[no_null]] char** data;
+[[packed]] for structs
+[[reorder]] also for structs
+[[reorder, packed]] and the lkes, for multiple attributes.
+[[noret]] for no returning funtions
+[[naked]]

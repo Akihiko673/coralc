@@ -1,0 +1,845 @@
+@[[no_warn_unsafe]]
+@[[no_drop]]
+@[[forced_pointer]]
+@[[forced_unsafe_cast]]
+@[[forced_null_deref]]
+
+
+mod ir_types = import("wallvm/ir_types.crl");
+mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod asm_rules = import("wallvm/rules/asm_rules.crl");
+mod mman = import("std/memory/mman.crl");
+
+const u32 NO_REG = 0xFFFFFFFF;
+const i32 NO_SLOT = -1;
+const u64 SPILL_BIT = 0x80000000UL;
+const u64 FLOAT_BIT = 0x40000000UL;
+
+pub struct RegAllocConfig
+{
+    bool useCalleeSave; // false, caller-save regs only (no prologue/epilogue needed)
+    bool backendHandlesSpills; // true, backend decodes SPILL_BIT, no IR spill rewriting
+    const char** reservedIntRegs;
+    u32 numReservedIntRegs;
+    const char** reservedFloatRegs;
+    u32 numReservedFloatRegs;
+}
+
+pub RegAllocConfig defaultRegAllocConfig()
+{
+    RegAllocConfig c;
+    c.useCalleeSave = true;
+    c.backendHandlesSpills = false;
+    c.reservedIntRegs = null;
+    c.numReservedIntRegs = 0;
+    c.reservedFloatRegs = null;
+    c.numReservedFloatRegs = 0;
+    return c;
+}
+
+static bool isReservedName(const char* name, const char** reserved, u32 n)
+{
+    if (!name || !reserved) return false;
+    for (u32 i = 0; i < n; i++)
+    {
+        const char* r = reserved[i];
+        if (!r) continue;
+        u32 k = 0;
+        while (name[k] && r[k] && name[k] == r[k]) k++;
+        if (name[k] == 0 && r[k] == 0) return true;
+    }
+    return false;
+}
+
+struct LiveInterval
+{
+    u32 vreg;
+    u32 start;
+    u32 end;
+    u32 physReg;
+    i32 spillSlot;
+    bool isFloat;
+    bool spansCall;
+}
+
+pub struct LinearScanRegAlloc
+{
+    ir_types.IrContext* ctx;
+    u32 numRegs;
+    u32 numFloatRegs;
+    u32 numCallerSave;
+    const char** intRegNames;
+    const char** floatRegNames;
+    bool useCalleeSave;
+    bool backendHandlesSpills;
+
+    u32 numVregs;
+
+    ir_types.IrValue** vregValues;
+    u32 capVregs;
+
+    LiveInterval* intervals;
+    u32 numIntervals;
+    u32 capIntervals;
+
+    u32* regForVreg;
+    i32* slotForVreg;
+
+    ir_types.IrBlock** blocks;
+    u32 numBlocks;
+
+    u32* blockStartInst;
+    u32 totalInsts;
+    u32* instVreg;
+    u32* instBlock;
+    ir_types.IrInst** linearInsts;
+    u8* instIsCall;
+
+    u32* active;
+    u32 numActive;
+
+    u32* floatActive;
+    u32 numFloatActive;
+
+    u32* regIsFree;
+    u32* floatRegIsFree;
+
+    i32 nextSpillSlot;
+    IrType* wordType;
+
+    // Per-spill-slot alloca, slotAlloca[slot] = alloca instruction base value
+    ir_types.IrValue** slotAllocas;
+    u32 numSlots;
+
+    LinearScanRegAlloc new(ir_types.IrContext* ctx, asm_rules.ABIRules* abi, RegAllocConfig* cfg)
+    {
+        LinearScanRegAlloc r;
+        r.ctx = ctx;
+        r.useCalleeSave = true;
+        r.backendHandlesSpills = false;
+        if (cfg)
+        {
+            r.useCalleeSave = cfg->useCalleeSave;
+            r.backendHandlesSpills = cfg->backendHandlesSpills;
+        }
+        r.numRegs = 0;
+        r.numFloatRegs = 0;
+        r.numCallerSave = 0;
+        r.intRegNames = null;
+        r.floatRegNames = null;
+        if (abi)
+        {
+            u32 callerCount = abi->numCallerSaveRegs;
+            u32 calleeCount = r.useCalleeSave ? abi->numCalleeSaveRegs : 0;
+            u32 keptCaller = 0;
+            u32 keptCallee = 0;
+            u32 fcount = abi->numFloatArgRegs;
+            u32 keptFloat = 0;
+            for (u32 i = 0; i < callerCount; i++)
+                if (!isReservedName(abi->callerSaveRegs[i], cfg ? cfg->reservedIntRegs : null, cfg ? cfg->numReservedIntRegs : 0))
+                    keptCaller++;
+            for (u32 i = 0; i < calleeCount; i++)
+                if (!isReservedName(abi->calleeSaveRegs[i], cfg ? cfg->reservedIntRegs : null, cfg ? cfg->numReservedIntRegs : 0))
+                    keptCallee++;
+            for (u32 i = 0; i < fcount; i++)
+                if (!isReservedName(abi->floatArgRegs[i], cfg ? cfg->reservedFloatRegs : null, cfg ? cfg->numReservedFloatRegs : 0))
+                    keptFloat++;
+            r.numRegs = keptCaller + keptCallee;
+            r.numFloatRegs = keptFloat;
+            r.numCallerSave = keptCaller;
+            if (r.numRegs > 0)
+            {
+                r.intRegNames = mman.alloc<const char*>(r.numRegs);
+                u32 k = 0;
+                for (u32 i = 0; i < callerCount; i++)
+                    if (!isReservedName(abi->callerSaveRegs[i], cfg ? cfg->reservedIntRegs : null, cfg ? cfg->numReservedIntRegs : 0))
+                        r.intRegNames[k++] = abi->callerSaveRegs[i];
+                for (u32 i = 0; i < calleeCount; i++)
+                    if (!isReservedName(abi->calleeSaveRegs[i], cfg ? cfg->reservedIntRegs : null, cfg ? cfg->numReservedIntRegs : 0))
+                        r.intRegNames[k++] = abi->calleeSaveRegs[i];
+            }
+            if (r.numFloatRegs > 0)
+            {
+                r.floatRegNames = mman.alloc<const char*>(r.numFloatRegs);
+                u32 k = 0;
+                for (u32 i = 0; i < fcount; i++)
+                    if (!isReservedName(abi->floatArgRegs[i], cfg ? cfg->reservedFloatRegs : null, cfg ? cfg->numReservedFloatRegs : 0))
+                        r.floatRegNames[k++] = abi->floatArgRegs[i];
+            }
+        }
+        if (r.numRegs == 0 && !abi) { r.numRegs = 16; r.numCallerSave = 16; }
+        if (r.numFloatRegs == 0 && !abi) r.numFloatRegs = 8;
+        r.numVregs = 0;
+        r.vregValues = null;
+        r.capVregs = 0;
+        r.intervals = null;
+        r.numIntervals = 0;
+        r.capIntervals = 0;
+        r.regForVreg = null;
+        r.slotForVreg = null;
+        r.blocks = null;
+        r.numBlocks = 0;
+        r.blockStartInst = null;
+        r.totalInsts = 0;
+        r.instVreg = null;
+        r.instBlock = null;
+        r.linearInsts = null;
+        r.active = null;
+        r.numActive = 0;
+        r.floatActive = null;
+        r.numFloatActive = 0;
+        r.regIsFree = null;
+        r.floatRegIsFree = null;
+        r.nextSpillSlot = 0;
+        r.wordType = null;
+        r.slotAllocas = null;
+        r.numSlots = 0;
+        return r;
+    }
+
+    void ensureVregs(LinearScanRegAlloc*, u32 vreg)
+    {
+        if (vreg >= self.capVregs)
+        {
+            u32 newCap = self.capVregs ? self.capVregs * 2 : 64;
+            if (newCap <= vreg) newCap = vreg + 64;
+            ir_types.IrValue** newVals = mman.alloc<ir_types.IrValue*>(newCap);
+            u32* newRegs = mman.alloc<u32>(newCap);
+            i32* newSlots = mman.alloc<i32>(newCap);
+            if (self.vregValues)
+            {
+                mman.copy<ir_types.IrValue*>(newVals, self.vregValues, self.capVregs);
+                mman.copy<u32>(newRegs, self.regForVreg, self.capVregs);
+                mman.copy<i32>(newSlots, self.slotForVreg, self.capVregs);
+                mman.dealloc<ir_types.IrValue*>(self.vregValues);
+                mman.dealloc<u32>(self.regForVreg);
+                mman.dealloc<i32>(self.slotForVreg);
+            }
+            for (u32 i = self.capVregs; i < newCap; i++)
+            {
+                newVals[i] = null;
+                newRegs[i] = NO_REG;
+                newSlots[i] = NO_SLOT;
+            }
+            self.vregValues = newVals;
+            self.regForVreg = newRegs;
+            self.slotForVreg = newSlots;
+            self.capVregs = newCap;
+        }
+    }
+
+    void ensureIntervals(LinearScanRegAlloc*)
+    {
+        if (self.numIntervals >= self.capIntervals)
+        {
+            u32 newCap = self.capIntervals ? self.capIntervals * 2 : 64;
+            LiveInterval* newInts = mman.alloc<LiveInterval>(newCap);
+            if (self.intervals)
+            {
+                mman.copy<LiveInterval>(newInts, self.intervals, self.numIntervals);
+                mman.dealloc<LiveInterval>(self.intervals);
+            }
+            self.intervals = newInts;
+            self.capIntervals = newCap;
+        }
+    }
+
+    void ensureSlotAllocas(LinearScanRegAlloc*, i32 slot)
+    {
+        u32 s = (u32)slot;
+        if (s >= self.numSlots)
+        {
+            u32 oldNum = self.numSlots;
+            self.numSlots = s + 1;
+            ir_types.IrValue** newSa = mman.alloc<ir_types.IrValue*>(self.numSlots);
+            if (self.slotAllocas)
+            {
+                mman.copy<ir_types.IrValue*>(newSa, self.slotAllocas, oldNum);
+                mman.dealloc<ir_types.IrValue*>(self.slotAllocas);
+            }
+            for (u32 i = oldNum; i < self.numSlots; i++)
+                newSa[i] = null;
+            self.slotAllocas = newSa;
+        }
+    }
+
+    void assignVregs(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    {
+        self.blocks = func->blocks;
+        self.numBlocks = func->nblocks;
+
+        u32 total = 0;
+        for (u32 b = 0; b < self.numBlocks; b++)
+            total += self.blocks[b].ninsts;
+        self.totalInsts = total;
+
+        self.blockStartInst = mman.alloc<u32>(self.numBlocks);
+        self.instVreg = mman.alloc<u32>(total);
+        self.instBlock = mman.alloc<u32>(total);
+        self.linearInsts = mman.alloc<ir_types.IrInst*>(total);
+        self.instIsCall = mman.alloc<u8>(total);
+
+        for (u32 i = 0; i < total; i++)
+        {
+            self.instVreg[i] = NO_REG;
+            self.instBlock[i] = 0;
+            self.linearInsts[i] = null;
+            self.instIsCall[i] = 0;
+        }
+
+        u32 idx = 0;
+        for (u32 b = 0; b < self.numBlocks; b++)
+        {
+            ir_types.IrBlock* bb = self.blocks[b];
+            self.blockStartInst[b] = idx;
+            for (u32 i = 0; i < bb.ninsts; i++)
+            {
+                ir_types.IrInst* inst = bb.insts[i];
+                self.linearInsts[idx] = inst;
+                self.instBlock[idx] = b;
+                self.instIsCall[idx] = (inst.opcode == ir_opcodes.IrOpcode::Call ||
+                                        inst.opcode == ir_opcodes.IrOpcode::InlineAsm) ? 1 : 0;
+
+                ir_opcodes.IrOpcode op = inst.opcode;
+                if (op == ir_opcodes.IrOpcode::Store || op == ir_opcodes.IrOpcode::Br ||
+                    op == ir_opcodes.IrOpcode::CondBr || op == ir_opcodes.IrOpcode::Ret ||
+                    op == ir_opcodes.IrOpcode::Unreachable || op == ir_opcodes.IrOpcode::Noret)
+                {
+                }
+                else
+                {
+                    u32 vreg = self.numVregs++;
+                    self.ensureVregs(vreg);
+                    self.vregValues[vreg] = &inst->base;
+                    inst->base.valData = (u64)vreg;
+                    self.instVreg[idx] = vreg;
+                }
+                idx++;
+            }
+        }
+    }
+
+    void computeIntervals(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    {
+        for (u32 i = 0; i < self.totalInsts; i++)
+        {
+            u32 vreg = self.instVreg[i];
+            if (vreg != NO_REG)
+            {
+                self.ensureIntervals();
+                LiveInterval* li = &self.intervals[self.numIntervals++];
+                li.vreg = vreg;
+                li.start = i;
+                li.end = i;
+                li.physReg = NO_REG;
+                li.spillSlot = NO_SLOT;
+                li.isFloat = false;
+                ir_types.IrValue* vv = self.vregValues[vreg];
+                if (vv && vv->type && vv->type->kind == ir_types.IrTypeKind::Float)
+                    li.isFloat = true;
+            }
+        }
+
+        for (u32 b = 0; b < self.numBlocks; b++)
+        {
+            ir_types.IrBlock* bb = self.blocks[b];
+            u32 base = self.blockStartInst[b];
+            for (u32 i = 0; i < bb.ninsts; i++)
+            {
+                ir_types.IrInst* inst = bb.insts[i];
+                u32 linearIdx = base + i;
+
+                // Handle phi, uses occur at the end of predecessor blocks
+                if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                {
+                    // For phi, each value operand is "used" at the end of the corresponding predecessor
+                    u32 numPairs = inst.nops / 2;
+                    for (u32 j = 0; j < numPairs; j++)
+                    {
+                        ir_types.IrValue* op = inst.ops[j * 2];
+                        if (!op || op->kind != ir_types.IrValueKind::Inst) continue;
+                        u32 vreg = (u32)op->valData;
+                        ir_types.IrValue* predVal = inst.ops[j * 2 + 1];
+                        if (!predVal || predVal->kind != ir_types.IrValueKind::Block) continue;
+                        ir_types.IrBlock* predBlock = (ir_types.IrBlock*)predVal;
+
+                        i32 predEnd = -1;
+                        for (u32 pb = 0; pb < self.numBlocks; pb++)
+                        {
+                            if (self.blocks[pb] == predBlock)
+                            {
+                                predEnd = (i32)(self.blockStartInst[pb] + self.blocks[pb].ninsts - 1);
+                                break;
+                            }
+                        }
+                        if (predEnd < 0) continue;
+
+                        for (u32 k = 0; k < self.numIntervals; k++)
+                        {
+                            if (self.intervals[k].vreg == vreg)
+                            {
+                                if ((u32)predEnd > self.intervals[k].end)
+                                    self.intervals[k].end = (u32)predEnd;
+                                break;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    for (u32 j = 0; j < inst.nops; j++)
+                    {
+                        ir_types.IrValue* op = inst.ops[j];
+                        if (!op || op->kind != ir_types.IrValueKind::Inst) continue;
+                        u32 vreg = (u32)op->valData;
+                        for (u32 k = 0; k < self.numIntervals; k++)
+                        {
+                            if (self.intervals[k].vreg == vreg)
+                            {
+                                if (linearIdx > self.intervals[k].end)
+                                    self.intervals[k].end = linearIdx;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (u32 i = 0; i < self.numVregs; i++)
+        {
+            self.regForVreg[i] = NO_REG;
+            self.slotForVreg[i] = NO_SLOT;
+        }
+
+        // A value that is live across a call must live in a callee-save
+        // register (or memory), caller-save regs are clobbered by the call.
+        for (u32 i = 0; i < self.numIntervals; i++)
+        {
+            LiveInterval* li = &self.intervals[i];
+            li.spansCall = false;
+            for (u32 p = li->start + 1; p <= li->end && p < self.totalInsts; p++)
+            {
+                if (self.instIsCall[p])
+                {
+                    li.spansCall = true;
+                    break;
+                }
+            }
+        }
+
+        self.regIsFree = mman.alloc<u32>(self.numRegs);
+        self.active = mman.alloc<u32>(self.numRegs + 1);
+        self.floatRegIsFree = mman.alloc<u32>(self.numFloatRegs);
+        self.floatActive = mman.alloc<u32>(self.numFloatRegs + 1);
+    }
+
+    static void sortIntervals(LiveInterval* intervals, u32 count)
+    {
+        for (u32 i = 1; i < count; i++)
+        {
+            LiveInterval key = intervals[i];
+            i32 j = (i32)i - 1;
+            while (j >= 0 && intervals[j].start > key.start)
+            {
+                intervals[j + 1] = intervals[j];
+                j--;
+            }
+            intervals[j + 1] = key;
+        }
+    }
+
+    void scanClass(LiveInterval* cur, u32* freeSet, u32* activeList, u32* numActivePtr, u32 regCount, u32 calleeStart)
+    {
+        u32 numActive = *numActivePtr;
+        u32 newActive = 0;
+        for (u32 j = 0; j < numActive; j++)
+        {
+            u32 avreg = activeList[j];
+            LiveInterval* a = null;
+            for (u32 k = 0; k < self.numIntervals; k++)
+            {
+                if (self.intervals[k].vreg == avreg)
+                {
+                    a = &self.intervals[k];
+                    break;
+                }
+            }
+            if (a && a->end < cur->start)
+            {
+                freeSet[a->physReg] = 1;
+                self.regForVreg[a->vreg] = a->physReg;
+            }
+            else
+            {
+                activeList[newActive++] = avreg;
+            }
+        }
+        numActive = newActive;
+
+        // An interval live across a call can only use callee-save regs.
+        u32 searchStart = cur->spansCall ? calleeStart : 0;
+
+        u32 freeReg = NO_REG;
+        for (u32 r = searchStart; r < regCount; r++)
+        {
+            if (freeSet[r])
+            {
+                freeReg = r;
+                break;
+            }
+        }
+
+        if (freeReg != NO_REG)
+        {
+            cur->physReg = freeReg;
+            freeSet[freeReg] = 0;
+            activeList[numActive++] = cur->vreg;
+            self.regForVreg[cur->vreg] = freeReg;
+        }
+        else
+        {
+            // Eviction candidate, for call-spanning intervals, only evict
+            // another callee-save occupant; for everything else any active
+            // interval qualifies.
+            u32 furthestEnd = 0;
+            u32 furthestIdx = 0;
+            LiveInterval* furthest = null;
+            for (u32 j = 0; j < numActive; j++)
+            {
+                u32 avreg = activeList[j];
+                for (u32 k = 0; k < self.numIntervals; k++)
+                {
+                    if (self.intervals[k].vreg == avreg)
+                    {
+                        LiveInterval* a = &self.intervals[k];
+                        if (cur->spansCall && a->physReg < calleeStart) break;
+                        if (a->end > furthestEnd)
+                        {
+                            furthestEnd = a->end;
+                            furthestIdx = j;
+                            furthest = a;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (cur->end > furthestEnd && furthest)
+            {
+                furthest->spillSlot = self.nextSpillSlot++;
+                self.slotForVreg[furthest->vreg] = furthest->spillSlot;
+                if (self.nextSpillSlot > 0x7FFFFFFF)
+                    self.nextSpillSlot = 0x7FFFFFFF;
+
+                u32 freedReg = furthest->physReg;
+                cur->physReg = freedReg;
+                // The evicted interval is spilled, it no longer occupies
+                // a register, and must not keep a stale mapping to one.
+                self.regForVreg[furthest->vreg] = NO_REG;
+                furthest->physReg = NO_REG;
+
+                activeList[furthestIdx] = cur->vreg;
+                self.regForVreg[cur->vreg] = freedReg;
+            }
+            else
+            {
+                cur->spillSlot = self.nextSpillSlot++;
+                self.slotForVreg[cur->vreg] = cur->spillSlot;
+                if (self.nextSpillSlot > 0x7FFFFFFF)
+                    self.nextSpillSlot = 0x7FFFFFFF;
+            }
+        }
+        *numActivePtr = numActive;
+    }
+
+    void linearScan(LinearScanRegAlloc*)
+    {
+        for (u32 i = 0; i < self.numRegs; i++)
+            self.regIsFree[i] = 1;
+        for (u32 i = 0; i < self.numFloatRegs; i++)
+            self.floatRegIsFree[i] = 1;
+        self.numActive = 0;
+        self.numFloatActive = 0;
+
+        sortIntervals(self.intervals, self.numIntervals);
+
+        for (u32 i = 0; i < self.numIntervals; i++)
+        {
+            LiveInterval* cur = &self.intervals[i];
+            if (cur->isFloat)
+                self.scanClass(cur, self.floatRegIsFree, self.floatActive, &self.numFloatActive, self.numFloatRegs, self.numFloatRegs);
+            else
+                self.scanClass(cur, self.regIsFree, self.active, &self.numActive, self.numRegs, self.numCallerSave);
+        }
+
+        for (u32 j = 0; j < self.numActive; j++)
+        {
+            u32 avreg = self.active[j];
+            for (u32 k = 0; k < self.numIntervals; k++)
+            {
+                if (self.intervals[k].vreg == avreg)
+                {
+                    self.regForVreg[avreg] = self.intervals[k].physReg;
+                    break;
+                }
+            }
+        }
+        for (u32 j = 0; j < self.numFloatActive; j++)
+        {
+            u32 avreg = self.floatActive[j];
+            for (u32 k = 0; k < self.numIntervals; k++)
+            {
+                if (self.intervals[k].vreg == avreg)
+                {
+                    self.regForVreg[avreg] = self.intervals[k].physReg;
+                    break;
+                }
+            }
+        }
+    }
+
+    static void insertInstAt(ir_types.IrBlock* bb, u32 idx, ir_types.IrInst* newInst)
+    {
+        if (idx > bb.ninsts) return;
+        if (bb.ninsts + 1 > bb.capInsts)
+        {
+            u32 newCap = bb.capInsts ? bb.capInsts * 2 : 8;
+            ir_types.IrInst** newInsts = mman.alloc<ir_types.IrInst*>(newCap);
+            if (bb.insts)
+            {
+                mman.copy<ir_types.IrInst*>(newInsts, bb.insts, bb.ninsts);
+                mman.dealloc<ir_types.IrInst*>(bb.insts);
+            }
+            bb.insts = newInsts;
+            bb.capInsts = newCap;
+        }
+        for (u32 i = bb.ninsts; i > idx; i--)
+            bb.insts[i] = bb.insts[i - 1];
+        bb.insts[idx] = newInst;
+        newInst.parent = bb;
+        bb.ninsts++;
+    }
+
+    ir_types.IrValue* getOrCreateSlotAlloca(LinearScanRegAlloc*, i32 slot, ir_types.IrBlock* insertBlock, u32 insertIdx)
+    {
+        self.ensureSlotAllocas(slot);
+        if (self.slotAllocas[slot])
+            return self.slotAllocas[slot];
+
+        IrType* ptrTy = self.ctx.tyPtr(self.wordType);
+        ir_types.IrInst* alloca = self.ctx.createInst(ir_opcodes.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
+        insertInstAt(insertBlock, insertIdx, alloca);
+        self.slotAllocas[slot] = &alloca->base;
+        return &alloca->base;
+    }
+
+    void handleSpills(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    {
+        // When the backend consumes valData directly, it decodes SPILL_BIT
+        // itself, no IR-level load/store rewriting.
+        if (self.backendHandlesSpills) return;
+        if (self.nextSpillSlot == 0) return;
+
+        ir_types.IrBlock* entryBlock = self.blocks[0];
+        for (i32 s = 0; s < self.nextSpillSlot; s++)
+        {
+            IrType* ptrTy = self.ctx.tyPtr(self.wordType);
+            ir_types.IrInst* alloca = self.ctx.createInst(ir_opcodes.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
+            insertInstAt(entryBlock, 0, alloca);
+            self.ensureSlotAllocas(s);
+            self.slotAllocas[s] = &alloca->base;
+        }
+
+        for (u32 v = 0; v < self.numVregs; v++)
+        {
+            i32 slot = self.slotForVreg[v];
+            if (slot == NO_SLOT) continue;
+
+            ir_types.IrValue* val = self.vregValues[v];
+            if (!val) continue;
+
+            u32 defLinearIdx = self.totalInsts;
+            for (u32 i = 0; i < self.totalInsts; i++)
+            {
+                if (self.instVreg[i] == v) { defLinearIdx = i; break; }
+            }
+            ir_types.IrInst* defStore = null;
+            if (defLinearIdx < self.totalInsts)
+            {
+                ir_types.IrInst* defInst = self.linearInsts[defLinearIdx];
+                ir_types.IrBlock* defBlock = self.blocks[self.instBlock[defLinearIdx]];
+
+                ir_types.IrValue* slotPtr = self.getOrCreateSlotAlloca(slot, defBlock, 0);
+                if (!slotPtr) slotPtr = self.slotAllocas[(u32)slot];
+                if (!slotPtr) continue;
+
+                ir_types.IrValue* storeOps[2];
+                storeOps[0] = val;
+                storeOps[1] = slotPtr;
+                ir_types.IrInst* storeInst = self.ctx.createInst(ir_opcodes.IrOpcode::Store, self.ctx.tyVoid(), storeOps, 2, 0, 0);
+
+                u32 defBlockIdx = self.instBlock[defLinearIdx];
+                ir_types.IrBlock* db = self.blocks[defBlockIdx];
+                u32 storePos = db.ninsts;
+                for (u32 i = 0; i < db.ninsts; i++)
+                {
+                    if (db.insts[i] == defInst) { storePos = i + 1; break; }
+                }
+                insertInstAt(db, storePos, storeInst);
+                storeOps[0].addUser(storeInst);
+                storeOps[1].addUser(storeInst);
+                defStore = storeInst;
+            }
+
+            for (u32 b = 0; b < self.numBlocks; b++)
+            {
+                ir_types.IrBlock* bb = self.blocks[b];
+                for (u32 i = 0; i < bb.ninsts; i++)
+                {
+                    ir_types.IrInst* inst = bb.insts[i];
+                    // Skip the spill store we just inserted, it is a def, not a
+                    // use, and rewriting its operand would clobber the stored value
+                    if (inst == defStore) continue;
+                    if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                    {
+                        // For phi uses, insert load at end of predecessor block
+                        u32 numPairs = inst.nops / 2;
+                        for (u32 j = 0; j < numPairs; j++)
+                        {
+                            ir_types.IrValue* op = inst.ops[j * 2];
+                            if (op == val)
+                            {
+                                ir_types.IrValue* predVal = inst.ops[j * 2 + 1];
+                                if (!predVal || predVal->kind != ir_types.IrValueKind::Block) continue;
+                                ir_types.IrBlock* predBlock = (ir_types.IrBlock*)predVal;
+
+                                ir_types.IrValue* slotPtr = self.slotAllocas[(u32)slot];
+                                if (!slotPtr) continue;
+
+                                ir_types.IrValue* loadOps[1];
+                                loadOps[0] = slotPtr;
+                                ir_types.IrInst* loadInst = self.ctx.createInst(ir_opcodes.IrOpcode::Load, val->type, loadOps, 1, 0, 0);
+                                loadOps[0].addUser(loadInst);
+
+                                // Insert before terminator of predecessor block
+                                ir_types.IrInst* term = predBlock.terminator();
+                                u32 loadPos = predBlock.ninsts;
+                                if (term)
+                                {
+                                    for (u32 k = 0; k < predBlock.ninsts; k++)
+                                    {
+                                        if (predBlock.insts[k] == term) { loadPos = k; break; }
+                                    }
+                                }
+                                insertInstAt(predBlock, loadPos, loadInst);
+
+                                inst.ops[j * 2] = &loadInst.base;
+                                loadInst.base.addUser(inst);
+                                val.removeUser(inst);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (u32 j = 0; j < inst.nops; j++)
+                        {
+                            ir_types.IrValue* op = inst.ops[j];
+                            if (op == val)
+                            {
+                                ir_types.IrValue* slotPtr = self.slotAllocas[(u32)slot];
+                                if (!slotPtr) continue;
+
+                                ir_types.IrValue* loadOps[1];
+                                loadOps[0] = slotPtr;
+                                ir_types.IrInst* loadInst = self.ctx.createInst(ir_opcodes.IrOpcode::Load, val->type, loadOps, 1, 0, 0);
+                                loadOps[0].addUser(loadInst);
+
+                                insertInstAt(bb, i, loadInst);
+                                i++; // skip over inserted load
+
+                                inst.ops[j] = &loadInst.base;
+                                loadInst.base.addUser(inst);
+                                val.removeUser(inst);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    void rewrite(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    {
+        // Store physreg assignments in valData for codegen consumption.
+        // Bit 31, spilled (low 31 bits = spill slot index)
+        // Bit 30, float register class (low 30 bits = float reg index)
+        for (u32 v = 0; v < self.numVregs; v++)
+        {
+            ir_types.IrValue* val = self.vregValues[v];
+            if (!val) continue;
+            if (self.slotForVreg[v] != NO_SLOT)
+            {
+                val->valData = SPILL_BIT | (u64)(u32)self.slotForVreg[v];
+            }
+            else
+            {
+                u32 reg = self.regForVreg[v];
+                if (reg == NO_REG) reg = 0;
+                bool isF = val->type && val->type->kind == ir_types.IrTypeKind::Float;
+                if (isF)
+                    val->valData = FLOAT_BIT | (u64)reg;
+                else
+                    val->valData = (u64)reg;
+            }
+        }
+    }
+
+    bool allocate(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    {
+        if (!func || func->nblocks == 0) return false;
+
+        self.wordType = self.ctx.tyInt(64);
+
+        self.assignVregs(func);
+        if (self.numVregs == 0) return true;
+
+        self.computeIntervals(func);
+        self.linearScan();
+        self.handleSpills(func);
+        self.rewrite(func);
+
+        if (self.instVreg) mman.dealloc<u32>(self.instVreg);
+        if (self.instBlock) mman.dealloc<u32>(self.instBlock);
+        if (self.linearInsts) mman.dealloc<ir_types.IrInst*>(self.linearInsts);
+        if (self.instIsCall) mman.dealloc<u8>(self.instIsCall);
+        if (self.blockStartInst) mman.dealloc<u32>(self.blockStartInst);
+        if (self.regIsFree) mman.dealloc<u32>(self.regIsFree);
+        if (self.floatRegIsFree) mman.dealloc<u32>(self.floatRegIsFree);
+        if (self.active) mman.dealloc<u32>(self.active);
+        if (self.floatActive) mman.dealloc<u32>(self.floatActive);
+        if (self.slotAllocas) mman.dealloc<ir_types.IrValue*>(self.slotAllocas);
+
+        return true;
+    }
+
+    void destroy(LinearScanRegAlloc*)
+    {
+        if (self.vregValues) mman.dealloc<ir_types.IrValue*>(self.vregValues);
+        if (self.regForVreg) mman.dealloc<u32>(self.regForVreg);
+        if (self.slotForVreg) mman.dealloc<i32>(self.slotForVreg);
+        if (self.intervals) mman.dealloc<LiveInterval>(self.intervals);
+        if (self.intRegNames) mman.dealloc<const char*>(self.intRegNames);
+        if (self.floatRegNames) mman.dealloc<const char*>(self.floatRegNames);
+    }
+}
+
+pub bool irLinearScanRegAlloc(ir_types.IrFunc* func, void* userdata, asm_rules.ABIRules* abi, RegAllocConfig* cfg)
+{
+    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    if (!ctx || !func) return false;
+    LinearScanRegAlloc alloc = LinearScanRegAlloc::new(ctx, abi, cfg);
+    bool result = alloc.allocate(func);
+    alloc.destroy();
+    return result;
+}

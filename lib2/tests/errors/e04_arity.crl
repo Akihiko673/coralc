@@ -1,0 +1,7 @@
+mod vec = import("std/collections/vec.crl");
+@[[no_drop]]
+i32 main()
+{
+    vec.vec<u64, u32> v;
+    return 0;
+}

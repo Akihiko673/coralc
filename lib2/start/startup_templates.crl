@@ -1,0 +1,474 @@
+mod mman = import("std/memory/mman.crl");
+@[[no_drop]]
+
+extern u8 __bss_start;
+extern u8 __bss_end;
+
+// std.vec!<std.arr!<std.vec!<int>, 3>> do;
+// do't mind me, just checking how it looks.
+
+static void _zeroBss()
+{
+    flag (ZERO_BSS) {
+    off:
+    // nothing expected to hppen
+    default:
+        u8* p = &__bss_start;
+        const u8* end = &__bss_end;
+        while (p < end)
+        {
+            *p = 0;
+            p++;
+        }
+    }
+}
+
+inline void _bootstrapAllocator()
+{
+    flag (DEFAULT_ALLOC) {
+    OFF:
+        _zeroBss();
+    default:
+        _zeroBss();
+        mman.initDefaultAllocator();
+    }
+}
+
+inline void _teardownAllocator()
+{
+    flag (DEFAULT_ALLOC) {
+    OFF:
+    // same shit as olde
+    default:
+        mman.deinitDefaultAllocator();
+    }
+}
+// the kernel enters at _start with the stack, for all linux arhcs
+// pointing at argc, followed by the argv pointer array, a nullpoiter, and envp
+flag (platform) {
+    LINUX:
+        flag (ARCH) {
+        x86_64:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "movl 8(%%rbp), %0" : "=r"(argc) }
+                asm volatile { "leaq 16(%%rbp), %0" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        arm64:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // stp x29, x30, [sp, #-16]!; mov x29, sp
+            // Kernel args sit at aroud [x29, #16] = argc, [x29, #24] = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "ldr %0, [x29, #16]" : "=r"(argc) }
+                asm volatile { "add %0, x29, #24" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        arm32:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // push {r11, lr} Kernel args sit at
+            // [r11, #8] = argc, [r11, #12] = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "ldr %0, [r11, #8]" : "=r"(argc) }
+                asm volatile { "add %0, r11, #12" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        riscv64:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // addi sp,sp,-F; sd ra,s0; addi s0,sp,F
+            // s0 is the kernel entry sp, 0(s0) = argc, 8(s0) = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "lw %0, 0(s0)" : "=r"(argc) }
+                asm volatile { "addi %0, s0, 8" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        riscv32:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // addi sp,sp,-F; sw ra,s0; addi s0,sp,F
+            // s0 is the entry sp, 0(s0) = argc, 4(s0) = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "lw %0, 0(s0)" : "=r"(argc) }
+                asm volatile { "addi %0, s0, 4" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        ppc64:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // mflr r0; std r0,16(r1); stdu r1,-F(r1)
+            // stdu writes a backchain at 0(r1) = kernel entry sp,
+            // 0(entry) = argc, 8(entry) = argv
+            [[noret]] void _start()
+            {
+                u64 entrySp;
+                i32 argc;
+                u8** argv;
+                asm volatile { "ld %0, 0(1)" : "=r"(entrySp) }
+                asm volatile { "lwz %0, 0(%1)" : "=r"(argc) : "r"(entrySp) }
+                asm volatile { "addi %0, %1, 8" : "=r"(argv) : "r"(entrySp) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        ppc:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // mflr r0; stw r0,F-4(r1); stwu r1,-F(r1)
+            // stwu writes a backchain at 0(r1) = entry sp,
+            // 0(entry) = argc, 4(entry) = argv
+            [[noret]] void _start()
+            {
+                u32 entrySp;
+                i32 argc;
+                u8** argv;
+                asm volatile { "lwz %0, 0(1)" : "=r"(entrySp) }
+                asm volatile { "lwz %0, 0(%1)" : "=r"(argc) : "r"(entrySp) }
+                asm volatile { "addi %0, %1, 4" : "=r"(argv) : "r"(entrySp) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        mips64:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // move t0,sp; daddiu sp,sp,-F; sd t0,0(sp); sd ra,8(sp)
+            // The backchain at 0($sp) = kernel entry sp:
+            // 0(entry) = argc, 8(entry) = argv
+            [[noret]] void _start()
+            {
+                u64 entrySp;
+                i32 argc;
+                u8** argv;
+                asm volatile { "ld %0, 0($sp)" : "=r"(entrySp) }
+                asm volatile { "lw %0, 0(%1)" : "=r"(argc) : "r"(entrySp) }
+                asm volatile { "daddiu %0, %1, 8" : "=r"(argv) : "r"(entrySp) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        mips:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // move t0,sp; addiu sp,sp,-F; sw t0,0(sp); sw ra,8(sp)
+            // The backchain at 0($sp) = kernel entry sp:
+            // 0(entry) = argc, 4(entry) = argv
+            [[noret]] void _start()
+            {
+                u32 entrySp;
+                i32 argc;
+                u8** argv;
+                asm volatile { "lw %0, 0($sp)" : "=r"(entrySp) }
+                asm volatile { "lw %0, 0(%1)" : "=r"(argc) : "r"(entrySp) }
+                asm volatile { "addiu %0, %1, 4" : "=r"(argv) : "r"(entrySp) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        sparc64:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            // save %sp, -F, %sp The register window makes
+            // %fp the kernel entry sp: [%fp] = argc, [%fp+8] = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "ld [%%fp], %0" : "=r"(argc) }
+                asm volatile { "add %%fp, 8, %0" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        default:
+            extern("c") [[noret]] void exit(i32 code);
+
+            i32 main(i32 argc, u8** argv);
+
+            [[noret]] void _start()
+            {
+                _bootstrapAllocator();
+                i32 code = main(0, null);
+                _teardownAllocator();
+                exit(code);
+            }
+        }
+    MACOS:
+        flag (ARCH) {
+        x86_64:
+            extern("c") [[noret]] void exit(i32 code);
+            i32 main(i32 argc, u8** argv);
+
+            // push rbp; mov rbp,rsp Kernel args sit at
+            // 8(%rbp) = argc, 16(%rbp) = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "movl 8(%%rbp), %0" : "=r"(argc) }
+                asm volatile { "leaq 16(%%rbp), %0" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        arm64:
+            extern("c") [[noret]] void exit(i32 code);
+            i32 main(i32 argc, u8** argv);
+
+            // stp x29, x30, [sp, #-16]!; mov x29, sp
+            // Kernel args sit at [x29, #16] = argc, [x29, #24] = argv
+            [[noret]] void _start()
+            {
+                i32 argc;
+                u8** argv;
+                asm volatile { "ldr %0, [x29, #16]" : "=r"(argc) }
+                asm volatile { "add %0, x29, #24" : "=r"(argv) }
+                _bootstrapAllocator();
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                exit(code);
+            }
+        }
+    // gets a little different here, mainCRTStrtup calls main, then ExitProcess
+    // and gui apps use WinMainCRTStartup
+    WINDOWS:
+        extern("kernel32") u16* GetCommandLineW();
+        extern("kernel32") [[noret]] void ExitProcess(u32 code);
+
+        i32 main(i32 argc, u8** argv);
+
+        static u32 _wcsLen(const u16* s)
+        {
+            u32 n = 0;
+            while (s[n]) n++;
+            return n;
+        }
+
+        // UTF-16 (with surrogate pairs) to UTF-8, NUL-terminated
+        static void _wcsToUtf8(const u16* src, u8* dst)
+        {
+            u32 di = 0;
+            u32 si = 0;
+            while (src[si])
+            {
+                u32 cp = src[si];
+                if (cp >= 0xD800 && cp <= 0xDBFF &&
+                    src[si + 1] >= 0xDC00 && src[si + 1] <= 0xDFFF)
+                {
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (src[si + 1] - 0xDC00);
+                    si++;
+                }
+                if (cp < 0x80) dst[di++] = (u8)cp;
+                else if (cp < 0x800)
+                {
+                    dst[di++] = (u8)(0xC0 | (cp >> 6));
+                    dst[di++] = (u8)(0x80 | (cp & 0x3F));
+                }
+                else if (cp < 0x10000)
+                {
+                    dst[di++] = (u8)(0xE0 | (cp >> 12));
+                    dst[di++] = (u8)(0x80 | ((cp >> 6) & 0x3F));
+                    dst[di++] = (u8)(0x80 | (cp & 0x3F));
+                }
+                else
+                {
+                    dst[di++] = (u8)(0xF0 | (cp >> 18));
+                    dst[di++] = (u8)(0x80 | ((cp >> 12) & 0x3F));
+                    dst[di++] = (u8)(0x80 | ((cp >> 6) & 0x3F));
+                    dst[di++] = (u8)(0x80 | (cp & 0x3F));
+                }
+                si++;
+            }
+            dst[di] = 0;
+        }
+
+        static u8** _splitCmdline(u8* cmd, i32* argcOut)
+        {
+            u32 n = 0;
+            while (cmd[n]) n++;
+            u8** argv = mman.alloc<u8*>(n + 1);
+            i32 argc = 0;
+            u32 r = 0;
+            u32 w = 0;
+            while (true)
+            {
+                while (cmd[r] == ' ' || cmd[r] == '\t') r++;
+                if (!cmd[r]) break;
+                argv[argc] = cmd + w;
+                argc++;
+                bool inQuotes = false;
+                while (true)
+                {
+                    u8 c = cmd[r];
+                    if (c == 0) break;
+                    if (c == '"')
+                    {
+                        inQuotes = !inQuotes;
+                        r++;
+                        continue;
+                    }
+                    if (c == ' ' || c == '\t')
+                    {
+                        if (!inQuotes) break;
+                        cmd[w++] = c;
+                        r++;
+                        continue;
+                    }
+                    if (c == '\\')
+                    {
+                        u32 bs = 0;
+                        while (cmd[r] == '\\') { bs++; r++; }
+                        u32 pairs = bs / 2;
+                        if (cmd[r] == '"')
+                        {
+                            for (u32 k = 0; k < pairs; k++) cmd[w++] = '\\';
+                            if (bs % 2 == 0)
+                            {
+                                inQuotes = !inQuotes;
+                                r++;
+                            }
+                            else
+                            {
+                                cmd[w++] = '"';
+                                r++;
+                            }
+                        }
+                        else
+                        {
+                            for (u32 k = 0; k < bs; k++) cmd[w++] = '\\';
+                        }
+                        continue;
+                    }
+                    cmd[w++] = c;
+                    r++;
+                }
+                cmd[w] = 0;
+                w++;
+            }
+            argv[argc] = null;
+            *argcOut = argc;
+            return argv;
+        }
+
+        static u8** _buildArgs(i32* argcOut)
+        {
+            u16* wcmd = GetCommandLineW();
+            if (!wcmd)
+            {
+                *argcOut = 0;
+                return null;
+            }
+            u32 n = _wcsLen(wcmd);
+            u8* cmd = mman.alloc<u8>(n * 3 + 1);
+            _wcsToUtf8(wcmd, cmd);
+            return _splitCmdline(cmd, argcOut);
+        }
+
+        flag (ARCH) {
+        x86_64:
+            [[noret]] void mainCRTStartup()
+            {
+                _bootstrapAllocator();
+                i32 argc = 0;
+                u8** argv = _buildArgs(&argc);
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                ExitProcess((u32)code);
+            }
+        x86:
+        // same pattern, stdcall/fastcall
+            [[noret]] void mainCRTStartup()
+            {
+                _bootstrapAllocator();
+                i32 argc = 0;
+                u8** argv = _buildArgs(&argc);
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                ExitProcess((u32)code);
+            }
+        arm64:
+            [[noret]] void mainCRTStartup()
+            {
+                _bootstrapAllocator();
+                i32 argc = 0;
+                u8** argv = _buildArgs(&argc);
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                ExitProcess((u32)code);
+            }
+        arm32:
+            [[noret]] void mainCRTStartup()
+            {
+                _bootstrapAllocator();
+                i32 argc = 0;
+                u8** argv = _buildArgs(&argc);
+                i32 code = main(argc, argv);
+                _teardownAllocator();
+                ExitProcess((u32)code);
+            }
+        }
+    default:
+        void _start()
+        {
+            loop {}
+        }
+}

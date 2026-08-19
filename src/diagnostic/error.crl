@@ -1,4 +1,0 @@
-mod l_err = import("lex_err");
-mod p_err = import("parse_err");
-mod s_err = import("sem_err");
-mod b_err = import("build_err");

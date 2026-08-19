@@ -1,0 +1,5 @@
+pub struct Foo
+@[[no_drop]]
+{
+    u64 flag;
+}

@@ -1,575 +1,1473 @@
-// Recursive-descent parser for Coral (clean re-port of py/parser.py).
-// Produces the flat tagged AST defined in ast/ast.crl. No exceptions:
-// backtracking is done by saving/restoring self->pos; parse methods return
-// null on failure and set self->hadError with a message.
+// src2/parser.crl — port of py/parser.py. Recursive descent.
+// Attributes: file-level @[[...]] are skipped, decl-level [[...]] are
+// consumed and recorded (only "noret" has an effect today).
 
 mod mman = import("std/memory/mman.crl");
 mod str = import("std/text/string.crl");
-mod libc = import("std/platform/libc.crl");
-mod tok = import("token");
+mod tok = import("token.crl");
 mod ast = import("ast/ast.crl");
 
-// growable, type-erased vector used for every node list
-pub struct Vec
+// ---- token ids (TOK_ANON_FIRST=6 + ANON_TERMS index; see token.crl)
+const u32 T_MOD = 6;
+const u32 T_IMPORT = 7;
+const u32 T_PUB = 8;
+const u32 T_STATIC = 9;
+const u32 T_INLINE = 10;
+const u32 T_STRUCT = 11;
+const u32 T_ENUM = 12;
+const u32 T_TRAIT = 13;
+const u32 T_CONST = 14;
+const u32 T_VAR = 15;
+const u32 T_TYPEDEF = 17;
+const u32 T_DISTINCT = 18;
+const u32 T_EXTERN = 19;
+const u32 T_IF = 20;
+const u32 T_ELSE = 21;
+const u32 T_WHILE = 22;
+const u32 T_FOR = 23;
+const u32 T_LOOP = 24;
+const u32 T_SWITCH = 25;
+const u32 T_CASE = 26;
+const u32 T_DEFAULT = 27;
+const u32 T_BREAK = 28;
+const u32 T_CONTINUE = 29;
+const u32 T_RETURN = 30;
+const u32 T_DEFER = 31;
+const u32 T_COMPTIME = 32;
+const u32 T_FLAG = 33;
+const u32 T_ASM = 34;
+const u32 T_VOLATILE = 35;
+const u32 T_SIZEOF = 36;
+const u32 T_TRUE = 37;
+const u32 T_FALSE = 38;
+const u32 T_NULL = 39;
+const u32 T_SELF = 40;
+const u32 T_I8 = 41;
+const u32 T_I16 = 42;
+const u32 T_I32 = 43;
+const u32 T_I64 = 44;
+const u32 T_U8 = 45;
+const u32 T_U16 = 46;
+const u32 T_U32 = 47;
+const u32 T_U64 = 48;
+const u32 T_F32 = 49;
+const u32 T_F64 = 50;
+const u32 T_BOOL = 51;
+const u32 T_CHAR = 52;
+const u32 T_VOID = 53;
+const u32 T_ISIZE = 54;
+const u32 T_USIZE = 55;
+const u32 T_SHL_EQ = 56;
+const u32 T_SHR_EQ = 57;
+const u32 T_ELLIPSIS = 58;
+const u32 T_PLUS_EQ = 60;
+const u32 T_MINUS_EQ = 61;
+const u32 T_STAR_EQ = 62;
+const u32 T_SLASH_EQ = 63;
+const u32 T_PERCENT_EQ = 64;
+const u32 T_AMP_EQ = 65;
+const u32 T_PIPE_EQ = 66;
+const u32 T_CARET_EQ = 67;
+const u32 T_EQ = 68;
+const u32 T_NE = 69;
+const u32 T_BANG_LT = 70;
+const u32 T_LE = 71;
+const u32 T_GE = 72;
+const u32 T_AND = 73;
+const u32 T_OR = 74;
+const u32 T_SHL = 75;
+const u32 T_SHR = 76;
+const u32 T_INC = 77;
+const u32 T_DEC = 78;
+const u32 T_ARROW = 79;
+const u32 T_COLON_COLON = 80;
+const u32 T_ASSIGN = 81;
+const u32 T_LT = 82;
+const u32 T_GT = 83;
+const u32 T_BANG = 84;
+const u32 T_TILDE = 85;
+const u32 T_HASH = 86;
+const u32 T_PLUS = 87;
+const u32 T_MINUS = 88;
+const u32 T_STAR = 89;
+const u32 T_SLASH = 90;
+const u32 T_PERCENT = 91;
+const u32 T_AMP = 92;
+const u32 T_PIPE = 93;
+const u32 T_CARET = 94;
+const u32 T_DOT = 95;
+const u32 T_COMMA = 96;
+const u32 T_COLON = 97;
+const u32 T_SEMI = 98;
+const u32 T_QUESTION = 99;
+const u32 T_AT = 100;
+const u32 T_LPAREN = 101;
+const u32 T_RPAREN = 102;
+const u32 T_LBRACE = 103;
+const u32 T_RBRACE = 104;
+const u32 T_LBRACKET = 105;
+const u32 T_RBRACKET = 106;
+
+// legacy single-token attributes (@[forced_unsafe_cast], @no_null, ...)
+const u32 T_ATTR_MIN = 108;
+const u32 T_ATTR_MAX = 115;
+
+// ---- operator precedence (higher binds tighter)
+const u32 P_ASSIGN = 0;
+const u32 P_TERNARY = 1;
+const u32 P_OR = 2;
+const u32 P_AND = 3;
+const u32 P_BITOR = 4;
+const u32 P_BITXOR = 5;
+const u32 P_BITAND = 6;
+const u32 P_EQ = 7;
+const u32 P_CMP = 8;
+const u32 P_SHIFT = 9;
+const u32 P_ADD = 10;
+const u32 P_MUL = 11;
+const u32 P_UNARY = 12;
+const u32 P_POSTFIX = 13;
+const u32 P_PRIMARY = 14;
+const u32 NO_PREC = 200;
+
+struct CtxEntry
 {
-    u8* data;
-    u32 len;
-    u32 cap;
-    u32 elem;
+    u32 kind;
+    str.strView name;
+    str.strView name2;
+};
+
+const u32 CTX_STRUCT = 0;
+const u32 CTX_ENUM = 1;
+const u32 CTX_TRAIT = 2;
+const u32 CTX_FLAG = 3;
+const u32 CTX_FUNC = 4;
+const u32 CTX_METHODS = 5;
+const u32 CTX_TRAITIMPL = 6;
+const u32 CTX_DECL = 7;
+
+struct Mark
+{
+    u32 pos;
+    u32 nctx;
+    bool wasErr;
+    u32 errLen;
+    u32 ctxLen;
+};
+
+bool vEq(str.strView a, const char* b)
+{
+    u32 i = 0;
+    while (b[i] != 0)
+    {
+        if (i >= a.len || a.ptr[i] != b[i]) return false;
+        i++;
+    }
+    return i == a.len;
 }
 
-pub void vecInit(Vec* v, u32 elem)
+u32 assignOpPrec(u32 tid)
 {
-    v->data = null;
-    v->len = 0;
-    v->cap = 0;
-    v->elem = elem;
+    if (tid == T_ASSIGN || tid == T_PLUS_EQ || tid == T_MINUS_EQ || tid == T_STAR_EQ
+     || tid == T_SLASH_EQ || tid == T_PERCENT_EQ || tid == T_AMP_EQ || tid == T_PIPE_EQ
+     || tid == T_CARET_EQ || tid == T_SHL_EQ || tid == T_SHR_EQ) return P_ASSIGN;
+    return NO_PREC;
 }
 
-pub void* vecPush(Vec* v, void* item)
+str.strView assignOpText(u32 tid)
 {
-    if (v->data == null)
+    switch (tid)
     {
-        v->cap = 8;
-        v->data = mman.alloc<u8>(v->cap * v->elem);
+    case T_ASSIGN: return str.strView::fromCstr("=");
+    case T_PLUS_EQ: return str.strView::fromCstr("+=");
+    case T_MINUS_EQ: return str.strView::fromCstr("-=");
+    case T_STAR_EQ: return str.strView::fromCstr("*=");
+    case T_SLASH_EQ: return str.strView::fromCstr("/=");
+    case T_PERCENT_EQ: return str.strView::fromCstr("%=");
+    case T_AMP_EQ: return str.strView::fromCstr("&=");
+    case T_PIPE_EQ: return str.strView::fromCstr("|=");
+    case T_CARET_EQ: return str.strView::fromCstr("^=");
+    case T_SHL_EQ: return str.strView::fromCstr("<<=");
+    case T_SHR_EQ: return str.strView::fromCstr(">>=");
     }
-    else if (v->len >= v->cap)
+    return str.strView::empty();
+}
+
+u32 binOpPrec(u32 tid)
+{
+    switch (tid)
     {
-        u32 nc = v->cap * 2;
-        u8* nd = mman.alloc<u8>(nc * v->elem);
-        libc.memcpy(nd, v->data, v->len * v->elem);
-        mman.dealloc<u8>(v->data);
-        v->data = nd;
-        v->cap = nc;
+    case T_OR: return P_OR;
+    case T_AND: return P_AND;
+    case T_PIPE: return P_BITOR;
+    case T_CARET: return P_BITXOR;
+    case T_AMP: return P_BITAND;
+    case T_EQ: return P_EQ;
+    case T_NE: return P_EQ;
+    case T_LT: return P_CMP;
+    case T_LE: return P_CMP;
+    case T_GT: return P_CMP;
+    case T_GE: return P_CMP;
+    case T_SHL: return P_SHIFT;
+    case T_SHR: return P_SHIFT;
+    case T_PLUS: return P_ADD;
+    case T_MINUS: return P_ADD;
+    case T_STAR: return P_MUL;
+    case T_SLASH: return P_MUL;
+    case T_PERCENT: return P_MUL;
     }
-    u8* slot = v->data + v->len * v->elem;
-    libc.memcpy(slot, item, v->elem);
-    v->len++;
-    return slot;
+    return NO_PREC;
+}
+
+str.strView binOpText(u32 tid)
+{
+    switch (tid)
+    {
+    case T_OR: return str.strView::fromCstr("||");
+    case T_AND: return str.strView::fromCstr("&&");
+    case T_PIPE: return str.strView::fromCstr("|");
+    case T_CARET: return str.strView::fromCstr("^");
+    case T_AMP: return str.strView::fromCstr("&");
+    case T_EQ: return str.strView::fromCstr("==");
+    case T_NE: return str.strView::fromCstr("!=");
+    case T_LT: return str.strView::fromCstr("<");
+    case T_LE: return str.strView::fromCstr("<=");
+    case T_GT: return str.strView::fromCstr(">");
+    case T_GE: return str.strView::fromCstr(">=");
+    case T_SHL: return str.strView::fromCstr("<<");
+    case T_SHR: return str.strView::fromCstr(">>");
+    case T_PLUS: return str.strView::fromCstr("+");
+    case T_MINUS: return str.strView::fromCstr("-");
+    case T_STAR: return str.strView::fromCstr("*");
+    case T_SLASH: return str.strView::fromCstr("/");
+    case T_PERCENT: return str.strView::fromCstr("%");
+    }
+    return str.strView::empty();
+}
+
+bool prefixOpText(u32 tid, str.strView* out)
+{
+    switch (tid)
+    {
+    case T_PLUS: *out = str.strView::fromCstr("+"); return true;
+    case T_MINUS: *out = str.strView::fromCstr("-"); return true;
+    case T_BANG: *out = str.strView::fromCstr("!"); return true;
+    case T_TILDE: *out = str.strView::fromCstr("~"); return true;
+    case T_STAR: *out = str.strView::fromCstr("*"); return true;
+    case T_AMP: *out = str.strView::fromCstr("&"); return true;
+    case T_INC: *out = str.strView::fromCstr("++"); return true;
+    case T_DEC: *out = str.strView::fromCstr("--"); return true;
+    }
+    return false;
 }
 
 pub struct Parser
 {
     tok.LexTok* toks;
-    u32 ntoks;
+    u32 n;
     u32 pos;
-    str.strView src;
     str.strView filename;
-    bool hadError;
-    str.strView errMsg;
+    str.strView source;
+    CtxEntry ctx[8];
+    u32 nctx;
+    bool errored;
     u32 errLine;
     u32 errCol;
-    str.strView errCtx;
-    bool gtgt;   // '>>' already consumed a closing '>'
-    Vec ctx;     // str.strView* stack of context labels
+    str.String errMsg;
+    str.String errCtx;
+    str.strView attrs[8];
+    u32 nattrs;
+    bool gtgtConsumed;
+    ast.Decl** decls;
+    u32 ndecls;
+    u32 declCap;
 }
 
-pub u32 K(str.strView s) { return tok.terminalId(s); }
+// ---- token access
 
-pub str.strView tokText(Parser* self, u32 idx)
+tok.LexTok* peekTok(u32 off)
 {
-    tok.LexTok* t = &self->toks[idx];
-    return str.strView::fromParts(self->src.ptr + t->start, t->len);
+    u32 i = self.pos + off;
+    if (i >= self.n) i = self.n - 1;
+    return &self.toks[i];
 }
 
-pub bool isTypeKw(u32 id)
+bool check(u32 t)
 {
-    u32 lo = tok.terminalId(str.strView::fromCstr("i8"));
-    u32 hi = tok.terminalId(str.strView::fromCstr("usize"));
-    return id >= lo && id <= hi;
+    return self.peekTok(0)->id == t;
 }
 
-pub void pInit(Parser* self, tok.LexTok* toks, u32 ntoks, str.strView src, str.strView filename)
+tok.LexTok* advance()
 {
-    self->toks = toks;
-    self->ntoks = ntoks;
-    self->pos = 0;
-    self->src = src;
-    self->filename = filename;
-    self->hadError = false;
-    self->errMsg = str.strView::empty();
-    self->errLine = 0;
-    self->errCol = 0;
-    self->errCtx = str.strView::empty();
-    self->gtgt = false;
-    vecInit(&self->ctx, sizeof(str.strView));
+    tok.LexTok* t = &self.toks[self.pos];
+    if (self.pos + 1 < self.n) self.pos++;
+    return t;
 }
 
-pub void pError(Parser* self, str.strView msg)
+str.strView text(tok.LexTok* t)
 {
-    if (self->hadError) return;
-    self->hadError = true;
-    self->errMsg = msg;
-    if (self->pos < self->ntoks)
+    return str.strView::fromParts(self.source.ptr + t->start, t->len);
+}
+
+str.strView curText()
+{
+    return self.text(self.peekTok(0));
+}
+
+bool isTypeTok(tok.LexTok* t)
+{
+    u32 id = t->id;
+    return id >= T_I8 && id <= T_USIZE;
+}
+
+bool isNameTok(tok.LexTok* t)
+{
+    return t->id == T_IDENT || self.isTypeTok(t);
+}
+
+// span of source between token start at byte `s` and byte after token `e`
+str.strView span(u32 s, u32 e)
+{
+    return str.strView::fromParts(self.source.ptr + s, e - s);
+}
+
+// ---- context stack
+
+void ctxPush(u32 kind, str.strView name, str.strView name2)
+{
+    if (self.nctx < 8)
     {
-        tok.LexTok* t = &self->toks[self->pos];
-        self->errLine = t->row;
-        self->errCol = t->col;
+        self.ctx[self.nctx].kind = kind;
+        self.ctx[self.nctx].name = name;
+        self.ctx[self.nctx].name2 = name2;
+        self.nctx++;
     }
-    else if (self->ntoks > 0)
+}
+
+void ctxPop()
+{
+    if (self.nctx > 0) self.nctx--;
+}
+
+void appendCtxLabel(str.String* out, CtxEntry* e)
+{
+    if (e->kind == CTX_STRUCT) out->pushView(str.strView::fromCstr("struct "));
+    else if (e->kind == CTX_ENUM) out->pushView(str.strView::fromCstr("enum "));
+    else if (e->kind == CTX_TRAIT) out->pushView(str.strView::fromCstr("trait "));
+    else if (e->kind == CTX_FLAG) out->pushView(str.strView::fromCstr("flag "));
+    else if (e->kind == CTX_FUNC) out->pushView(str.strView::fromCstr("function "));
+    else if (e->kind == CTX_METHODS) out->pushView(str.strView::fromCstr("methods of "));
+    else if (e->kind == CTX_TRAITIMPL) out->pushView(str.strView::fromCstr("trait impl "));
+    else out->pushView(str.strView::fromCstr("declaration of "));
+    out->pushView(e->name);
+    if (e->name2.len > 0)
     {
-        tok.LexTok* t = &self->toks[self->ntoks - 1];
-        self->errLine = t->row;
-        self->errCol = t->col;
+        out->pushView(str.strView::fromCstr(" :: "));
+        out->pushView(e->name2);
     }
 }
 
-pub u32 peekId(Parser* self, u32 off)
+// ---- errors
+
+void setErrAt(tok.LexTok* t, str.String* msg)
 {
-    u32 i = self->pos + off;
-    if (i >= self->ntoks) return tok.TOK_EOF;
-    return self->toks[i].id;
-}
-
-pub bool ck(Parser* self, str.strView kw) { return peekId(self, 0) == K(kw); }
-pub bool ckAt(Parser* self, u32 off, str.strView kw) { return peekId(self, off) == K(kw); }
-
-pub bool isTypeName(Parser* self)
-{
-    u32 id = peekId(self, 0);
-    return id == tok.TOK_IDENT || isTypeKw(id) || id == K(str.strView::fromCstr("self"));
-}
-
-pub void advance(Parser* self) { if (self->pos < self->ntoks) self->pos++; }
-
-pub void skipSemicolons(Parser* self)
-{
-    while (ck(self, str.strView::fromCstr(";"))) advance(self);
-}
-
-pub str.strView expectIdentOrType(Parser* self)
-{
-    if (isTypeName(self))
+    if (self.errored) return;
+    self.errored = true;
+    self.errLine = t->row;
+    self.errCol = t->col;
+    self.errMsg.free();
+    self.errMsg = str.String::new();
+    if (msg->len > 0)
     {
-        str.strView t = tokText(self, self->pos);
-        advance(self);
-        return t;
+        for (u64 i = 0; i < msg->len; i++) self.errMsg.pushChar(msg->ptr[i]);
     }
-    pError(self, str.strView::fromCstr("expected a name (identifier or type)"));
+    self.errCtx.free();
+    self.errCtx = str.String::new();
+    if (self.nctx > 0)
+    {
+        u32 base = 0;
+        if (self.nctx > 3) base = self.nctx - 3;
+        for (u32 i = base; i < self.nctx; i++)
+        {
+            if (i > base) self.errCtx.pushView(str.strView::fromCstr(" \xe2\x86\x92 "));
+            self.appendCtxLabel(&self.errCtx, &self.ctx[i]);
+        }
+    }
+}
+
+void errorMsg(const char* m)
+{
+    str.String s = str.String::new();
+    s.pushView(str.strView::fromCstr(m));
+    self.setErrAt(self.peekTok(0), &s);
+    s.free();
+}
+
+void errorTok(tok.LexTok* t, const char* m)
+{
+    str.String s = str.String::new();
+    s.pushView(str.strView::fromCstr(m));
+    self.setErrAt(t, &s);
+    s.free();
+}
+
+void tokenDisplayStr(str.String* s, tok.LexTok* t)
+{
+    if (t->id == tok.TOK_EOF)
+    {
+        s->pushView(str.strView::fromCstr("end of file"));
+    }
+    else
+    {
+        s->pushView(str.strView::fromCstr("'"));
+        s->pushView(self.text(t));
+        s->pushView(str.strView::fromCstr("'"));
+    }
+}
+
+// expect a specific token; on mismatch emit error, do not advance
+bool expect(u32 t)
+{
+    if (self.check(t)) { self.advance(); return true; }
+    str.String s = str.String::new();
+    s.pushView(str.strView::fromCstr("expected '"));
+    s.pushView(self.text(self.peekTok(0)));
+    s.pushView(str.strView::fromCstr("'..."));
+    // placeholder replaced below
+    s.free();
+    self.errExpectTok(t);
+    return false;
+}
+
+void errExpectTok(u32 want)
+{
+    str.String s = str.String::new();
+    tok.LexTok* got = self.peekTok(0);
+    if (want == T_GT) s.pushView(str.strView::fromCstr("expected '>'"));
+    else if (want == T_SEMI) s.pushView(str.strView::fromCstr("expected ';'"));
+    else if (want == T_RPAREN) s.pushView(str.strView::fromCstr("expected ')'"));
+    else if (want == T_RBRACE) s.pushView(str.strView::fromCstr("expected '}'"));
+    else if (want == T_LBRACE) s.pushView(str.strView::fromCstr("expected '{'"));
+    else if (want == T_LPAREN) s.pushView(str.strView::fromCstr("expected '('"));
+    else if (want == T_RBRACKET) s.pushView(str.strView::fromCstr("expected ']'"));
+    else if (want == T_LBRACKET) s.pushView(str.strView::fromCstr("expected '['"));
+    else if (want == T_COLON) s.pushView(str.strView::fromCstr("expected ':'"));
+    else if (want == T_COMMA) s.pushView(str.strView::fromCstr("expected ','"));
+    else if (want == T_ASSIGN) s.pushView(str.strView::fromCstr("expected '='"));
+    else if (want == T_IDENT || want == T_SELF) s.pushView(str.strView::fromCstr("expected a name"));
+    else
+    {
+        s.pushView(str.strView::fromCstr("expected token"));
+    }
+    s.pushView(str.strView::fromCstr(", found "));
+    self.tokenDisplayStr(&s, got);
+    self.setErrAt(got, &s);
+    s.free();
+}
+
+// expect an identifier or a type keyword (used for names)
+str.strView expectIdent()
+{
+    tok.LexTok* t = self.peekTok(0);
+    if (self.isNameTok(t) || t->id == T_SELF)
+    {
+        self.advance();
+        return self.text(t);
+    }
+    str.String s = str.String::new();
+    s.pushView(str.strView::fromCstr("expected a name, found "));
+    self.tokenDisplayStr(&s, t);
+    self.setErrAt(t, &s);
+    s.free();
     return str.strView::empty();
 }
 
-// Program
-
-pub ast.Program* parseProgram(Parser* self)
+// expect a string literal, returns contents without quotes
+str.strView expectString()
 {
-    Vec dv;
-    vecInit(&dv, sizeof(ast.Decl*));
-    while (!ck(self, str.strView::fromCstr("EOF")) && !ck(self, str.strView::fromCstr("}")))
+    tok.LexTok* t = self.peekTok(0);
+    if (t->id == tok.TOK_STR)
     {
-        skipSemicolons(self);
-        if (ck(self, str.strView::fromCstr("EOF")) || ck(self, str.strView::fromCstr("}")))
-            break;
-        ast.Decl* d = parseDecl(self);
-        if (self->hadError) { ast.freeProgram(finalizeProgram(&dv)); return null; }
-        if (d != null) vecPush(&dv, (void*)&d);
-        skipSemicolons(self);
+        self.advance();
+        u64 start = t->start;
+        u64 len = t->len;
+        if (len >= 2) return str.strView::fromParts(self.source.ptr + start + 1, len - 2);
+        return str.strView::fromParts(self.source.ptr + start, len);
     }
-    return finalizeProgram(&dv);
+    str.String s = str.String::new();
+    s.pushView(str.strView::fromCstr("expected a string literal, found "));
+    self.tokenDisplayStr(&s, t);
+    self.setErrAt(t, &s);
+    s.free();
+    return str.strView::empty();
 }
 
-pub ast.Program* finalizeProgram(Vec* dv)
+void skipSemicolons()
 {
-    ast.Program* p = mman.alloc<ast.Program>(1);
-    p->decls = (ast.Decl**)dv->data;
-    p->ndecls = dv->len;
-    p->filename = str.strView::empty();
-    return p;
+    while (self.check(T_SEMI)) self.advance();
 }
 
-// Declarations
+// ---- mark / rewind
 
-pub ast.Decl* parseDecl(Parser* self)
+Mark mark()
 {
-    skipSemicolons(self);
-    if (ck(self, str.strView::fromCstr("EOF"))) return null;
+    Mark m;
+    m.pos = self.pos;
+    m.nctx = self.nctx;
+    m.wasErr = self.errored;
+    m.errLen = self.errMsg.len;
+    m.ctxLen = self.errCtx.len;
+    return m;
+}
 
-    // attributes: @unsafe / @[...] / @name  -> skipped
-    if (ck(self, str.strView::fromCstr("@unsafe"))) { advance(self); return null; }
-    if (ck(self, str.strView::fromCstr("@")))
+void rewind(Mark m)
+{
+    self.pos = m.pos;
+    self.nctx = m.nctx;
+    if (m.wasErr) return;
+    if (self.errored)
     {
-        advance(self);
-        if (ck(self, str.strView::fromCstr("[")))
+        self.errored = false;
+        self.errMsg.free();
+        self.errMsg = str.String::new();
+        self.errCtx.free();
+        self.errCtx = str.String::new();
+    }
+}
+
+void seekPos()
+{
+    // no-op: pos only restored via rewind(m)
+}
+
+// ---- attributes
+
+void skipAttrBrackets()
+{
+    while (!self.check(T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
+    if (self.check(T_RBRACKET)) self.advance();
+    if (self.check(T_RBRACKET)) self.advance();
+}
+
+// file-level attributes: @[[...]], @[...], legacy single-token @attrs.
+// Never attached to the next decl.
+void skipFileAttrs()
+{
+    while (true)
+    {
+        if (self.check(T_AT))
         {
-            advance(self);
-            while (!ck(self, str.strView::fromCstr("]")) && !ck(self, str.strView::fromCstr("EOF")))
-                advance(self);
-            if (ck(self, str.strView::fromCstr("]"))) advance(self);
-            skipSemicolons(self);
-            return null;
+            self.advance();
+            if (self.check(T_LBRACKET) && self.peekTok(1)->id == T_LBRACKET)
+            {
+                self.advance();
+                self.advance();
+                self.skipAttrBrackets();
+            }
+            else if (self.check(T_LBRACKET))
+            {
+                self.advance();
+                while (!self.check(T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
+                if (self.check(T_RBRACKET)) self.advance();
+            }
+            continue;
         }
-        if (isTypeName(self)) advance(self);
-        skipSemicolons(self);
-        return null;
+        u32 id = self.peekTok(0)->id;
+        if (id >= T_ATTR_MIN && id <= T_ATTR_MAX)
+        {
+            self.advance();
+            continue;
+        }
+        break;
     }
-
-    bool exported = false;
-    if (ck(self, str.strView::fromCstr("pub"))) { advance(self); exported = true; }
-    return parseDeclExported(self, exported);
 }
 
-pub ast.Decl* parseDeclExported(Parser* self, bool exported)
+bool hasAttr(const char* name)
 {
-    if (ck(self, str.strView::fromCstr("mod"))) return parseModuleDecl(self);
-    if (ck(self, str.strView::fromCstr("extern"))) return parseExternDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("static"))) { advance(self); return parseTypeFirstDecl(self, exported, true, false); }
-    if (ck(self, str.strView::fromCstr("inline"))) { advance(self); return parseTypeFirstDecl(self, exported, false, true); }
-    if (ck(self, str.strView::fromCstr("const"))) return parseConstDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("var"))) return parseVarDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("struct"))) return parseStructDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("enum"))) return parseEnumDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("trait"))) return parseTraitDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("typedef"))) return parseTypedefDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("distinct"))) return parseDistinctDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("compiler_fn"))) return parseCompilerFnDecl(self, exported);
-    if (ck(self, str.strView::fromCstr("flag"))) return parseFlagDecl(self, exported);
-    if (isTypeName(self)) return parseTypeFirstDecl(self, exported, false, false);
-    if (ck(self, str.strView::fromCstr("}"))) return null;
-    pError(self, str.strView::fromCstr("unexpected token in declaration"));
-    return null;
+    for (u32 i = 0; i < self.nattrs; i++)
+    {
+        if (vEq(self.attrs[i], name)) return true;
+    }
+    return false;
 }
 
-pub ast.Decl* parseModuleDecl(Parser* self)
+// decl-level attributes: [[name, name]] attached to the next declaration.
+void parseAttachedAttrs()
 {
-    advance(self);  // mod
-    str.strView alias = expectIdentOrType(self);
-    if (ck(self, str.strView::fromCstr("="))) advance(self);
-    if (ck(self, str.strView::fromCstr("import"))) advance(self);
-    if (ck(self, str.strView::fromCstr("("))) advance(self);
-    str.strView path = str.strView::empty();
-    if (peekId(self, 0) == tok.TOK_STR) { path = tokText(self, self->pos); advance(self); }
-    if (ck(self, str.strView::fromCstr(")"))) advance(self);
-    if (ck(self, str.strView::fromCstr(";"))) advance(self);
+    self.nattrs = 0;
+    while (self.check(T_LBRACKET) && self.peekTok(1)->id == T_LBRACKET)
+    {
+        self.advance();
+        self.advance();
+        while (!self.check(T_RBRACKET) && !self.check(tok.TOK_EOF))
+        {
+            if (self.check(T_COMMA)) { self.advance(); continue; }
+            if (self.check(T_IDENT) || self.check(T_SELF))
+            {
+                if (self.nattrs < 8) self.attrs[self.nattrs++] = self.text(self.peekTok(0));
+                self.advance();
+            }
+            else
+            {
+                self.advance();
+            }
+        }
+        self.skipAttrBrackets();
+    }
+}
+
+// ---- array helpers
+
+void growDeclArr(ast.Decl*** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    ast.Decl** na = mman.alloc<ast.Decl*>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<ast.Decl*>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+void growStmtArr(ast.Stmt*** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    ast.Stmt** na = mman.alloc<ast.Stmt*>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<ast.Stmt*>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+void growExprArr(ast.Expr*** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    ast.Expr** na = mman.alloc<ast.Expr*>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<ast.Expr*>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+void growTypeArr(ast.TypeExpr*** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    ast.TypeExpr** na = mman.alloc<ast.TypeExpr*>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<ast.TypeExpr*>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+void growParamArr(ast.Param** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    ast.Param* na = mman.alloc<ast.Param>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<ast.Param>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+void growStrArr(str.strView** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    str.strView* na = mman.alloc<str.strView>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<str.strView>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+void growCaseArr(ast.StmtCase*** arr, u32* n, u32* cap)
+{
+    if (*n < *cap) return;
+    u32 nc = *cap ? *cap * 2 : 8;
+    ast.StmtCase** na = mman.alloc<ast.StmtCase*>(nc);
+    for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
+    if (*arr) mman.dealloc<ast.StmtCase*>(*arr);
+    *arr = na;
+    *cap = nc;
+}
+
+// ---- node builders
+
+ast.TypeExpr* typeBase(u32 kind, str.strView name, u32 line, u32 col)
+{
+    ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
+    t->kind = kind;
+    t->name = name;
+    t->elem = null;
+    t->count = null;
+    t->args = null;
+    t->nargs = 0;
+    t->cargs = null;
+    t->ncargs = 0;
+    t->ret = null;
+    t->isConst = false;
+    t->line = line;
+    t->col = col;
+    return t;
+}
+
+ast.Expr* exprBase(u32 kind, u32 line, u32 col)
+{
+    ast.Expr* e = mman.alloc<ast.Expr>(1);
+    e->kind = kind;
+    e->text = str.strView::empty();
+    e->a = null;
+    e->b = null;
+    e->c = null;
+    e->args = null;
+    e->nargs = 0;
+    e->names = null;
+    e->type = null;
+    e->targs = null;
+    e->ntargs = 0;
+    e->post = false;
+    e->line = line;
+    e->col = col;
+    return e;
+}
+
+ast.Stmt* stmtBase(u32 kind, u32 line, u32 col)
+{
+    ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+    s->kind = kind;
+    s->text = str.strView::empty();
+    s->type = null;
+    s->a = null;
+    s->b = null;
+    s->c = null;
+    s->body = null;
+    s->body2 = null;
+    s->init = null;
+    s->stmts = null;
+    s->nstmts = 0;
+    s->cases = null;
+    s->ncases = 0;
+    s->defaultCase = null;
+    s->line = line;
+    s->col = col;
+    return s;
+}
+
+ast.Decl* declBase(u32 kind, u32 line, u32 col)
+{
     ast.Decl* d = mman.alloc<ast.Decl>(1);
-    d->kind = ast.DT_IMPORT;
-    d->name = alias;
-    d->text = path;
+    d->kind = kind;
+    d->name = str.strView::empty();
+    d->text = str.strView::empty();
+    d->type = null;
+    d->value = null;
     d->exported = false;
+    d->isStatic = false;
+    d->isInline = false;
+    d->isExtern = false;
+    d->noreturn = false;
+    d->isVar = false;
+    d->cc = str.strView::empty();
+    d->structName = str.strView::empty();
+    d->traitName = str.strView::empty();
+    d->generics = null;
+    d->ngenerics = 0;
+    d->fields = null;
+    d->nfields = 0;
+    d->variants = null;
+    d->nvariants = 0;
+    d->params = null;
+    d->nparams = 0;
+    d->variadic = false;
+    d->body = null;
+    d->decls = null;
+    d->ndecls = 0;
+    d->cases = null;
+    d->caseNames = null;
+    d->caseLens = null;
+    d->ncases = 0;
+    d->defaultBody = null;
+    d->ndeclDefault = 0;
+    d->line = line;
+    d->col = col;
     return d;
 }
 
-pub ast.Decl* parseExternDecl(Parser* self, bool exported)
+// ---- declarations
+
+void parseDecls()
 {
-    advance(self);  // extern
-    str.strView cc = str.strView::empty();
-    if (ck(self, str.strView::fromCstr("(")))
+    ast.Decl** arr = null;
+    u32 n = 0;
+    u32 cap = 0;
+    while (!self.check(tok.TOK_EOF) && !self.check(T_RBRACE))
     {
-        advance(self);
-        if (peekId(self, 0) == tok.TOK_STR) { cc = tokText(self, self->pos); advance(self); }
-        if (ck(self, str.strView::fromCstr(")"))) advance(self);
+        ast.Decl* outs[2];
+        u32 cnt = self.parseDecl(outs);
+        for (u32 i = 0; i < cnt; i++)
+        {
+            self.growDeclArr(&arr, &n, &cap);
+            arr[n++] = outs[i];
+        }
+        self.skipSemicolons();
     }
-    ast.TypeExpr* rt = parseType(self);
-    str.strView name = expectIdentOrType(self);
-    ast.Decl* d = mman.alloc<ast.Decl>(1);
-    d->kind = ast.DT_EXTERN;
-    d->name = name;
-    d->type = rt;
-    d->cc = cc;
-    d->exported = exported;
-    if (ck(self, str.strView::fromCstr("(")))
+    self.decls = arr;
+    self.ndecls = n;
+    self.declCap = cap;
+}
+
+// returns count written into outs (0..2)
+u32 parseDecl(ast.Decl* outs[2])
+{
+    self.skipSemicolons();
+    if (self.check(tok.TOK_EOF)) return 0;
+    self.skipFileAttrs();
+    self.parseAttachedAttrs();
+    bool exported = false;
+    if (self.check(T_PUB)) { self.advance(); exported = true; }
+    self.skipFileAttrs();
+    self.parseAttachedAttrs();
+    return self.parseDeclExported(outs, exported);
+}
+
+u32 parseDeclExported(ast.Decl* outs[2], bool exported)
+{
+    if (self.check(T_MOD))
     {
-        advance(self);
-        ast.Param* params = null;
-        u32 nparams = 0;
-        bool variadic = false;
-        parseParamList(self, &params, &nparams, &variadic);
-        if (ck(self, str.strView::fromCstr(")"))) advance(self);
-        if (ck(self, str.strView::fromCstr("!return"))) { advance(self); d->noreturn = true; }
-        if (ck(self, str.strView::fromCstr(";"))) advance(self);
+        outs[0] = self.parseModuleDecl(outs[1]);
+        return 2;
+    }
+    if (self.check(T_EXTERN))
+    {
+        outs[0] = self.parseExternDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_STATIC))
+    {
+        self.advance();
+        outs[0] = self.parseTypeFirstDecl(exported, true, false);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_INLINE))
+    {
+        self.advance();
+        outs[0] = self.parseTypeFirstDecl(exported, false, true);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_CONST))
+    {
+        outs[0] = self.parseConstDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_VAR))
+    {
+        outs[0] = self.parseVarDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_STRUCT))
+    {
+        outs[0] = self.parseStructDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_ENUM))
+    {
+        outs[0] = self.parseEnumDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_TRAIT))
+    {
+        outs[0] = self.parseTraitDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_TYPEDEF))
+    {
+        outs[0] = self.parseTypedefDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_DISTINCT))
+    {
+        outs[0] = self.parseDistinctDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_IDENT) && vEq(self.curText(), "compiler_fn"))
+    {
+        outs[0] = self.parseCompilerFnDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_FLAG))
+    {
+        outs[0] = self.parseFlagDecl(exported);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.isTypeTok(self.peekTok(0)) || self.check(T_IDENT))
+    {
+        outs[0] = self.parseTypeFirstDecl(exported, false, false);
+        return outs[0] ? 1 : 0;
+    }
+    if (self.check(T_RBRACE)) return 0;
+
+    str.String s = str.String::new();
+    s.pushView(str.strView::fromCstr("unexpected token "));
+    self.tokenDisplayStr(&s, self.peekTok(0));
+    self.setErrAt(self.peekTok(0), &s);
+    s.free();
+    return 0;
+}
+
+ast.Decl* parseModuleDecl(ast.Decl* importOut)
+{
+    tok.LexTok* t = self.advance();
+    str.strView alias = self.expectIdent();
+    if (self.errored) return null;
+    self.expect(T_ASSIGN);
+    if (self.check(T_IMPORT)) self.advance();
+    self.expect(T_LPAREN);
+    str.strView path = self.expectString();
+    self.expect(T_RPAREN);
+    self.expect(T_SEMI);
+    ast.Decl* d = self.declBase(ast.DT_MODULE, t->row, t->col);
+    d->name = alias;
+    d->text = path;
+    ast.Decl* di = self.declBase(ast.DT_IMPORT, t->row, t->col);
+    di->text = path;
+    di->name = alias;
+    importOut = di;
+    return d;
+}
+
+ast.Decl* parseExternDecl(bool exported)
+{
+    tok.LexTok* t = self.advance(); // 'extern'
+    str.strView cc = str.strView::empty();
+    if (self.check(T_LPAREN))
+    {
+        self.advance();
+        cc = self.expectString();
+        self.expect(T_RPAREN);
+    }
+    self.skipFileAttrs();
+    self.parseAttachedAttrs();
+    ast.TypeExpr* ret = self.parseType();
+    if (ret == null) self.errExpectTok(T_IDENT);
+    str.strView name = self.expectIdent();
+    if (self.errored) return null;
+    ast.Param* params = null;
+    u32 nparams = 0;
+    u32 pcap = 0;
+    bool variadic = false;
+    bool isVar = false;
+    if (self.check(T_LPAREN))
+    {
+        self.advance();
+        self.parseParamList(&params, &nparams, &pcap, &variadic);
+        self.expect(T_RPAREN);
+        self.expect(T_SEMI);
+        ast.Decl* d = self.declBase(ast.DT_EXTERN, self.peekTok(-1)->row, self.peekTok(-1)->col);
+        d->name = name;
+        d->type = ret;
         d->params = params;
         d->nparams = nparams;
         d->variadic = variadic;
-    }
-    else
-    {
-        if (ck(self, str.strView::fromCstr(";"))) advance(self);
-        d->isVar = true;
-    }
-    return d;
-}
-
-pub ast.Decl* parseConstDecl(Parser* self, bool exported)
-{
-    advance(self);  // const
-    u32 save = self->pos;
-    if (ck(self, str.strView::fromCstr("ident"))) { /* unreachable */ }
-    bool nextIsIdent = (peekId(self, 0) == tok.TOK_IDENT);
-    str.strView n1 = tokText(self, self->pos);
-    if (nextIsIdent && (ckAt(self, 1, str.strView::fromCstr("=")) ||
-        ckAt(self, 1, str.strView::fromCstr("[")) || ckAt(self, 1, str.strView::fromCstr(";"))))
-    {
-        advance(self);  // name
-        ast.TypeExpr* ta = null;
-        if (ck(self, str.strView::fromCstr("[")))
-        {
-            advance(self);
-            ast.Expr* sz = null;
-            if (!ck(self, str.strView::fromCstr("]"))) sz = parseExpr(self);
-            if (ck(self, str.strView::fromCstr("]"))) advance(self);
-            ta = mkArray(null, sz, self);
-        }
-        expectAssign(self);
-        ast.Expr* val = parseExpr(self);
-        if (ck(self, str.strView::fromCstr(";"))) advance(self);
-        ast.Decl* d = mman.alloc<ast.Decl>(1);
-        d->kind = ast.DT_CONST;
-        d->name = n1;
-        d->type = ta;
-        d->value = val;
+        d->cc = cc;
+        d->noreturn = self.hasAttr("noret");
         d->exported = exported;
         return d;
     }
-    // typed const: name : type = ...
-    self->pos = save;
-    ast.TypeExpr* ta = parseType(self);
-    str.strView name = expectIdentOrType(self);
-    expectAssign(self);
-    ast.Expr* val = parseExpr(self);
-    if (ck(self, str.strView::fromCstr(";"))) advance(self);
-    ast.Decl* d = mman.alloc<ast.Decl>(1);
-    d->kind = ast.DT_CONST;
-    d->name = name;
-    d->type = ta;
-    d->value = val;
-    d->exported = exported;
-    return d;
-}
-
-pub ast.Decl* parseVarDecl(Parser* self, bool exported)
-{
-    advance(self);  // var
-    str.strView name = expectIdentOrType(self);
-    ast.TypeExpr* ta = null;
-    if (ck(self, str.strView::fromCstr(":"))) { advance(self); ta = parseType(self); }
-    ast.Expr* val = null;
-    if (ck(self, str.strView::fromCstr("="))) { advance(self); val = parseExpr(self); }
-    if (ck(self, str.strView::fromCstr(";"))) advance(self);
-    ast.Decl* d = mman.alloc<ast.Decl>(1);
-    d->kind = ast.DT_VAR;
-    d->name = name;
-    d->type = ta;
-    d->value = val;
-    d->exported = exported;
-    return d;
-}
-
-pub void expectAssign(Parser* self)
-{
-    if (ck(self, str.strView::fromCstr("="))) advance(self);
-    else pError(self, str.strView::fromCstr("expected '='"));
-}
-
-// Types
-
-pub ast.TypeExpr* mkIdent(str.strView name, u32 line, u32 col)
-{
-    ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
-    t->kind = ast.TYP_IDENT;
-    t->name = name;
-    t->elem = null; t->count = null; t->args = null; t->nargs = 0;
-    t->cargs = null; t->ncargs = 0; t->ret = null; t->isConst = false;
-    t->line = line; t->col = col;
-    return t;
-}
-
-pub ast.TypeExpr* mkArray(ast.TypeExpr* base, ast.Expr* sz, Parser* self)
-{
-    ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
-    t->kind = ast.TYP_ARRAY;
-    t->elem = base;
-    t->count = sz;
-    t->args = null; t->nargs = 0; t->cargs = null; t->ncargs = 0;
-    t->ret = null; t->isConst = false;
-    t->line = 0; t->col = 0;
-    return t;
-}
-
-pub ast.TypeExpr* mkPtr(ast.TypeExpr* base, bool cnst, Parser* self)
-{
-    ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
-    t->kind = ast.TYP_PTR;
-    t->elem = base;
-    t->isConst = cnst;
-    t->count = null; t->args = null; t->nargs = 0; t->cargs = null; t->ncargs = 0;
-    t->ret = null; t->line = 0; t->col = 0;
-    return t;
-}
-
-pub ast.TypeExpr* mkGeneric(str.strView base, ast.TypeExpr** args, u32 nargs, ast.Expr** cargs, u32 ncargs)
-{
-    ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
-    t->kind = ast.TYP_GENERIC;
-    t->name = base;
-    t->args = args; t->nargs = nargs;
-    t->cargs = cargs; t->ncargs = ncargs;
-    t->elem = null; t->count = null; t->ret = null; t->isConst = false;
-    t->line = 0; t->col = 0;
-    return t;
-}
-
-pub ast.TypeExpr* parseType(Parser* self)
-{
-    self->gtgt = false;
-    u32 line = 0, col = 0;
-    if (self->pos < self->ntoks) { line = self->toks[self->pos].row; col = self->toks[self->pos].col; }
-    ast.TypeExpr* base = null;
-    u32 id = peekId(self, 0);
-    if (id == tok.TOK_IDENT || isTypeKw(id) || id == K(str.strView::fromCstr("void")))
+    else
     {
-        str.strView name = tokText(self, self->pos);
-        advance(self);
-        if (ck(self, str.strView::fromCstr("::")) || ck(self, str.strView::fromCstr(".")))
-        {
-            Vec parts;
-            vecInit(&parts, sizeof(str.strView));
-            vecPush(&parts, (void*)&name);
-            while (ck(self, str.strView::fromCstr("::")) || ck(self, str.strView::fromCstr(".")))
-            {
-                advance(self);
-                if (isTypeName(self)) { str.strView p = tokText(self, self->pos); vecPush(&parts, (void*)&p); advance(self); }
-                else break;
-            }
-            name = joinViews(&parts);
-        }
-        if (ck(self, str.strView::fromCstr("!<")) || ck(self, str.strView::fromCstr("<")))
-        {
-            bool bang = ck(self, str.strView::fromCstr("!<"));
-            advance(self);
-            ast.TypeExpr** args = null; ast.Expr** cargs = null;
-            u32 nargs = 0, ncargs = 0;
-            parseTypeArgs(self, &args, &nargs, &cargs, &ncargs);
-            base = mkGeneric(name, args, nargs, cargs, ncargs);
-        }
-        else base = mkIdent(name, line, col);
+        self.expect(T_SEMI);
+        ast.Decl* d = self.declBase(ast.DT_EXTERN, self.peekTok(-1)->row, self.peekTok(-1)->col);
+        d->name = name;
+        d->type = ret;
+        d->cc = cc;
+        d->noreturn = self.hasAttr("noret");
+        d->exported = exported;
+        d->isVar = true;
+        return d;
     }
-    else if (id == K(str.strView::fromCstr("self")))
+}
+
+ast.Decl* parseConstDecl(bool exported)
+{
+    tok.LexTok* t = self.advance();
+    Mark saved = self.mark();
+    bool nextIsIdent = self.check(T_IDENT);
+    bool isArr = nextIsIdent && (self.peekTok(1)->id == T_ASSIGN || self.peekTok(1)->id == T_LBRACKET || self.peekTok(1)->id == T_SEMI);
+    str.strView name = str.strView::empty();
+    ast.TypeExpr* typeAnno = null;
+    if (isArr)
     {
-        advance(self);
-        base = mkIdent(str.strView::fromCstr("self"), line, col);
-    }
-    else if (id == K(str.strView::fromCstr("(")))
-    {
-        advance(self);
-        if (isTypeName(self))
+        name = self.advance()->id == 1 ? self.text(self.peekTok(-1)) : str.strView::empty();
+        if (self.check(T_LBRACKET))
         {
-            ast.TypeExpr* rt = parseType(self);
-            Vec pt; vecInit(&pt, sizeof(ast.TypeExpr*));
-            if (ck(self, str.strView::fromCstr(")"))) advance(self);
-            if (ck(self, str.strView::fromCstr("(")))
-            {
-                advance(self);
-                while (!ck(self, str.strView::fromCstr(")")) && !ck(self, str.strView::fromCstr("EOF")))
-                {
-                    ast.TypeExpr* p = parseType(self);
-                    if (p == null) break;
-                    vecPush(&pt, (void*)&p);
-                    if (ck(self, str.strView::fromCstr(","))) advance(self);
-                }
-                if (ck(self, str.strView::fromCstr(")"))) advance(self);
-            }
-            ast.TypeExpr* f = mman.alloc<ast.TypeExpr>(1);
-            f->kind = ast.TYP_FUNC;
-            f->args = (ast.TypeExpr**)pt.data; f->nargs = pt.len;
-            f->ret = rt; f->elem = null; f->count = null; f->cargs = null; f->ncargs = 0;
-            f->isConst = false; f->line = line; f->col = col;
-            return f;
+            self.advance();
+            ast.Expr* arraySize = null;
+            if (!self.check(T_RBRACKET)) arraySize = self.parseExpr();
+            self.expect(T_RBRACKET);
+            typeAnno = self.typeBase(ast.TYP_ARRAY, str.strView::empty(), self.peekTok(-2)->row, self.peekTok(-2)->col);
+            typeAnno->elem = self.typeBase(ast.TYP_IDENT, str.strView::fromCstr("void"), self.peekTok(-2)->row, self.peekTok(-2)->col);
+            typeAnno->count = arraySize;
         }
-        pError(self, str.strView::fromCstr("expected type after ("));
-        return null;
     }
     else
     {
-        return null;
-    }
-
-    // pointers
-    bool cnst = false;
-    if (ck(self, str.strView::fromCstr("*"))) { advance(self); base = mkPtr(base, true, self); cnst = false; }
-    while (ck(self, str.strView::fromCstr("*"))) { advance(self); base = mkPtr(base, cnst, self); }
-
-    // function type: base(params)
-    if (ck(self, str.strView::fromCstr("(")) && base != null && !(base->kind == ast.TYP_GENERIC && self->gtgt))
-    {
-        advance(self);
-        Vec pt; vecInit(&pt, sizeof(ast.TypeExpr*));
-        while (!ck(self, str.strView::fromCstr(")")) && !ck(self, str.strView::fromCstr("EOF")))
+        typeAnno = self.parseType();
+        if (self.errored) return null;
+        if (typeAnno == null)
         {
-            ast.TypeExpr* p = parseType(self);
-            if (p == null) break;
-            vecPush(&pt, (void*)&p);
-            if (ck(self, str.strView::fromCstr(","))) advance(self);
+            self.errorMsg("expected a type in const declaration");
+            return null;
         }
-        if (ck(self, str.strView::fromCstr(")"))) advance(self);
-        ast.TypeExpr* f = mman.alloc<ast.TypeExpr>(1);
-        f->kind = ast.TYP_FUNC;
-        f->args = (ast.TypeExpr**)pt.data; f->nargs = pt.len;
-        f->ret = base; f->elem = null; f->count = null; f->cargs = null; f->ncargs = 0;
-        f->isConst = false; f->line = line; f->col = col;
-        base = f;
+        tok.LexTok* nameTok = self.peekTok(0);
+        if (!(self.check(T_IDENT) || self.check(T_SELF) || self.isTypeTok(nameTok)))
+        {
+            self.errExpectTok(T_IDENT);
+            return null;
+        }
+        name = self.text(self.peekTok(0));
+        self.advance();
+        if (self.check(T_LPAREN))
+        {
+            self.rewind(saved);
+            ast.Decl* outs[2];
+            outs[0] = self.parseTypeFirstDecl(exported, false, false);
+            return outs[0];
+        }
+        if (self.check(T_LBRACKET))
+        {
+            self.advance();
+            ast.Expr* arraySize = null;
+            if (!self.check(T_RBRACKET)) arraySize = self.parseExpr();
+            self.expect(T_RBRACKET);
+            typeAnno = self.typeBase(ast.TYP_ARRAY, str.strView::empty(), typeAnno->line, typeAnno->col);
+            typeAnno->elem = typeAnno;
+            typeAnno->count = arraySize;
+        }
     }
-    return base;
+    self.expect(T_ASSIGN);
+    ast.Expr* value = self.parseExpr();
+    self.expect(T_SEMI);
+    ast.Decl* d = self.declBase(ast.DT_CONST, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->type = typeAnno;
+    d->value = value;
+    d->exported = exported;
+    return d;
 }
 
-pub void parseTypeArgs(Parser* self, ast.TypeExpr*** args, u32* nargs, ast.Expr*** cargs, u32* ncargs)
+ast.Decl* parseVarDecl(bool exported)
 {
-    Vec ta; vecInit(&ta, sizeof(ast.TypeExpr*));
-    Vec ca; vecInit(&ca, sizeof(ast.Expr*));
-    while (!ck(self, str.strView::fromCstr(">")) && !ck(self, str.strView::fromCstr(">>"))
-           && !ck(self, str.strView::fromCstr("EOF")) && !self->gtgt)
+    tok.LexTok* t = self.advance();
+    str.strView name = self.expectIdent();
+    if (self.errored) return null;
+    ast.TypeExpr* typeAnno = null;
+    if (self.check(T_COLON))
     {
-        if (ck(self, str.strView::fromCstr(","))) { advance(self); continue; }
-        u32 s = self->pos;
-        ast.TypeExpr* t = parseType(self);
-        if (t != null) vecPush(&ta, (void*)&t);
+        self.advance();
+        typeAnno = self.parseType();
+    }
+    ast.Expr* value = null;
+    if (self.check(T_ASSIGN))
+    {
+        self.advance();
+        value = self.parseExpr();
+    }
+    self.expect(T_SEMI);
+    ast.Decl* d = self.declBase(ast.DT_VAR, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->type = typeAnno;
+    d->value = value;
+    d->exported = exported;
+    return d;
+}
+
+ast.Decl* parseStructDecl(bool exported)
+{
+    self.advance(); // 'struct'
+    str.strView name = self.expectIdent();
+    if (self.errored) return null;
+    self.ctxPush(CTX_STRUCT, name, str.strView::empty());
+    ast.Decl* d = self.parseStructDeclRest(exported, name);
+    self.ctxPop();
+    return d;
+}
+
+ast.Decl* parseStructDeclRest(bool exported, str.strView name)
+{
+    ast.TypeExpr** genericParams = null;
+    u32 ng = 0;
+    u32 gcap = 0;
+    if (self.check(T_LT))
+    {
+        self.advance();
+        self.parseGenericParamList(&genericParams, &ng, &gcap);
+        self.expect(T_GT);
+    }
+    self.skipFileAttrs();
+    self.parseAttachedAttrs();
+    self.expect(T_LBRACE);
+    ast.StructField* fields = null;
+    u32 nf = 0;
+    u32 fcap = 0;
+    ast.Decl** methods = null;
+    u32 nm = 0;
+    u32 mcap = 0;
+    while (!self.check(T_RBRACE) && !self.check(tok.TOK_EOF))
+    {
+        if (self.check(T_SEMI)) { self.advance(); continue; }
+        if (self.check(T_STATIC))
+        {
+            self.advance();
+            ast.Decl* method = self.parseFuncDecl(false, false, name, str.strView::empty());
+            if (method != null)
+            {
+                method->isStatic = true;
+                self.growDeclArr(&methods, &nm, &mcap);
+                methods[nm++] = method;
+            }
+            self.skipSemicolons();
+            continue;
+        }
+        if (self.isTypeTok(self.peekTok(0)) || self.check(T_IDENT) || self.check(T_CONST))
+        {
+            Mark saved = self.mark();
+            ast.TypeExpr* fieldType = self.parseTypeOrExprAsType();
+            if (self.errored || fieldType == null)
+            {
+                self.rewind(saved);
+                ast.Decl* method = self.parseFuncDecl(false, true, name, str.strView::empty());
+                if (method != null)
+                {
+                    self.growDeclArr(&methods, &nm, &mcap);
+                    methods[nm++] = method;
+                }
+                self.skipSemicolons();
+                continue;
+            }
+            tok.LexTok* ft = self.peekTok(0);
+            bool hasName = self.check(T_IDENT) || self.check(T_SELF) || self.isTypeTok(ft);
+            if (hasName)
+            {
+                strView fname = self.text(self.peekTok(0));
+                self.advance();
+                if (self.check(T_LPAREN) || self.check(T_LT) || self.check(T_BANG_LT))
+                {
+                    self.rewind(saved);
+                    ast.Decl* method = self.parseFuncDecl(false, true, name, str.strView::empty());
+                    if (method != null)
+                    {
+                        self.growDeclArr(&methods, &nm, &mcap);
+                        methods[nm++] = method;
+                    }
+                    self.skipSemicolons();
+                    continue;
+                }
+                ast.Expr* arraySize = null;
+                while (self.check(T_LBRACKET))
+                {
+                    self.advance();
+                    ast.Expr* dim = self.parseExpr();
+                    self.expect(T_RBRACKET);
+                    ast.TypeExpr* t = self.typeBase(ast.TYP_ARRAY, str.strView::empty(), fieldType->line, fieldType->col);
+                    t->elem = fieldType;
+                    t->count = dim;
+                    fieldType = t;
+                }
+                ast.StructField f;
+                f.name = fname;
+                f.type = fieldType;
+                self.growParamArr(&fields, &nf, &fcap);
+                fields[nf++] = f;
+                self.expect(T_SEMI);
+            }
+            else
+            {
+                self.rewind(saved);
+                ast.Decl* method = self.parseFuncDecl(false, true, name, str.strView::empty());
+                if (method != null)
+                {
+                    self.growDeclArr(&methods, &nm, &mcap);
+                    methods[nm++] = method;
+                }
+                self.skipSemicolons();
+            }
+        }
         else
         {
-            self->pos = s;
-            ast.Expr* e = parseExpr(self);
-            if (e != null) vecPush(&ca, (void*)&e);
-            else { pError(self, str.strView::fromCstr("expected type or expression in generic args")); break; }
+            ast.Decl* method = self.parseFuncDecl(false, true, name, str.strView::empty());
+            if (method != null)
+            {
+                self.growDeclArr(&methods, &nm, &mcap);
+                methods[nm++] = method;
+            }
+            self.skipSemicolons();
         }
-        if (ck(self, str.strView::fromCstr(","))) advance(self);
     }
-    finishGenericArgs(self);
-    *args = (ast.TypeExpr**)ta.data; *nargs = ta.len;
-    *cargs = (ast.Expr**)ca.data; *ncargs = ca.len;
+    self.expect(T_RBRACE);
+    ast.Decl* d = self.declBase(ast.DT_STRUCT, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->generics = null;
+    d->ngenerics = 0;
+    // generic names discarded by parseGenericParamList(&strView) form; keep 0
+    d->fields = fields;
+    d->nfields = nf;
+    d->decls = methods;
+    d->ndecls = nm;
+    d->exported = exported;
+    return d;
 }
 
-pub void finishGenericArgs(Parser* self)
+ast.Decl* parseEnumDecl(bool exported)
 {
-    if (self->gtgt) { self->gtgt = false; return; }
-    closeGeneric(self);
+    self.advance();
+    str.strView name = self.expectIdent();
+    if (self.errored) return null;
+    self.ctxPush(CTX_ENUM, name, str.strView::empty());
+    ast.Decl* d = self.parseEnumDeclRest(exported, name);
+    self.ctxPop();
+    return d;
 }
 
-pub void closeGeneric(Parser* self)
+ast.Decl* parseEnumDeclRest(bool exported, str.strView name)
 {
-    if (ck(self, str.strView::fromCstr(">"))) { advance(self); return; }
-    if (ck(self, str.strView::fromCstr(">>")))
+    self.expect(T_LBRACE);
+    ast.EnumVariant* variants = null;
+    u32 nv = 0;
+    u32 vcap = 0;
+    while (!self.check(T_RBRACE) && !self.check(tok.TOK_EOF))
     {
-        advance(self);
-        self->gtgt = true;
-        return;
+        tok.LexTok* vt = self.peekTok(0);
+        str.strView varName = self.expectIdent();
+        if (self.errored) return null;
+        if (self.check(T_LPAREN))
+        {
+            self.advance();
+            while (!self.check(T_RPAREN) && !self.check(tok.TOK_EOF))
+            {
+                ast.TypeExpr* pt = self.parseType();
+                if (self.check(T_COMMA)) self.advance();
+            }
+            self.expect(T_RPAREN);
+        }
+        ast.Expr* value = null;
+        if (self.check(T_ASSIGN))
+        {
+            self.advance();
+            value = self.parseExpr();
+        }
+        ast.EnumVariant v;
+        v.name = varName;
+        v.value = value;
+        self.growParamArr(&variants, &nv, &vcap);
+        variants[nv++] = v;
+        if (self.check(T_COMMA)) self.advance();
     }
-    pError(self, str.strView::fromCstr("expected '>' to close generic argument list"));
+    self.expect(T_RBRACE);
+    ast.Decl* d = self.declBase(ast.DT_ENUM, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->variants = variants;
+    d->nvariants = nv;
+    d->exported = exported;
+    return d;
 }
 
-pub str.strView joinViews(Vec* v)
+ast.Decl* parseTraitDecl(bool exported)
 {
-    // concatenate str.strViews with '::'
-    u32 total = 0;
-    for (u32 i = 0; i < v->len; i++)
+    self.advance();
+    str.strView name = self.expectIdent();
+    if (self.errored) return null;
+    self.ctxPush(CTX_TRAIT, name, str.strView::empty());
+    ast.Decl* d = self.parseTraitDeclRest(exported, name);
+    self.ctxPop();
+    return d;
+}
+
+ast.Decl* parseTraitDeclRest(bool exported, str.strView name)
+{
+    self.expect(T_LBRACE);
+    ast.Decl** methods = null;
+    u32 nm = 0;
+    u32 mcap = 0;
+    while (!self.check(T_RBRACE) && !self.check(tok.TOK_EOF))
     {
-        str.strView* s = (str.strView*)(v->data + i * sizeof(str.strView));
-        total += s->len;
-        if (i + 1 < v->len) total += 2;
+        if (self.check(T_SEMI)) { self.advance(); continue; }
+        tok.LexTok* rt = self.peekTok(0);
+        ast.TypeExpr* returnType = self.parseType();
+        if (returnType == null) { self.errExpectTok(T_IDENT); return null; }
+        str.strView methodName = self.expectIdent();
+        ast.TypeExpr** generics = null;
+        u32 ng = 0;
+        u32 gcap = 0;
+        if (self.check(T_BANG_LT))
+        {
+            self.advance();
+            self.parseGenericParamList(&generics, &ng, &gcap);
+            self.expect(T_GT);
+        }
+        self.expect(T_LPAREN);
+        ast.Param* params = null;
+        u32 nparams = 0;
+        u32 pcap = 0;
+        bool variadic = false;
+        self.parseParamList(&params, &nparams, &pcap, &variadic);
+        self.expect(T_RPAREN);
+        self.expect(T_SEMI);
+        ast.Decl* m = self.declBase(ast.DT_FUNC, rt->row, rt->col);
+        m->name = methodName;
+        m->type = returnType;
+        m->params = params;
+        m->nparams = nparams;
+        m->isExtern = true;
+        self.growDeclArr(&methods, &nm, &mcap);
+        methods[nm++] = m;
     }
-    u8* buf = mman.alloc<u8>(total);
-    u32 o = 0;
-    for (u32 i = 0; i < v->len; i++)
+    self.expect(T_RBRACE);
+    ast.Decl* d = self.declBase(ast.DT_TRAIT, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->decls = methods;
+    d->ndecls = nm;
+    d->exported = exported;
+    return d;
+}
+
+ast.Decl* parseTypedefDecl(bool exported)
+{
+    self.advance();
+    str.strView name = self.expectIdent();
+    self.expect(T_ASSIGN);
+    ast.TypeExpr* typeExpr = self.parseType();
+    self.expect(T_SEMI);
+    ast.Decl* d = self.declBase(ast.DT_TYPEDEF, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->type = typeExpr;
+    d->exported = exported;
+    return d;
+}
+
+ast.Decl* parseDistinctDecl(bool exported)
+{
+    self.advance();
+    str.strView name = self.expectIdent();
+    self.expect(T_ASSIGN);
+    ast.TypeExpr* typeExpr = self.parseType();
+    self.expect(T_SEMI);
+    ast.Decl* d = self.declBase(ast.DT_DISTINCT, self.peekTok(-1)->row, self.peekTok(-1)->col);
+    d->name = name;
+    d->type = typeExpr;
+    d->exported = exported;
+    return d;
+}
+
+ast.Decl* parseCompilerFnDecl(bool exported)
+{
+    tok.LexTok* t = self.advance(); // 'compiler_fn'
+    declBase:
+    ast.TypeExpr* returnType = self.parseType();
+    str.strView name = self.expectIdent();
+    self.expect(T_LPAREN);
+    ast.Param* params = null;
+    u32 nparams = 0;
+    u32 pcap = 0;
+    bool variadic = false;
+    self.parseParamList(&params, &nparams, &pcap, &variadic);
+    self.expect(T_RPAREN);
+    self.expect(T_SEMI);
+    ast.Decl* d = self.declBase(ast.DT_FUNC, t->row, t->col);
+    d->name = name;
+    d->type = returnType;
+    d->params = params;
+    d->nparams = nparams;
+    d->isExtern = true;
+    d->exported = exported;
+    return d;
+}
+
+ast.Decl* parseFlagDecl(bool exported)
+{
+    tok.LexTok* t = self.advance();
+    self.expect(T_LPAREN);
+    str.strView name = self.expectIdent();
+    self.expect(T_RPAREN);
+    self.ctxPush(CTX_FLAG, name, str.strView::empty());
+    ast.Decl* d = self.parseFlagDeclRest(exported, name, t);
+    self.ctxPop();
+    return d;
+}
+
+ast.Decl* parseFlagDeclRest(bool exported, str.strView name, tok.LexTok* t)
+{
+    self.expect(T_LBRACE);
+    ast.Decl** flat = null;
+    u32 nflat = 0;
+    u32 fcap = 0;
+    str.strView* caseNames = null;
+    u32 ncaseNames = 0;
+    u32 ccap = 0;
+    u32* caseLens = null;
+    u32 ncaseLens = 0;
+    u32 lcap = 0;
+    ast.Decl** defaultBody = null;
+    u32 ndefault = 0;
+    u32 dcap = 0;
+    while (!self.check(T_RBRACE) && !self.check(tok.TOK_EOF))
     {
-        str.strView* s = (str.strView*)(v->data + i * sizeof(str.strView));
-        for (u32 j = 0; j < s->len; j++) buf[o++] = s->ptr[j];
-        if (i + 1 < v->len) { buf[o++] = ':'; buf[o++] = ':'; }
+        if (self.check(T_DEFAULT))
+        {
+            self.advance();
+            self.expect(T_COLON);
+            while (!self.check(T_RBRACE) && !self.check(tok.TOK_EOF))
+            {
+                ast.Decl* outs[2];
+                u32 cnt = self.parseDecl(outs);
+                if (cnt == 0) break;
+                for (u32 i = 0; i < cnt; i++)
+                {
+                    self.growDeclArr(&defaultBody, &ndefault, &dcap);
+                    defaultBody[ndefault++] = outs[i];
+                }
+            }
+        }
+        else if (self.check(T_IDENT))
+        {
+            str.strView cname = self.text(self.peekTok(0));
+            self.advance();
+            self.growStrArr(&caseNames, &ncaseNames, &ccap);
+            caseNames[ncaseNames++] = cname;
+            self.expect(T_COLON);
+            u32 start = nflat;
+            while (!self.check(T_RBRACE) && !self.check(tok.TOK_EOF))
+            {
+                ast.Decl* outs[2];
+                u32 cnt = self.parseDecl(outs);
+                if (cnt == 0) break;
+                for (u32 i = 0; i < cnt; i++)
+                {
+                    self.growDeclArr(&flat, &nflat, &fcap);
+                    flat[nflat++] = outs[i];
+                }
+            }
+            self.growU32Arr(&caseLens, &ncaseLens, &lcap);
+            caseLens[ncaseLens++] = nflat - start;
+        }
+        else
+        {
+            self.advance();
+        }
     }
-    return str.strView::fromParts(buf, total);
+    self.expect(T_RBRACE);
+    ast.Decl* d = self.declBase(ast.DT_FLAG, t->row, t->col);
+    d->name = name;
+    d->cases = flat;
+    d->ncases = nflat;
+    d->caseNames = caseNames;
+    d->caseLens = caseLens;
+    d->ncaseNames = ncaseNames;
+    d->defaultBody = defaultBody;
+    d->ndeclDefault = ndefault;
+    d->exported = exported;
+    return d;
 }
