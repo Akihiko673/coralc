@@ -1,0 +1,71 @@
+// Self-host driver: file → tokenize → parse → report diagnostics.
+mod mman = import("std/memory/mman.crl");
+mod str = import("std/text/string.crl");
+mod libc = import("std/platform/libc.crl");
+mod tok = import("token");
+mod lex = import("lexer");
+mod ast = import("ast/ast.crl");
+mod error = import("error");
+mod parse = import("parser");
+
+const u8* readFile(str.strView path, u32* outLen)
+{
+    void* f = libc.fopen(path.ptr, "rb");
+    if (f == null) return null;
+    u64 cap = 1 << 16;
+    u8* buf = mman.alloc<u8>(cap);
+    u64 used = 0;
+    for (;;)
+    {
+        u64 got = libc.fread(buf + used, 1, cap - used, f);
+        used += got;
+        if (got == 0) break;
+        if (used == cap)
+        {
+            u64 nc = cap * 2;
+            buf = mman.realloc<u8>(buf, nc);
+            cap = nc;
+        }
+    }
+    libc.fclose(f);
+    *outLen = (u32)used;
+    return buf;
+}
+
+pub void main(u32 argc, char** argv)
+{
+    if (argc < 2)
+    {
+        libc.write(2, (const u8*)"usage: coral <file.crl>\n", 22);
+        return;
+    }
+    str.strView path = str.strView::fromCstr(argv[1]);
+    u32 len = 0;
+    const u8* src = readFile(path, &len);
+    if (src == null)
+    {
+        libc.write(2, (const u8*)"cannot read input file\n", 22);
+        return;
+    }
+
+    lex.Lexer lx = lex.Lexer::new(src, len);
+    lex.LexResult lr = lx.lex();
+    bool failed = false;
+    for (u32 i = 0; i < lr.nerrs; i++)
+    {
+        tok.LexErr* e = &lr.errs[i];
+        error.report(path, str.strView::fromParts((const char*)src, len),
+                     e->row, e->col, e->msg, str.strView::empty());
+        failed = true;
+    }
+    if (failed) return;
+
+    parse.Parser p = parse.Parser::new(lr.toks, lr.n, src, len, path);
+    ast.Program* prog = p.parseProgram();
+    if (prog != null)
+    {
+        u8 buf[64];
+        i32 n = libc.snprintf(buf, 64, "ok: %u top-level decls\n", prog->ndecls);
+        if (n > 0) libc.write(1, (const u8*)buf, (u64)n);
+    }
+}

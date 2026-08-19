@@ -5,6 +5,10 @@
 // consumed and recorded (only "noret" has an effect today). Token ids
 // come from the tok module (token.crl) — never raw numbers.
 
+mod mman = import("std/memory/mman.crl");
+mod str = import("std/text/string.crl");
+mod tok = import("token.crl");
+mod ast = import("ast/ast.crl");
 
 // operator precedence (higher binds tighter)
 const u32 P_ASSIGN = 0;
@@ -60,9 +64,9 @@ bool vEq(str.strView a, const char* b)
 
 u32 assignOpPrec(u32 tid)
 {
-    if (tid == T_ASSIGN || tid == T_PLUS_EQ || tid == T_MINUS_EQ || tid == T_STAR_EQ
-     || tid == T_SLASH_EQ || tid == T_PERCENT_EQ || tid == T_AMP_EQ || tid == T_PIPE_EQ
-     || tid == T_CARET_EQ || tid == T_SHL_EQ || tid == T_SHR_EQ) return P_ASSIGN;
+    if (tid == tok.T_ASSIGN || tid == tok.T_PLUS_EQ || tid == tok.T_MINUS_EQ || tid == tok.T_STAR_EQ
+     || tid == tok.T_SLASH_EQ || tid == tok.T_PERCENT_EQ || tid == tok.T_AMP_EQ || tid == tok.T_PIPE_EQ
+     || tid == tok.T_CARET_EQ || tid == tok.T_SHL_EQ || tid == tok.T_SHR_EQ) return P_ASSIGN;
     return NO_PREC;
 }
 
@@ -70,17 +74,17 @@ str.strView assignOpText(u32 tid)
 {
     switch (tid)
     {
-    case T_ASSIGN: return str.strView::fromCstr("=");
-    case T_PLUS_EQ: return str.strView::fromCstr("+=");
-    case T_MINUS_EQ: return str.strView::fromCstr("-=");
-    case T_STAR_EQ: return str.strView::fromCstr("*=");
-    case T_SLASH_EQ: return str.strView::fromCstr("/=");
-    case T_PERCENT_EQ: return str.strView::fromCstr("%=");
-    case T_AMP_EQ: return str.strView::fromCstr("&=");
-    case T_PIPE_EQ: return str.strView::fromCstr("|=");
-    case T_CARET_EQ: return str.strView::fromCstr("^=");
-    case T_SHL_EQ: return str.strView::fromCstr("<<=");
-    case T_SHR_EQ: return str.strView::fromCstr(">>=");
+    case tok.T_ASSIGN: return str.strView::fromCstr("=");
+    case tok.T_PLUS_EQ: return str.strView::fromCstr("+=");
+    case tok.T_MINUS_EQ: return str.strView::fromCstr("-=");
+    case tok.T_STAR_EQ: return str.strView::fromCstr("*=");
+    case tok.T_SLASH_EQ: return str.strView::fromCstr("/=");
+    case tok.T_PERCENT_EQ: return str.strView::fromCstr("%=");
+    case tok.T_AMP_EQ: return str.strView::fromCstr("&=");
+    case tok.T_PIPE_EQ: return str.strView::fromCstr("|=");
+    case tok.T_CARET_EQ: return str.strView::fromCstr("^=");
+    case tok.T_SHL_EQ: return str.strView::fromCstr("<<=");
+    case tok.T_SHR_EQ: return str.strView::fromCstr(">>=");
     }
     return str.strView::empty();
 }
@@ -89,24 +93,24 @@ u32 binOpPrec(u32 tid)
 {
     switch (tid)
     {
-    case T_OR: return P_OR;
-    case T_AND: return P_AND;
-    case T_PIPE: return P_BITOR;
-    case T_CARET: return P_BITXOR;
-    case T_AMP: return P_BITAND;
-    case T_EQ: return P_EQ;
-    case T_NE: return P_EQ;
-    case T_LT: return P_CMP;
-    case T_LE: return P_CMP;
-    case T_GT: return P_CMP;
-    case T_GE: return P_CMP;
-    case T_SHL: return P_SHIFT;
-    case T_SHR: return P_SHIFT;
-    case T_PLUS: return P_ADD;
-    case T_MINUS: return P_ADD;
-    case T_STAR: return P_MUL;
-    case T_SLASH: return P_MUL;
-    case T_PERCENT: return P_MUL;
+    case tok.T_OR: return P_OR;
+    case tok.T_AND: return P_AND;
+    case tok.T_PIPE: return P_BITOR;
+    case tok.T_CARET: return P_BITXOR;
+    case tok.T_AMP: return P_BITAND;
+    case tok.T_EQ: return P_EQ;
+    case tok.T_NE: return P_EQ;
+    case tok.T_LT: return P_CMP;
+    case tok.T_LE: return P_CMP;
+    case tok.T_GT: return P_CMP;
+    case tok.T_GE: return P_CMP;
+    case tok.T_SHL: return P_SHIFT;
+    case tok.T_SHR: return P_SHIFT;
+    case tok.T_PLUS: return P_ADD;
+    case tok.T_MINUS: return P_ADD;
+    case tok.T_STAR: return P_MUL;
+    case tok.T_SLASH: return P_MUL;
+    case tok.T_PERCENT: return P_MUL;
     }
     return NO_PREC;
 }
@@ -115,24 +119,24 @@ str.strView binOpText(u32 tid)
 {
     switch (tid)
     {
-    case T_OR: return str.strView::fromCstr("||");
-    case T_AND: return str.strView::fromCstr("&&");
-    case T_PIPE: return str.strView::fromCstr("|");
-    case T_CARET: return str.strView::fromCstr("^");
-    case T_AMP: return str.strView::fromCstr("&");
-    case T_EQ: return str.strView::fromCstr("==");
-    case T_NE: return str.strView::fromCstr("!=");
-    case T_LT: return str.strView::fromCstr("<");
-    case T_LE: return str.strView::fromCstr("<=");
-    case T_GT: return str.strView::fromCstr(">");
-    case T_GE: return str.strView::fromCstr(">=");
-    case T_SHL: return str.strView::fromCstr("<<");
-    case T_SHR: return str.strView::fromCstr(">>");
-    case T_PLUS: return str.strView::fromCstr("+");
-    case T_MINUS: return str.strView::fromCstr("-");
-    case T_STAR: return str.strView::fromCstr("*");
-    case T_SLASH: return str.strView::fromCstr("/");
-    case T_PERCENT: return str.strView::fromCstr("%");
+    case tok.T_OR: return str.strView::fromCstr("||");
+    case tok.T_AND: return str.strView::fromCstr("&&");
+    case tok.T_PIPE: return str.strView::fromCstr("|");
+    case tok.T_CARET: return str.strView::fromCstr("^");
+    case tok.T_AMP: return str.strView::fromCstr("&");
+    case tok.T_EQ: return str.strView::fromCstr("==");
+    case tok.T_NE: return str.strView::fromCstr("!=");
+    case tok.T_LT: return str.strView::fromCstr("<");
+    case tok.T_LE: return str.strView::fromCstr("<=");
+    case tok.T_GT: return str.strView::fromCstr(">");
+    case tok.T_GE: return str.strView::fromCstr(">=");
+    case tok.T_SHL: return str.strView::fromCstr("<<");
+    case tok.T_SHR: return str.strView::fromCstr(">>");
+    case tok.T_PLUS: return str.strView::fromCstr("+");
+    case tok.T_MINUS: return str.strView::fromCstr("-");
+    case tok.T_STAR: return str.strView::fromCstr("*");
+    case tok.T_SLASH: return str.strView::fromCstr("/");
+    case tok.T_PERCENT: return str.strView::fromCstr("%");
     }
     return str.strView::empty();
 }
@@ -141,14 +145,14 @@ bool prefixOpText(u32 tid, str.strView* out)
 {
     switch (tid)
     {
-    case T_PLUS: *out = str.strView::fromCstr("+"); return true;
-    case T_MINUS: *out = str.strView::fromCstr("-"); return true;
-    case T_BANG: *out = str.strView::fromCstr("!"); return true;
-    case T_TILDE: *out = str.strView::fromCstr("~"); return true;
-    case T_STAR: *out = str.strView::fromCstr("*"); return true;
-    case T_AMP: *out = str.strView::fromCstr("&"); return true;
-    case T_INC: *out = str.strView::fromCstr("++"); return true;
-    case T_DEC: *out = str.strView::fromCstr("--"); return true;
+    case tok.T_PLUS: *out = str.strView::fromCstr("+"); return true;
+    case tok.T_MINUS: *out = str.strView::fromCstr("-"); return true;
+    case tok.T_BANG: *out = str.strView::fromCstr("!"); return true;
+    case tok.T_TILDE: *out = str.strView::fromCstr("~"); return true;
+    case tok.T_STAR: *out = str.strView::fromCstr("*"); return true;
+    case tok.T_AMP: *out = str.strView::fromCstr("&"); return true;
+    case tok.T_INC: *out = str.strView::fromCstr("++"); return true;
+    case tok.T_DEC: *out = str.strView::fromCstr("--"); return true;
     }
     return false;
 }
@@ -197,7 +201,6 @@ pub struct Parser
 
 
     // token access
-
     tok.LexTok* peekTok(i32 off)
     {
         i32 i = (i32)self.pos + off;
@@ -213,7 +216,7 @@ pub struct Parser
 
     bool checkStr(const char* s)
     {
-        return self.peekTok(0)->id == tok.tok.TOK_IDENT && vEq(self.curText(), s);
+        return self.peekTok(0)->id == tok.TOK_IDENT && vEq(self.curText(), s);
     }
 
     tok.LexTok* advance()
@@ -241,7 +244,7 @@ pub struct Parser
 
     bool isNameTok(tok.LexTok* t)
     {
-        return t->id == tok.tok.TOK_IDENT || self.isTypeTok(t);
+        return t->id == tok.TOK_IDENT || self.isTypeTok(t);
     }
 
     str.strView span(u32 s, u32 e)
@@ -330,7 +333,7 @@ pub struct Parser
 
     void tokenDisplayStr(str.String* s, tok.LexTok* t)
     {
-        if (t->id == tok.tok.TOK_EOF)
+        if (t->id == tok.TOK_EOF)
         {
             s->pushView(str.strView::fromCstr("end of file"));
         }
@@ -358,7 +361,7 @@ pub struct Parser
         else if (want == tok.T_COLON) s.pushView(str.strView::fromCstr("expected ':'"));
         else if (want == tok.T_COMMA) s.pushView(str.strView::fromCstr("expected ','"));
         else if (want == tok.T_ASSIGN) s.pushView(str.strView::fromCstr("expected '='"));
-        else if (want == tok.tok.TOK_IDENT || want == tok.T_SELF) s.pushView(str.strView::fromCstr("expected a name"));
+        else if (want == tok.TOK_IDENT || want == tok.T_SELF) s.pushView(str.strView::fromCstr("expected a name"));
         else s.pushView(str.strView::fromCstr("expected token"));
         s.pushView(str.strView::fromCstr(", found "));
         self.tokenDisplayStr(&s, got);
@@ -381,14 +384,14 @@ pub struct Parser
             self.advance();
             return self.text(t);
         }
-        self.errExpectTok(tok.tok.TOK_IDENT);
+        self.errExpectTok(tok.TOK_IDENT);
         return str.strView::empty();
     }
 
     str.strView expectString()
     {
         tok.LexTok* t = self.peekTok(0);
-        if (t->id == tok.tok.TOK_STR)
+        if (t->id == tok.TOK_STR)
         {
             self.advance();
             if (t->len >= 2) return str.strView::fromParts(self.source.ptr + t->start + 1, t->len - 2);
@@ -428,7 +431,7 @@ pub struct Parser
 
     void skipAttrBrackets()
     {
-        while (!self.check(tok.T_RBRACKET) && !self.check(tok.tok.TOK_EOF)) self.advance();
+        while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
         if (self.check(tok.T_RBRACKET)) self.advance();
         if (self.check(tok.T_RBRACKET)) self.advance();
     }
@@ -449,7 +452,7 @@ pub struct Parser
                 else if (self.check(tok.T_LBRACKET))
                 {
                     self.advance();
-                    while (!self.check(tok.T_RBRACKET) && !self.check(tok.tok.TOK_EOF)) self.advance();
+                    while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
                     if (self.check(tok.T_RBRACKET)) self.advance();
                 }
                 continue;
@@ -473,10 +476,10 @@ pub struct Parser
         {
             self.advance();
             self.advance();
-            while (!self.check(tok.T_RBRACKET) && !self.check(tok.tok.TOK_EOF))
+            while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF))
             {
                 if (self.check(tok.T_COMMA)) { self.advance(); continue; }
-                if (self.check(tok.tok.TOK_IDENT) || self.check(tok.T_SELF))
+                if (self.check(tok.TOK_IDENT) || self.check(tok.T_SELF))
                 {
                     if (self.nattrs < 8) self.attrs[self.nattrs++] = self.text(self.peekTok(0));
                     self.advance();
@@ -703,7 +706,7 @@ pub struct Parser
                 {
                     self.rewind(saved);
                     pt = self.parseType();
-                    if (pt == null) { self.errExpectTok(tok.tok.TOK_IDENT); return; }
+                    if (pt == null) { self.errExpectTok(tok.TOK_IDENT); return; }
                     if (self.isNameTok(self.peekTok(0)) || self.check(tok.T_SELF))
                     {
                         pn = self.text(self.peekTok(0));
@@ -718,7 +721,7 @@ pub struct Parser
             else
             {
                 pt = self.parseType();
-                if (pt == null) { self.errExpectTok(tok.tok.TOK_IDENT); return; }
+                if (pt == null) { self.errExpectTok(tok.TOK_IDENT); return; }
                 if (self.check(tok.T_ELLIPSIS))
                 {
                     self.advance();
@@ -758,7 +761,7 @@ pub struct Parser
 
     bool hazardStop()
     {
-        return self.check(tok.tok.TOK_EOF);
+        return self.check(tok.TOK_EOF);
     }
 
     void growParamU(ast.Param*** arr, u32* n, u32* cap)
@@ -774,9 +777,9 @@ pub struct Parser
 
     void parseGenericParamList(str.strView** arr, u32* n, u32* cap)
     {
-        while (!self.check(tok.T_GT) && !self.check(tok.tok.TOK_EOF))
+        while (!self.check(tok.T_GT) && !self.check(tok.TOK_EOF))
         {
-            if (self.check(tok.tok.TOK_IDENT))
+            if (self.check(tok.TOK_IDENT))
             {
                 self.growStrArr(arr, n, cap);
                 (*arr)[*n] = self.text(self.peekTok(0));
@@ -828,7 +831,7 @@ pub struct Parser
                 base = self.typeBase(ast.TYP_IDENT, name, tok0->row, tok0->col);
             }
         }
-        else if (self.check(tok.tok.TOK_IDENT))
+        else if (self.check(tok.TOK_IDENT))
         {
             str.strView name = self.text(self.peekTok(0));
             self.advance();
@@ -903,7 +906,7 @@ pub struct Parser
                     if (self.check(tok.T_LPAREN))
                     {
                         self.advance();
-                        while (!self.check(tok.T_RPAREN) && !self.check(tok.tok.TOK_EOF))
+                        while (!self.check(tok.T_RPAREN) && !self.check(tok.TOK_EOF))
                         {
                             ast.TypeExpr* pt = self.parseType();
                             if (pt == null) break;
@@ -947,7 +950,7 @@ pub struct Parser
             ast.TypeExpr** paramTypes = null;
             u32 np = 0;
             u32 pcap = 0;
-            while (!self.check(tok.T_RPAREN) && !self.check(tok.tok.TOK_EOF))
+            while (!self.check(tok.T_RPAREN) && !self.check(tok.TOK_EOF))
             {
                 ast.TypeExpr* pt = self.parseType();
                 if (pt == null) break;
@@ -1034,7 +1037,7 @@ pub struct Parser
 
     bool isTypeStart(u32 id)
     {
-        return id == tok.tok.TOK_IDENT || self.isTypeTok(self.peekTok(0)) || self.check(tok.T_CONST)
+        return id == tok.TOK_IDENT || self.isTypeTok(self.peekTok(0)) || self.check(tok.T_CONST)
             || self.check(tok.T_SELF) || self.check(tok.T_VOID)
             || self.check(tok.T_STRUCT) || self.check(tok.T_LPAREN);
     }
@@ -1080,7 +1083,7 @@ pub struct Parser
     void parseGenericArgList(ast.TypeExpr*** tArgs, u32* tn, u32* tcap,
                              ast.Expr*** eArgs, u32* en, u32* ecap)
     {
-        while (!self.check(tok.T_GT) && !self.check(tok.T_SHR) && !self.check(tok.tok.TOK_EOF) && !self.gtgtConsumed)
+        while (!self.check(tok.T_GT) && !self.check(tok.T_SHR) && !self.check(tok.TOK_EOF) && !self.gtgtConsumed)
         {
             if (self.check(tok.T_COMMA)) { self.advance(); continue; }
             bool isType;
@@ -1138,10 +1141,10 @@ pub struct Parser
         ast.Stmt** stmts = null;
         u32 ns = 0;
         u32 scap = 0;
-        while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+        while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
             self.skipSemicolons();
-            if (self.check(tok.T_RBRACE) || self.check(tok.tok.TOK_EOF)) break;
+            if (self.check(tok.T_RBRACE) || self.check(tok.TOK_EOF)) break;
             ast.Stmt* s = self.parseStmt();
             if (s != null)
             {
@@ -1227,7 +1230,7 @@ pub struct Parser
             s->a = value;
             return s;
         }
-        if (self.isTypeTok(self.peekTok(0)) || self.check(tok.tok.TOK_IDENT) || self.check(tok.T_CONST))
+        if (self.isTypeTok(self.peekTok(0)) || self.check(tok.TOK_IDENT) || self.check(tok.T_CONST))
         {
             return self.parseTypeOrExprStmt(t);
         }
@@ -1275,7 +1278,7 @@ pub struct Parser
                     self.advance();
                     if (!(self.isNameTok(self.peekTok(0)) || self.check(tok.T_SELF)))
                     {
-                        self.errExpectTok(tok.tok.TOK_IDENT);
+                        self.errExpectTok(tok.TOK_IDENT);
                         return null;
                     }
                     str.strView vname = self.text(self.peekTok(0));
@@ -1310,7 +1313,7 @@ pub struct Parser
             u32 vcap = 0;
             ast.Expr* ini = self.exprBase(ast.EX_INIT, t->row, t->col);
             ini->type = typeOrExpr;
-            while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+            while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
             {
                 if (self.check(tok.T_SEMI)) { self.advance(); continue; }
                 str.strView fname = self.expectIdent();
@@ -1392,13 +1395,13 @@ pub struct Parser
         ast.Stmt* init = null;
         if (!self.check(tok.T_SEMI))
         {
-            if (self.isTypeTok(self.peekTok(0)) || self.check(tok.T_CONST) || self.check(tok.tok.TOK_IDENT))
+            if (self.isTypeTok(self.peekTok(0)) || self.check(tok.T_CONST) || self.check(tok.TOK_IDENT))
             {
                 Mark saved = self.mark();
                 ast.TypeExpr* typ = self.parseType();
                 bool good = !self.errored && typ != null
                     && (typ->kind == ast.TYP_IDENT || typ->kind == ast.TYP_PTR || typ->kind == ast.TYP_GENERIC);
-                if (good && self.check(tok.tok.TOK_IDENT))
+                if (good && self.check(tok.TOK_IDENT))
                 {
                     str.strView name = self.text(self.peekTok(0));
                     self.advance();
@@ -1473,7 +1476,7 @@ pub struct Parser
         u32 nc = 0;
         u32 ccap = 0;
         ast.StmtCase* defaultCase = null;
-        while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+        while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
             if (self.check(tok.T_CASE))
             {
@@ -1568,7 +1571,7 @@ pub struct Parser
         self.expect(tok.T_LBRACE);
         u32 depth = 1;
         tok.LexTok* closeT = null;
-        while (depth > 0 && !self.check(tok.tok.TOK_EOF))
+        while (depth > 0 && !self.check(tok.TOK_EOF))
         {
             tok.LexTok* c = self.peekTok(0);
             if (self.check(tok.T_LBRACE)) depth++;
@@ -1608,7 +1611,7 @@ pub struct Parser
         u32 nc = 0;
         u32 ccap = 0;
         ast.StmtCase* defaultCase = null;
-        while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+        while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
             if (self.check(tok.T_DEFAULT))
             {
@@ -1617,7 +1620,7 @@ pub struct Parser
                 ast.Stmt** body = null;
                 u32 nb = 0;
                 u32 bcap = 0;
-                while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+                while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
                 {
                     ast.Stmt* st = self.parseStmt();
                     if (st == null) break;
@@ -1630,7 +1633,7 @@ pub struct Parser
                 defaultCase->body = body;
                 defaultCase->nbody = nb;
             }
-            else if (self.check(tok.tok.TOK_IDENT))
+            else if (self.check(tok.TOK_IDENT))
             {
                 str.strView cname = self.text(self.peekTok(0));
                 self.advance();
@@ -1638,7 +1641,7 @@ pub struct Parser
                 ast.Stmt** body = null;
                 u32 nb = 0;
                 u32 bcap = 0;
-                while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+                while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
                 {
                     ast.Stmt* st = self.parseStmt();
                     if (st == null) break;
@@ -1810,28 +1813,28 @@ pub struct Parser
     ast.Expr* parseAtom()
     {
         tok.LexTok* t = self.peekTok(0);
-        if (t->id == tok.tok.TOK_INT)
+        if (t->id == tok.TOK_INT)
         {
             self.advance();
             ast.Expr* e = self.exprBase(ast.EX_INT, t->row, t->col);
             e->text = self.text(t);
             return e;
         }
-        if (t->id == tok.tok.TOK_FLOAT)
+        if (t->id == tok.TOK_FLOAT)
         {
             self.advance();
             ast.Expr* e = self.exprBase(ast.EX_FLOAT, t->row, t->col);
             e->text = self.text(t);
             return e;
         }
-        if (t->id == tok.tok.TOK_STR)
+        if (t->id == tok.TOK_STR)
         {
             self.advance();
             ast.Expr* e = self.exprBase(ast.EX_STR, t->row, t->col);
             e->text = self.text(t);
             return e;
         }
-        if (t->id == tok.tok.TOK_CHAR)
+        if (t->id == tok.TOK_CHAR)
         {
             self.advance();
             ast.Expr* e = self.exprBase(ast.EX_CHAR, t->row, t->col);
@@ -1867,7 +1870,7 @@ pub struct Parser
         {
             Mark saved = self.mark();
             self.advance();
-            if (self.peekTok(0)->id == tok.tok.TOK_INT)
+            if (self.peekTok(0)->id == tok.TOK_INT)
             {
                 // guaranteed not a type
             }
@@ -1908,7 +1911,7 @@ pub struct Parser
             p->a = expr;
             return p;
         }
-        if (self.check(tok.tok.TOK_IDENT) || self.isTypeTok(t) || self.check(tok.T_SELF))
+        if (self.check(tok.TOK_IDENT) || self.isTypeTok(t) || self.check(tok.T_SELF))
         {
             return self.parseNameExpr(t);
         }
@@ -2007,7 +2010,7 @@ pub struct Parser
             ast.TypeExpr** args = null;
             u32 na = 0;
             u32 acap = 0;
-            while (!self.check(tok.T_GT) && !self.check(tok.T_SHR) && !self.check(tok.tok.TOK_EOF) && !self.gtgtConsumed)
+            while (!self.check(tok.T_GT) && !self.check(tok.T_SHR) && !self.check(tok.TOK_EOF) && !self.gtgtConsumed)
             {
                 if (self.check(tok.T_SEMI) || self.check(tok.T_COMMA) || self.check(tok.T_RPAREN) || self.check(tok.T_RBRACE)) break;
                 ast.TypeExpr* typ = self.parseType();
@@ -2119,12 +2122,6 @@ pub struct Parser
         return e;
     }
 
-    void rewindAddr()
-    {
-        // used to back out of an unfinished :: continuation; error state not
-        // touched since no error was raised
-    }
-
     void parseCallArgs(ast.Expr*** args, u32* n, u32* cap)
     {
         if (!self.check(tok.T_RPAREN))
@@ -2162,7 +2159,7 @@ pub struct Parser
                 depth--;
                 if (depth == 0)
                 {
-                    u32 nxt = i + 1 < (i32)self.n ? self.toks[i + 1].id : tok.tok.TOK_EOF;
+                    u32 nxt = i + 1 < (i32)self.n ? self.toks[i + 1].id : tok.TOK_EOF;
                     if (nxt == tok.T_LPAREN || nxt == tok.T_DOT || nxt == tok.T_COLON_COLON || nxt == tok.T_SEMI
                      || nxt == tok.T_COMMA || nxt == tok.T_RPAREN || nxt == tok.T_RBRACKET || nxt == tok.T_ASSIGN
                      || nxt == tok.T_LBRACE || nxt == tok.T_LBRACKET) return true;
@@ -2175,7 +2172,7 @@ pub struct Parser
                 depth -= 2;
                 if (depth == 0)
                 {
-                    u32 nxt = i + 1 < (i32)self.n ? self.toks[i + 1].id : tok.tok.TOK_EOF;
+                    u32 nxt = i + 1 < (i32)self.n ? self.toks[i + 1].id : tok.TOK_EOF;
                     if (nxt == tok.T_LPAREN || nxt == tok.T_DOT || nxt == tok.T_COLON_COLON || nxt == tok.T_SEMI
                      || nxt == tok.T_COMMA || nxt == tok.T_RPAREN || nxt == tok.T_RBRACKET || nxt == tok.T_ASSIGN
                      || nxt == tok.T_LBRACE || nxt == tok.T_LBRACKET) return true;
@@ -2183,7 +2180,7 @@ pub struct Parser
                 }
                 if (depth < 0) return false;
             }
-            else if (id == tok.T_SEMI || id == tok.T_LPAREN || id == tok.T_RBRACE || id == tok.tok.TOK_EOF)
+            else if (id == tok.T_SEMI || id == tok.T_LPAREN || id == tok.T_RBRACE || id == tok.TOK_EOF)
             {
                 return false;
             }
@@ -2198,7 +2195,7 @@ pub struct Parser
         ast.TypeExpr** typeArgs = null;
         u32 na = 0;
         u32 acap = 0;
-        while (!self.check(tok.T_GT) && !self.check(tok.T_SHR) && !self.check(tok.tok.TOK_EOF) && !self.gtgtConsumed)
+        while (!self.check(tok.T_GT) && !self.check(tok.T_SHR) && !self.check(tok.TOK_EOF) && !self.gtgtConsumed)
         {
             if (self.check(tok.T_COMMA)) { self.advance(); continue; }
             ast.TypeExpr* t = self.parseType();
@@ -2370,7 +2367,7 @@ pub struct Parser
         u32 vcap = 0;
         if (self.check(tok.T_DOT))
         {
-            while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+            while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
             {
                 self.expect(tok.T_DOT);
                 str.strView fname = self.expectIdent();
@@ -2387,7 +2384,7 @@ pub struct Parser
         }
         else
         {
-            while (!self.check(tok.T_RBRACE) && !self.check(tok.tok.TOK_EOF))
+            while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
             {
                 ast.Expr* e = self.parseExpr();
                 if (e == null) break;
@@ -2407,7 +2404,7 @@ pub struct Parser
 
     ast.Decl* parseFuncDecl(bool exported, bool isMethod, str.strView structName, str.strView traitName)
     {
-        self.nattrs = 0;
+        self.parseAttachedAttrs();
         tok.LexTok* t = self.peekTok(0);
         ast.TypeExpr* returnType = self.parseType();
         if (self.errored) return null;
@@ -2431,7 +2428,7 @@ pub struct Parser
             if (inBang) self.advance();
             else self.advance();
             u32 saved2 = self.pos;
-            while (!self.check(tok.T_GT) && !self.check(tok.tok.TOK_EOF)) self.advance();
+            while (!self.check(tok.T_GT) && !self.check(tok.TOK_EOF)) self.advance();
             bool isGen = self.check(tok.T_GT) && self.peekTok(1)->id == tok.T_LPAREN;
             self.pos = saved2;
             if (isGen)
@@ -2448,6 +2445,7 @@ pub struct Parser
         self.parseParamList(&params, &nparams, &pcap, &variadic);
         self.expect(tok.T_RPAREN);
         self.parseAttachedAttrs();
+        self.skipFileAttrs();
         ast.Stmt* body = null;
         if (self.check(tok.T_LBRACE)) body = self.parseBlock();
         else self.expect(tok.T_SEMI);
@@ -2461,7 +2459,6 @@ pub struct Parser
         d->variadic = variadic;
         d->body = body;
         d->exported = exported;
-        d->isMethod = isMethod;
         d->structName = structName;
         d->traitName = traitName;
         d->noreturn = self.hasAttr("noret");
@@ -2540,6 +2537,7 @@ pub struct Parser
                     {
                         self.skipSemicolons();
                         if (self.errored) break;
+                        self.nattrs = 0;
                         ast.Decl* method = self.parseFuncDecl(false, true, n1, str.strView::empty());
                         if (method != null)
                         {
@@ -2569,6 +2567,7 @@ pub struct Parser
                 {
                     self.skipSemicolons();
                     if (self.errored) break;
+                    self.nattrs = 0;
                     ast.Decl* method = self.parseFuncDecl(false, true, n1, str.strView::empty());
                     if (method != null)
                     {
@@ -2601,6 +2600,7 @@ pub struct Parser
                     {
                         self.skipSemicolons();
                         if (self.errored) break;
+                        self.nattrs = 0;
                         ast.Decl* method = self.parseFuncDecl(false, true, n1, n2);
                         if (method != null)
                         {
@@ -2768,6 +2768,8 @@ pub struct Parser
 
     u32 parseDeclExported(bool exported, ast.Decl** o1, ast.Decl** o2)
     {
+        if (self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET)
+            self.parseAttachedAttrs();
         if (self.check(tok.T_MOD)) return self.parseModuleDecl(o1, o2);
         if (self.check(tok.T_EXTERN))
         {
@@ -2904,7 +2906,9 @@ pub struct Parser
             self.parseParamList(&params, &np, &pcap, &variadic);
             self.expect(tok.T_RPAREN);
             self.parseAttachedAttrs();
-            self.expect(tok.T_SEMI);
+            ast.Stmt* body = null;
+            if (self.check(tok.T_LBRACE)) body = self.parseBlock();
+            else self.expect(tok.T_SEMI);
             ast.Decl* d = self.declBase(ast.DT_EXTERN, t->row, t->col);
             d->name = name;
             d->type = returnType;
@@ -2912,6 +2916,8 @@ pub struct Parser
             d->nparams = np;
             d->variadic = variadic;
             d->cc = cc;
+            d->body = body;
+            d->isExtern = true;
             d->exported = exported;
             d->noreturn = self.hasAttr("noret");
             return d;
@@ -3044,11 +3050,25 @@ pub struct Parser
         u32 mcap = 0;
         while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
+            self.skipFileAttrs();
             self.skipSemicolons();
             if (self.check(tok.T_RBRACE) || self.check(tok.TOK_EOF)) break;
+            bool attrMethod = self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET;
+            if (attrMethod)
+            {
+                ast.Decl* method = self.parseFuncDecl(exported, true, name, str.strView::empty());
+                if (method != null)
+                {
+                    self.growD(&methods, &nm, &mcap);
+                    methods[nm++] = method;
+                }
+                self.skipSemicolons();
+                continue;
+            }
             if (self.check(tok.T_STATIC))
             {
                 self.advance();
+                self.nattrs = 0;
                 ast.Decl* method = self.parseFuncDecl(exported, false, name, str.strView::empty());
                 if (method != null)
                 {
@@ -3075,6 +3095,7 @@ pub struct Parser
                         || self.check(tok.T_BANG_LT) || self.errored)
                     {
                         self.rewind(saved);
+                        self.nattrs = 0;
                         ast.Decl* method = self.parseFuncDecl(exported, true, name, str.strView::empty());
                         if (method != null)
                         {
@@ -3108,7 +3129,6 @@ pub struct Parser
                     {
                         ftype = self.typeWrapArr(ftype, dim1, ftype->line, ftype->col);
                     }
-                    if (fcap == 0 && fields == null) self.growStructFields(&fields, &nf, &fcap);
                     while (nf + 1 > fcap) self.growStructFields(&fields, &nf, &fcap);
                     fields[nf].name = fname;
                     fields[nf].type = ftype;
@@ -3118,6 +3138,7 @@ pub struct Parser
                 }
                 self.rewind(saved);
             }
+            self.nattrs = 0;
             ast.Decl* method = self.parseFuncDecl(exported, true, name, str.strView::empty());
             if (method != null)
             {
@@ -3169,6 +3190,7 @@ pub struct Parser
         u32 vcap = 0;
         while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
+            self.skipFileAttrs();
             str.strView varName = self.expectIdent();
             if (self.check(tok.T_LPAREN))
             {
@@ -3233,7 +3255,8 @@ pub struct Parser
         {
             self.skipSemicolons();
             if (self.check(tok.T_RBRACE) || self.check(tok.TOK_EOF)) break;
-            ast.TypeExpr* rt = self.parseType();
+            self.skipFileAttrs();
+ast.TypeExpr* rt = self.parseType();
             if (self.errored || rt == null) break;
             str.strView mname = self.expectIdent();
             self.ctxPush(CTX_TRAIT, name, mname);
@@ -3335,6 +3358,7 @@ pub struct Parser
         u32 dcap = 0;
         while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
+            self.skipFileAttrs();
             self.skipSemicolons();
             if (self.check(tok.T_RBRACE) || self.check(tok.TOK_EOF)) break;
             if (self.check(tok.T_DEFAULT))
@@ -3376,6 +3400,7 @@ pub struct Parser
     {
         while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
         {
+            self.skipFileAttrs();
             if (self.check(tok.T_DEFAULT)) break;
             if (stopAtIdentColon && self.check(tok.TOK_IDENT) && self.peekTok(1)->id == tok.T_COLON) break;
             self.skipSemicolons();
@@ -3404,14 +3429,12 @@ pub struct Parser
         return self.parseBinary(minPrec);
     }
 
-    // forward decl used by namespace blocks etc.
-    ast.Decl* parseFuncDecl(bool exported, bool isMethod, str.strView structName, str.strView traitName);
     // top-level
 
     ast.Program* parseProgram()
     {
         self.parseDecls();
-        self.expect(tok.tok.TOK_EOF);
+        self.expect(tok.TOK_EOF);
         if (self.errored) return null;
         ast.Program* p = mman.alloc<ast.Program>(1);
         p->decls = self.decls;

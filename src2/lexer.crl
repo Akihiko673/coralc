@@ -1,6 +1,6 @@
 mod mman = import("std/memory/mman.crl");
-mod tok = import("token.crl");
 mod str = import("std/text/string.crl");
+mod tok = import("token");
 
 pub struct LexResult
 {
