@@ -1,5 +1,6 @@
 mod str = import("std/text/string");
 
+// Token ids for literals and EOF
 pub const u32 TOK_EOF = 0;
 pub const u32 TOK_IDENT = 1;
 pub const u32 TOK_INT = 2;
@@ -7,6 +8,110 @@ pub const u32 TOK_FLOAT = 3;
 pub const u32 TOK_STR = 4;
 pub const u32 TOK_CHAR = 5;
 pub const u32 TOK_ANON_FIRST = 6;
+
+// Keyword / operator / punctuation ids. Each is TOK_ANON_FIRST + index into
+// ANON_TERMS below; the parser must use these names, never raw numbers.
+pub const u32 T_MOD = 6;
+pub const u32 T_IMPORT = 7;
+pub const u32 T_PUB = 8;
+pub const u32 T_STATIC = 9;
+pub const u32 T_INLINE = 10;
+pub const u32 T_STRUCT = 11;
+pub const u32 T_ENUM = 12;
+pub const u32 T_TRAIT = 13;
+pub const u32 T_CONST = 14;
+pub const u32 T_VAR = 15;
+pub const u32 T_CONSTEXPR = 16;
+pub const u32 T_TYPEDEF = 17;
+pub const u32 T_DISTINCT = 18;
+pub const u32 T_EXTERN = 19;
+pub const u32 T_IF = 20;
+pub const u32 T_ELSE = 21;
+pub const u32 T_WHILE = 22;
+pub const u32 T_FOR = 23;
+pub const u32 T_LOOP = 24;
+pub const u32 T_SWITCH = 25;
+pub const u32 T_CASE = 26;
+pub const u32 T_DEFAULT = 27;
+pub const u32 T_BREAK = 28;
+pub const u32 T_CONTINUE = 29;
+pub const u32 T_RETURN = 30;
+pub const u32 T_DEFER = 31;
+pub const u32 T_COMPTIME = 32;
+pub const u32 T_FLAG = 33;
+pub const u32 T_ASM = 34;
+pub const u32 T_VOLATILE = 35;
+pub const u32 T_SIZEOF = 36;
+pub const u32 T_TRUE = 37;
+pub const u32 T_FALSE = 38;
+pub const u32 T_NULL = 39;
+pub const u32 T_SELF = 40;
+pub const u32 T_I8 = 41;
+pub const u32 T_I16 = 42;
+pub const u32 T_I32 = 43;
+pub const u32 T_I64 = 44;
+pub const u32 T_U8 = 45;
+pub const u32 T_U16 = 46;
+pub const u32 T_U32 = 47;
+pub const u32 T_U64 = 48;
+pub const u32 T_F32 = 49;
+pub const u32 T_F64 = 50;
+pub const u32 T_BOOL = 51;
+pub const u32 T_CHAR = 52;
+pub const u32 T_VOID = 53;
+pub const u32 T_ISIZE = 54;
+pub const u32 T_USIZE = 55;
+pub const u32 T_SHL_EQ = 56;
+pub const u32 T_SHR_EQ = 57;
+pub const u32 T_ELLIPSIS = 58;
+pub const u32 T_RARROW = 59;
+pub const u32 T_PLUS_EQ = 60;
+pub const u32 T_MINUS_EQ = 61;
+pub const u32 T_STAR_EQ = 62;
+pub const u32 T_SLASH_EQ = 63;
+pub const u32 T_PERCENT_EQ = 64;
+pub const u32 T_AMP_EQ = 65;
+pub const u32 T_PIPE_EQ = 66;
+pub const u32 T_CARET_EQ = 67;
+pub const u32 T_EQ = 68;
+pub const u32 T_NE = 69;
+pub const u32 T_BANG_LT = 70;
+pub const u32 T_LE = 71;
+pub const u32 T_GE = 72;
+pub const u32 T_AND = 73;
+pub const u32 T_OR = 74;
+pub const u32 T_SHL = 75;
+pub const u32 T_SHR = 76;
+pub const u32 T_INC = 77;
+pub const u32 T_DEC = 78;
+pub const u32 T_ARROW = 79;
+pub const u32 T_COLON_COLON = 80;
+pub const u32 T_ASSIGN = 81;
+pub const u32 T_LT = 82;
+pub const u32 T_GT = 83;
+pub const u32 T_BANG = 84;
+pub const u32 T_TILDE = 85;
+pub const u32 T_PLUS = 86;
+pub const u32 T_MINUS = 87;
+pub const u32 T_STAR = 88;
+pub const u32 T_SLASH = 89;
+pub const u32 T_PERCENT = 90;
+pub const u32 T_AMP = 91;
+pub const u32 T_PIPE = 92;
+pub const u32 T_CARET = 93;
+pub const u32 T_DOT = 94;
+pub const u32 T_COMMA = 95;
+pub const u32 T_COLON = 96;
+pub const u32 T_SEMI = 97;
+pub const u32 T_QUESTION = 98;
+pub const u32 T_AT = 99;
+pub const u32 T_LPAREN = 100;
+pub const u32 T_RPAREN = 101;
+pub const u32 T_LBRACE = 102;
+pub const u32 T_RBRACE = 103;
+pub const u32 T_LBRACKET = 104;
+pub const u32 T_RBRACKET = 105;
+pub const u32 T_ASSERT = 106;
 
 pub struct LexTok
 {
@@ -25,6 +130,8 @@ pub struct LexErr
     str.strView msg;
 }
 
+// Keywords are matched by full word; the keyword must also appear in
+// ANON_TERMS so terminalId() yields the right id.
 pub str.strView KW_TERMS[] = {
     "mod", "import", "pub", "static",
     "inline", "struct", "enum", "trait",
@@ -40,13 +147,11 @@ pub str.strView KW_TERMS[] = {
     "assert",
 };
 
+// Operators and punctuation, longest first so scanPunct matches greedily.
+// No legacy @[...] / @name attributes here: attributes are [[...]] for
+// declarations and @[[...]] / @[...] / @name at file level, all represented
+// as separate tokens.
 pub str.strView OP_TERMS[] = {
-    "@[forced_unsafe_cast]",
-    "@[forced_null_deref]",
-    "@[no_warn_unsafe]",
-    "@[forced_pointer]",
-    "@no_null", "@[noret]",
-    "@reorder", "@packed",
     "<<=", ">>=", "...",
     "=>", "+=", "-=",
     "*=", "/=", "%=",
@@ -58,7 +163,7 @@ pub str.strView OP_TERMS[] = {
     "++", "--",
     "->", "::",
     "=", "<", ">",
-    "!", "~", "#",
+    "!", "~",
     "+", "-", "*", "/",
     "%", "&", "|", "^",
     ".", ",", ":", ";",
@@ -68,6 +173,8 @@ pub str.strView OP_TERMS[] = {
     "[", "]",
 };
 
+// Ordering below defines the numeric ids: id = TOK_ANON_FIRST + index.
+// Do not reorder without updating the T_* constants above.
 pub str.strView ANON_TERMS[] = {
     "mod", "import", "pub",
     "static", "inline", "struct",
@@ -97,18 +204,11 @@ pub str.strView ANON_TERMS[] = {
     ":", ";", "?", "@", "(",
     ")", "{", "}", "[", "]",
     "assert",
-    "@[forced_unsafe_cast]",
-    "@[forced_null_deref]",
-    "@[no_warn_unsafe]",
-    "@[forced_pointer]",
-    "@no_null",
-    "@[noret]",
-    "@reorder",
-    "@packed",
 };
 
-pub const u32 NUM_OP = 59;      // OP_TERMS length (scanPunct bound)
-pub const u32 NUM_ANON = 109;   // ANON_TERMS length
+pub const u32 NUM_OP = 50;      // OP_TERMS length (scanPunct bound)
+pub const u32 NUM_KW = 51;      // KW_TERMS length (scanWord bound)
+pub const u32 NUM_ANON = 101;   // ANON_TERMS length
 
 pub u32 terminalId(str.strView s)
 {

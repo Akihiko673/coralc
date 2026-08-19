@@ -405,7 +405,7 @@ pub struct Lexer
         // Whole-word keyword check the scanned span is the full word (the
         // body scan stops at the first nonidentifier char), so it'll 
         // check gainst kw
-        for (u32 q = 0; q < 50; q++)
+        for (u32 q = 0; q < tok.NUM_KW; q++)
         {
             str.strView t = tok.KW_TERMS[q];
             u32 j = 0;

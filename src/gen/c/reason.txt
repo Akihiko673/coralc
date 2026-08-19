@@ -1,1 +1,0 @@
-in an --emit-c mode, the coral compiler should emit a c header with the exquivalent for types in c, with the resolved names and all, reasson being that, someone may want to link a c code against existing coral code. not, only type definitions, and function declarations. No function bodies.
