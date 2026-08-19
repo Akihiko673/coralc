@@ -196,6 +196,8 @@ pub struct Parser
         p.decls = null;
         p.ndecls = 0;
         p.declCap = 0;
+        p.lastStallPos = 0;
+        p.stallCount = 0;
         return p;
     }
 
@@ -407,7 +409,6 @@ pub struct Parser
     }
 
     // mark / rewind
-
     Mark mark()
     {
         Mark m;
@@ -428,7 +429,6 @@ pub struct Parser
     }
 
     // attributes
-
     void skipAttrBrackets()
     {
         while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
@@ -491,10 +491,28 @@ pub struct Parser
             }
             self.skipAttrBrackets();
         }
+        while (self.check(tok.T_AT) && self.peekTok(1)->id == tok.T_LBRACKET)
+        {
+            self.advance();
+            self.advance();
+            while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF))
+            {
+                if (self.check(tok.T_COMMA)) { self.advance(); continue; }
+                if (self.check(tok.TOK_IDENT) || self.check(tok.T_SELF))
+                {
+                    if (self.nattrs < 8) self.attrs[self.nattrs++] = self.text(self.peekTok(0));
+                    self.advance();
+                }
+                else
+                {
+                    self.advance();
+                }
+            }
+            self.skipAttrBrackets();
+        }
     }
 
     // growable arrays
-
     void growPtrArr(void*** arr, u32* n, u32* cap)
     {
         if (*n < *cap) return;
@@ -529,7 +547,6 @@ pub struct Parser
     }
 
     // node builders
-
     ast.TypeExpr* typeBase(u32 kind, str.strView name, u32 line, u32 col)
     {
         ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
@@ -548,7 +565,10 @@ pub struct Parser
         return t;
     }
 
-    ast.TypeExpr* typeWrapArr(ast.TypeExpr* elem, ast.Expr* size, u32 line, u32 col)
+    ast.TypeExpr* typeWrapArr(ast.TypeExpr* elem,
+        ast.Expr* size,
+        u32 line,
+        u32 col)
     {
         ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
         t->kind = ast.TYP_ARRAY;
@@ -566,7 +586,9 @@ pub struct Parser
         return t;
     }
 
-    ast.TypeExpr* typeWrapPtr(ast.TypeExpr* elem, bool isConst, u32 line, u32 col)
+    ast.TypeExpr* typeWrapPtr(ast.TypeExpr* elem,
+        bool isConst,
+        u32 line, u32 col)
     {
         ast.TypeExpr* t = mman.alloc<ast.TypeExpr>(1);
         t->kind = ast.TYP_PTR;
@@ -667,7 +689,6 @@ pub struct Parser
     }
 
     // parameter / generic lists
-
     void parseParamList(ast.Param** arr, u32* n, u32* cap, bool* variadic)
     {
         if (self.check(tok.T_RPAREN) || self.check(tok.T_SEMI)) return;
@@ -743,7 +764,7 @@ pub struct Parser
             ast.Param p;
             p.name = pn;
             p.type = pt;
-            self.growParamU(&arr, n, cap);
+            self.growParamU(arr, n, cap);
             (*arr)[*n].name = p.name;
             (*arr)[*n].type = p.type;
             *n = *n + 1;
@@ -764,14 +785,46 @@ pub struct Parser
         return self.check(tok.TOK_EOF);
     }
 
-    void growParamU(ast.Param*** arr, u32* n, u32* cap)
+    u32 lastStallPos;
+    u32 stallCount;
+
+    bool stallTickTag(const char* tag)
+    {
+        if (self.pos == self.lastStallPos)
+        {
+            self.stallCount++;
+            if (self.stallCount > 100000)
+            {
+                tok.LexTok* t = self.peekTok(0);
+                str.String s = str.String::new();
+                s.pushView(str.strView::fromCstr("parser stall("));
+                s.pushView(str.strView::fromCstr(tag));
+                s.pushView(str.strView::fromCstr(") at token: "));
+                self.tokenDisplayStr(&s, t);
+                s.pushView(str.strView::fromCstr(" pos="));
+                s.pushView(str.strView::fromParts((const char*)(self.source.ptr + t->start), 16));
+                self.errLine = t->row;
+                self.setErrAt(t, &s);
+                s.free();
+                return true;
+            }
+        }
+        else
+        {
+            self.lastStallPos = self.pos;
+            self.stallCount = 0;
+        }
+        return false;
+    }
+
+    void growParamU(ast.Param** arr, u32* n, u32* cap)
     {
         if (*n < *cap) return;
         u32 nc = *cap ? *cap * 2 : 8;
         ast.Param* na = mman.alloc<ast.Param>(nc);
-        for (u32 i = 0; i < *n; i++) na[i] = (**arr)[i];
+        for (u32 i = 0; i < *n; i++) na[i] = (*arr)[i];
         if (*arr && *cap) mman.dealloc<ast.Param>(*arr);
-        *arr = &na[0];
+        *arr = na;
         *cap = nc;
     }
 
@@ -795,7 +848,6 @@ pub struct Parser
     }
 
     // type parsing
-
     ast.TypeExpr* parseType()
     {
         self.gtgtConsumed = false;
@@ -1049,7 +1101,7 @@ pub struct Parser
         {
             return self.parseType();
         }
-        return self.parseExpr();
+        return null;
     }
 
     void parseGenericArg(bool* isType, ast.TypeExpr** tOut, ast.Expr** eOut)
@@ -1101,6 +1153,11 @@ pub struct Parser
                 self.growE(eArgs, en, ecap);
                 (*eArgs)[*en] = e;
                 *en = *en + 1;
+            }
+            else
+            {
+                if (self.errored) break;
+                self.advance();
             }
             if (self.check(tok.T_COMMA)) self.advance();
         }
@@ -1197,6 +1254,12 @@ pub struct Parser
             self.expect(tok.T_SEMI);
             return self.stmtBase(ast.ST_CONTINUE, t->row, t->col);
         }
+        if (self.check(tok.T_EXTERN))
+        {
+            ast.Decl* d = self.parseExternDecl(false);
+            if (d == null) return null;
+            return self.stmtBase(ast.ST_EXPR, t->row, t->col);
+        }
         if (self.check(tok.T_RETURN)) return self.parseReturnStmt();
         if (self.check(tok.T_DEFER))
         {
@@ -1220,7 +1283,6 @@ pub struct Parser
             self.advance();
             str.strView name = self.expectIdent();
             ast.TypeExpr* typeExpr = null;
-            if (self.check(tok.T_COLON)) { self.advance(); typeExpr = self.parseType(); }
             ast.Expr* value = null;
             if (self.check(tok.T_ASSIGN)) { self.advance(); value = self.parseExpr(); }
             self.expect(tok.T_SEMI);
@@ -1230,8 +1292,14 @@ pub struct Parser
             s->a = value;
             return s;
         }
+        if (self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET)
+            self.parseAttachedAttrs();
         if (self.isTypeTok(self.peekTok(0)) || self.check(tok.TOK_IDENT) || self.check(tok.T_CONST))
         {
+            Mark dsave = self.mark();
+            ast.Decl* d = self.parseTypeFirstDecl(false, false, false);
+            if (d != null) return self.stmtBase(ast.ST_EXPR, t->row, t->col);
+            self.rewind(dsave);
             return self.parseTypeOrExprStmt(t);
         }
         return self.parseExprStmt();
@@ -1395,7 +1463,20 @@ pub struct Parser
         ast.Stmt* init = null;
         if (!self.check(tok.T_SEMI))
         {
-            if (self.isTypeTok(self.peekTok(0)) || self.check(tok.T_CONST) || self.check(tok.TOK_IDENT))
+            if (self.check(tok.T_VAR))
+            {
+                self.advance();
+                str.strView name = self.expectIdent();
+                init = self.stmtBase(ast.ST_VAR, t->row, t->col);
+                init->text = name;
+                init->type = null;
+                if (self.check(tok.T_ASSIGN))
+                {
+                    self.advance();
+                    init->a = self.parseExpr();
+                }
+            }
+            else if (self.isTypeTok(self.peekTok(0)) || self.check(tok.T_CONST) || self.check(tok.TOK_IDENT))
             {
                 Mark saved = self.mark();
                 ast.TypeExpr* typ = self.parseType();
@@ -1622,6 +1703,8 @@ pub struct Parser
                 u32 bcap = 0;
                 while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
                 {
+                    if (self.peekTok(1)->id == tok.T_COLON
+                        && (self.isNameTok(self.peekTok(0)) || self.check(tok.T_DEFAULT))) break;
                     ast.Stmt* st = self.parseStmt();
                     if (st == null) break;
                     self.growS(&body, &nb, &bcap);
@@ -1643,6 +1726,8 @@ pub struct Parser
                 u32 bcap = 0;
                 while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
                 {
+                    if (self.peekTok(1)->id == tok.T_COLON
+                        && (self.isNameTok(self.peekTok(0)) || self.check(tok.T_DEFAULT))) break;
                     ast.Stmt* st = self.parseStmt();
                     if (st == null) break;
                     self.growS(&body, &nb, &bcap);
@@ -1874,7 +1959,8 @@ pub struct Parser
             {
                 // guaranteed not a type
             }
-            if (self.isNameTok(self.peekTok(0)) || self.check(tok.T_CONST))
+            if (self.isNameTok(self.peekTok(0)) || self.check(tok.T_CONST)
+                || self.check(tok.T_VOLATILE) || self.checkStr("restrict"))
             {
                 Mark m2 = self.mark();
                 ast.TypeExpr* typ = self.parseType();
@@ -1891,7 +1977,8 @@ pub struct Parser
                     }
                 }
                 self.rewind(m2);
-                if (self.isNameTok(self.peekTok(0)) || self.check(tok.T_CONST))
+                if (self.isNameTok(self.peekTok(0)) || self.check(tok.T_CONST)
+                    || self.check(tok.T_VOLATILE) || self.checkStr("restrict"))
                 {
                     ast.TypeExpr* typ2 = self.parseType();
                     if (!self.errored && typ2 != null && self.check(tok.T_RPAREN))
@@ -1905,6 +1992,7 @@ pub struct Parser
                 }
             }
             self.rewind(saved);
+            self.advance();
             ast.Expr* expr = self.parseExpr();
             self.expect(tok.T_RPAREN);
             ast.Expr* p = self.exprBase(ast.EX_PAREN, t->row, t->col);
@@ -1935,18 +2023,18 @@ pub struct Parser
         if (self.check(tok.T_COLON_COLON))
         {
             u32 s = t->start;
-            u32 e = t->start + t->len;
+            u32 endPos = t->start + t->len;
             while (self.check(tok.T_COLON_COLON))
             {
                 self.advance();
                 if (self.isNameTok(self.peekTok(0)))
                 {
-                    e = self.peekTok(0)->start + self.peekTok(0)->len;
+                    endPos = self.peekTok(0)->start + self.peekTok(0)->len;
                     self.advance();
                 }
                 else break;
             }
-            str.strView path = self.span(s, e);
+            str.strView path = self.span(s, endPos);
             if (self.check(tok.T_BANG_LT) || self.check(tok.T_LT))
             {
                 self.advance();
@@ -2372,8 +2460,9 @@ pub struct Parser
                 self.expect(tok.T_DOT);
                 str.strView fname = self.expectIdent();
                 if (ini->names == null) ini->names = mman.alloc<str.strView>(8);
-                ast.Expr* fval = self.parseExpr();
                 self.expect(tok.T_ASSIGN);
+                ast.Expr* fval = self.parseExpr();
+                if (self.errored) break;
                 if (ini->names == null) ini->names = mman.alloc<str.strView>(8);
                 ini->names[nv] = fname;
                 self.growE(&vals, &nv, &vcap);
@@ -2470,43 +2559,6 @@ pub struct Parser
     {
         tok.LexTok* t = self.peekTok(0);
         Mark saved = self.mark();
-
-        // namespace NAME { ... }
-        if (self.checkStr("namespace"))
-        {
-            self.advance();
-            str.strView name = self.expectIdent();
-            self.expect(tok.T_LBRACE);
-            ast.Decl** decls = null;
-            u32 nd = 0;
-            u32 dcap = 0;
-            self.ctxPush(CTX_DECL, name, str.strView::empty());
-            while (!self.check(tok.T_RBRACE) && !self.check(tok.TOK_EOF))
-            {
-                self.skipSemicolons();
-                if (self.errored) break;
-                ast.Decl* o1 = null;
-                ast.Decl* o2 = null;
-                u32 cnt = self.parseDecl(&o1, &o2);
-                if (cnt > 0 && o1 != null)
-                {
-                    self.growD(&decls, &nd, &dcap);
-                    decls[nd++] = o1;
-                }
-                if (cnt > 1 && o2 != null)
-                {
-                    self.growD(&decls, &nd, &dcap);
-                    decls[nd++] = o2;
-                }
-            }
-            self.ctxPop();
-            self.expect(tok.T_RBRACE);
-            ast.Decl* d = self.declBase(ast.DT_NAMESPACE, t->row, t->col);
-            d->name = name;
-            d->decls = decls;
-            d->ndecls = nd;
-            return d;
-        }
 
         // method block: Name { ... } or Name<T> { ... } or Name :: Trait { ... }
         if (self.check(tok.TOK_IDENT))
@@ -2731,6 +2783,7 @@ pub struct Parser
         {
             self.skipSemicolons();
             if (self.check(tok.TOK_EOF) || self.check(tok.T_RBRACE)) break;
+            if (self.stallTickTag("decls")) break;
             ast.Decl* o1 = null;
             ast.Decl* o2 = null;
             u32 cnt = self.parseDecl(&o1, &o2);
@@ -2860,6 +2913,11 @@ pub struct Parser
     {
         tok.LexTok* t = self.advance();
         str.strView alias = self.expectIdent();
+        while (self.check(tok.T_DOT))
+        {
+            self.advance();
+            self.expectIdent();
+        }
         self.expect(tok.T_ASSIGN);
         if (self.check(tok.T_IMPORT)) self.advance();
         self.expect(tok.T_LPAREN);
@@ -2893,6 +2951,8 @@ pub struct Parser
             else self.errExpectTok(tok.TOK_STR);
             self.expect(tok.T_RPAREN);
         }
+        if (self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET)
+            self.parseAttachedAttrs();
         ast.TypeExpr* returnType = self.parseType();
         if (self.errored || returnType == null) return null;
         str.strView name = self.expectIdent();
@@ -2999,11 +3059,6 @@ pub struct Parser
         tok.LexTok* t = self.advance();
         str.strView name = self.expectIdent();
         ast.TypeExpr* typeAnno = null;
-        if (self.check(tok.T_COLON))
-        {
-            self.advance();
-            typeAnno = self.parseType();
-        }
         ast.Expr* value = null;
         if (self.check(tok.T_ASSIGN))
         {
@@ -3053,6 +3108,7 @@ pub struct Parser
             self.skipFileAttrs();
             self.skipSemicolons();
             if (self.check(tok.T_RBRACE) || self.check(tok.TOK_EOF)) break;
+            if (self.stallTickTag("struct")) break;
             bool attrMethod = self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET;
             if (attrMethod)
             {

@@ -167,7 +167,7 @@ pub str.strView OP_TERMS[] = {
     "+", "-", "*", "/",
     "%", "&", "|", "^",
     ".", ",", ":", ";",
-    "?", "@",
+    "?", "@", "#",
     "(", ")",
     "{", "}",
     "[", "]",
@@ -206,7 +206,7 @@ pub str.strView ANON_TERMS[] = {
     "assert",
 };
 
-pub const u32 NUM_OP = 50;      // OP_TERMS length (scanPunct bound)
+pub const u32 NUM_OP = 51;      // OP_TERMS length (scanPunct bound)
 pub const u32 NUM_KW = 51;      // KW_TERMS length (scanWord bound)
 pub const u32 NUM_ANON = 101;   // ANON_TERMS length
 

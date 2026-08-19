@@ -32,12 +32,12 @@ const u8* readFile(str.strView path, u32* outLen)
     return buf;
 }
 
-pub void main(u32 argc, char** argv)
+i32 main(u32 argc, char** argv)
 {
     if (argc < 2)
     {
         libc.write(2, (const u8*)"usage: coral <file.crl>\n", 22);
-        return;
+        return 1;
     }
     str.strView path = str.strView::fromCstr(argv[1]);
     u32 len = 0;
@@ -45,7 +45,7 @@ pub void main(u32 argc, char** argv)
     if (src == null)
     {
         libc.write(2, (const u8*)"cannot read input file\n", 22);
-        return;
+        return 1;
     }
 
     lex.Lexer lx = lex.Lexer::new(src, len);
@@ -58,7 +58,7 @@ pub void main(u32 argc, char** argv)
                      e->row, e->col, e->msg, str.strView::empty());
         failed = true;
     }
-    if (failed) return;
+    if (failed) return 1;
 
     parse.Parser p = parse.Parser::new(lr.toks, lr.n, src, len, path);
     ast.Program* prog = p.parseProgram();
@@ -67,5 +67,17 @@ pub void main(u32 argc, char** argv)
         u8 buf[64];
         i32 n = libc.snprintf(buf, 64, "ok: %u top-level decls\n", prog->ndecls);
         if (n > 0) libc.write(1, (const u8*)buf, (u64)n);
+        return 0;
+    }
+    else if (p.errMsg.len > 0)
+    {
+        libc.write(2, (const u8*)p.errMsg.ptr, (u64)p.errMsg.len);
+        libc.write(2, (const u8*)p.errCtx.ptr, (u64)p.errCtx.len);
+        return 1;
+    }
+    else
+    {
+        libc.write(2, (const u8*)"parse failed\n", 13);
+        return 1;
     }
 }
