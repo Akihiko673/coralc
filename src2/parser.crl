@@ -7,7 +7,7 @@ mod str = import("std/text/string.crl");
 mod tok = import("token.crl");
 mod ast = import("ast/ast.crl");
 
-// ---- token ids (TOK_ANON_FIRST=6 + ANON_TERMS index; see token.crl)
+// token ids (TOK_ANON_FIRST=6 + ANON_TERMS index; see token.crl)
 const u32 T_MOD = 6;
 const u32 T_IMPORT = 7;
 const u32 T_PUB = 8;
@@ -112,7 +112,7 @@ const u32 T_RBRACKET = 106;
 const u32 T_ATTR_MIN = 108;
 const u32 T_ATTR_MAX = 115;
 
-// ---- operator precedence (higher binds tighter)
+// operator precedence (higher binds tighter)
 const u32 P_ASSIGN = 0;
 const u32 P_TERNARY = 1;
 const u32 P_OR = 2;
@@ -283,7 +283,7 @@ pub struct Parser
     u32 declCap;
 }
 
-// ---- token access
+// token access
 
 tok.LexTok* peekTok(u32 off)
 {
@@ -331,7 +331,7 @@ str.strView span(u32 s, u32 e)
     return str.strView::fromParts(self.source.ptr + s, e - s);
 }
 
-// ---- context stack
+// context stack
 
 void ctxPush(u32 kind, str.strView name, str.strView name2)
 {
@@ -367,7 +367,7 @@ void appendCtxLabel(str.String* out, CtxEntry* e)
     }
 }
 
-// ---- errors
+// errors
 
 void setErrAt(tok.LexTok* t, str.String* msg)
 {
@@ -507,7 +507,7 @@ void skipSemicolons()
     while (self.check(T_SEMI)) self.advance();
 }
 
-// ---- mark / rewind
+// mark / rewind
 
 Mark mark()
 {
@@ -540,7 +540,7 @@ void seekPos()
     // no-op: pos only restored via rewind(m)
 }
 
-// ---- attributes
+// attributes
 
 void skipAttrBrackets()
 {
@@ -616,7 +616,7 @@ void parseAttachedAttrs()
     }
 }
 
-// ---- array helpers
+// array helpers
 
 void growDeclArr(ast.Decl*** arr, u32* n, u32* cap)
 {
@@ -695,7 +695,7 @@ void growCaseArr(ast.StmtCase*** arr, u32* n, u32* cap)
     *cap = nc;
 }
 
-// ---- node builders
+// node builders
 
 ast.TypeExpr* typeBase(u32 kind, str.strView name, u32 line, u32 col)
 {
@@ -797,7 +797,7 @@ ast.Decl* declBase(u32 kind, u32 line, u32 col)
     return d;
 }
 
-// ---- declarations
+// declarations
 
 void parseDecls()
 {
