@@ -112,6 +112,9 @@ const u32 AC_FUNCG = 86;        // FUNC -> PREF TYPE IDENT !< TYPES > ( PARAMS )
 const u32 AC_FUNCPG = 87;       // FUNC -> PREF TYPE IDENT !< TYPES > ( PARAMS ) ;
 const u32 AC_TGEN2 = 88;        // TYPE -> TBASE < TYPES , TCONSTS >
 const u32 AC_TGEN3 = 89;        // TYPE -> TBASE < TCONSTS >
+const u32 AC_TGENB = 99;        // TYPE -> TBASE !< TYPES >
+const u32 AC_TGEN2B = 100;      // TYPE -> TBASE !< TYPES , TCONSTS >
+const u32 AC_TGEN3B = 101;      // TYPE -> TBASE !< TCONSTS >
 const u32 AC_CONSTINT = 90;     // TCONSTS -> INT (const-expr entry)
 const u32 AC_CONSTAPP = 91;     // TCONSTS -> TCONSTS , INT
 const u32 AC_EXTERN_F0 = 92;    // EXT -> extern TYPE IDENT ( PARAMS ) ;
@@ -533,6 +536,23 @@ lalr.Grammar stmtGrammar()
     r4[2] = lalr.NT_BASE + N_TCONSTS;
     r4[3] = termId((u8*)">");
     addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGEN3);
+    r4[0] = lalr.NT_BASE + N_TBASE;
+    r4[1] = termId((u8*)"!<");
+    r4[2] = lalr.NT_BASE + N_TYPES;
+    r4[3] = termId((u8*)">");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGENB);
+    r6[0] = lalr.NT_BASE + N_TBASE;
+    r6[1] = termId((u8*)"!<");
+    r6[2] = lalr.NT_BASE + N_TYPES;
+    r6[3] = termId((u8*)",");
+    r6[4] = lalr.NT_BASE + N_TCONSTS;
+    r6[5] = termId((u8*)">");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 6, r6, 0, 0, AC_TGEN2B);
+    r4[0] = lalr.NT_BASE + N_TBASE;
+    r4[1] = termId((u8*)"!<");
+    r4[2] = lalr.NT_BASE + N_TCONSTS;
+    r4[3] = termId((u8*)">");
+    addProd(&g, i++, lalr.NT_BASE + N_TYPE, 4, r4, 0, 0, AC_TGEN3B);
     r4[0] = lalr.NT_BASE + N_TYPE;
     r4[1] = termId((u8*)"(");
     r4[2] = lalr.NT_BASE + N_PARAMS;
@@ -1756,6 +1776,53 @@ pub struct StmtParser
             p->col = col;
             ast.freeType(ty);
             mman.dealloc<SList>(cl);
+            self.push((u64)p, K_TYPE);
+            return;
+        }
+        case AC_TGENB:
+        case AC_TGEN2B:
+        case AC_TGEN3B:
+        {
+            ast.TypeExpr* ty = (ast.TypeExpr*)(u64)self.sem[base];
+            ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+            p->kind = ast.TYP_GENERIC;
+            p->name = ty->name;
+            p->elem = null;
+            p->count = null;
+            p->ret = null;
+            p->isConst = false;
+            p->line = line;
+            p->col = col;
+            if (pr->action == AC_TGENB)
+            {
+                SList* l = (SList*)(u64)self.sem[base + 2];
+                p->args = (ast.TypeExpr**)(u64)l->a;
+                p->nargs = l->n;
+                p->cargs = null;
+                p->ncargs = 0;
+                mman.dealloc<SList>(l);
+            }
+            else if (pr->action == AC_TGEN2B)
+            {
+                SList* tl = (SList*)(u64)self.sem[base + 2];
+                SList* cl = (SList*)(u64)self.sem[base + 4];
+                p->args = (ast.TypeExpr**)(u64)tl->a;
+                p->nargs = tl->n;
+                p->cargs = (ast.Expr**)(u64)cl->a;
+                p->ncargs = cl->n;
+                mman.dealloc<SList>(tl);
+                mman.dealloc<SList>(cl);
+            }
+            else
+            {
+                SList* cl = (SList*)(u64)self.sem[base + 2];
+                p->args = null;
+                p->nargs = 0;
+                p->cargs = (ast.Expr**)(u64)cl->a;
+                p->ncargs = cl->n;
+                mman.dealloc<SList>(cl);
+            }
+            ast.freeType(ty);
             self.push((u64)p, K_TYPE);
             return;
         }

@@ -36,6 +36,126 @@ u8* readFile(str.strView path, u32* outLen)
     return buf;
 }
 
+// Validate a type-argument list whose open ('<' or '!<') sits at ltPos, at
+// nesting depth `depth`. Records every '>>' closer that should be split into
+// two '>' into spl[]. Returns true on a well-formed list and sets *outEnd past
+// the closer and *dblClose when a '>>' closed two levels at once.
+bool matchGenArgs(tok.LexTok* toks, u32 n, u32 ltPos, u32 depth,
+                  u32* spl, u32* nspl, u32* outEnd, bool* dblClose,
+                  u32 tLt, u32 tGt, u32 tGtGt, u32 tComma, u32 tConst,
+                  u32 tColonColon, u32 tTypeMin, u32 tTypeMax, u32 tIdent,
+                  u32 tBangLt)
+{
+    u32 i = ltPos + 1;
+    while (true)
+    {
+        if (i >= n) return false;
+        u32 tid = toks[i].id;
+        if (tid == tComma) { i++; continue; }
+        if (tid == tGt) { *outEnd = i + 1; *dblClose = false; return true; }
+        if (tid == tGtGt)
+        {
+            if (depth < 2 || *nspl >= 32) return false;
+            spl[(*nspl)++] = i;
+            *outEnd = i + 1; *dblClose = true; return true;
+        }
+        if (tid == tConst) { i++; if (i >= n) return false; tid = toks[i].id; }
+        if (tid != tIdent && (tid < tTypeMin || tid > tTypeMax)) return false;
+        i++;
+        while (i + 1 < n && toks[i].id == tColonColon &&
+               (toks[i + 1].id == tIdent ||
+                (toks[i + 1].id >= tTypeMin && toks[i + 1].id <= tTypeMax)))
+            i += 2;
+        if (i < n && (toks[i].id == tLt || toks[i].id == tBangLt))
+        {
+            u32 ne; bool nd;
+            if (!matchGenArgs(toks, n, i, depth + 1, spl, nspl, &ne, &nd,
+                             tLt, tGt, tGtGt, tComma, tConst, tColonColon,
+                             tTypeMin, tTypeMax, tIdent, tBangLt)) return false;
+            if (nd) { *outEnd = ne; *dblClose = false; return true; }
+            i = ne;
+        }
+    }
+}
+
+// Split '>>' tokens that close generic argument lists into individual '>'
+// tokens so the LALR type/decl grammars can parse nested generics
+// (e.g. `option<HashMapEntry<K, V>>`). Shift-right '>>' that is not inside a
+// generic span is preserved: a generic span is only entered on a valid
+// `NAME <` / `NAME !<` type-argument list (mirroring expr_parser.probeGeneric).
+tok.LexTok* splitGenericShifts(tok.LexTok* toks, u32* pntoks)
+{
+    u32 n = *pntoks;
+    u32 tLt = tok.terminalId(str.strView::fromCstr("<"));
+    u32 tGt = tok.terminalId(str.strView::fromCstr(">"));
+    u32 tGtGt = tok.terminalId(str.strView::fromCstr(">>"));
+    u32 tBangLt = tok.terminalId(str.strView::fromCstr("!<"));
+    u32 tComma = tok.terminalId(str.strView::fromCstr(","));
+    u32 tConst = tok.terminalId(str.strView::fromCstr("const"));
+    u32 tColonColon = tok.terminalId(str.strView::fromCstr("::"));
+    u32 tTypeMin = tok.terminalId(str.strView::fromCstr("i8"));
+    u32 tTypeMax = tok.terminalId(str.strView::fromCstr("usize"));
+    u32 tIdent = tok.TOK_IDENT;
+
+    u32* spl = mman.alloc<u32>(n);
+    u32 nspl = 0;
+    for (u32 i = 0; i + 1 < n; i++)
+    {
+        u32 tid = toks[i].id;
+        if (tid == tIdent || (tid >= tTypeMin && tid <= tTypeMax))
+        {
+            u32 nxt = toks[i + 1].id;
+            if (nxt == tLt || nxt == tBangLt)
+            {
+                u32 end; bool dbl;
+                u32 s0 = nspl;
+                if (matchGenArgs(toks, n, i + 1, 1, spl, &nspl, &end, &dbl,
+                                 tLt, tGt, tGtGt, tComma, tConst, tColonColon,
+                                 tTypeMin, tTypeMax, tIdent, tBangLt))
+                {
+                    i = end - 1;
+                    continue;
+                }
+                nspl = s0;
+            }
+        }
+    }
+    if (nspl == 0)
+    {
+        mman.dealloc<u32>(spl);
+        return toks;
+    }
+    u8* mark = mman.alloc<u8>(n);
+    for (u32 k = 0; k < n; k++) mark[k] = 0;
+    for (u32 k = 0; k < nspl; k++) mark[spl[k]] = 1;
+    u32 outN = n + nspl;
+    tok.LexTok* out = mman.alloc<tok.LexTok>(outN);
+    u32 o = 0;
+    for (u32 i = 0; i < n; i++)
+    {
+        if (mark[i])
+        {
+            out[o] = toks[i];
+            out[o].id = tGt;
+            o++;
+            out[o] = toks[i];
+            out[o].id = tGt;
+            out[o].start = toks[i].start + 1;
+            out[o].len = 1;
+            o++;
+        }
+        else
+        {
+            out[o] = toks[i];
+            o++;
+        }
+    }
+    mman.dealloc<u8>(mark);
+    mman.dealloc<u32>(spl);
+    *pntoks = outN;
+    return out;
+}
+
 void dumptoks(const u8* src, tok.LexTok* toks, u32 n, tok.LexErr* errs, u32 nerrs)
 {
     for (u32 i = 0; i < n; i++)
@@ -127,6 +247,8 @@ i32 main(i32 argc, char** argv)
         libc.write(2, "\n", 1);
         lex.Lexer lx = lex.Lexer::new(src, len);
         lex.LexResult lr = lx.lex();
+        if (lr.nerrs == 0)
+            lr.toks = splitGenericShifts(lr.toks, &lr.n);
         if (lr.nerrs > 0)
         {
             for (u32 i = 0; i < lr.nerrs; i++)

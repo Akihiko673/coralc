@@ -1,0 +1,24 @@
+pub struct Box<T>
+{
+    T v;
+}
+
+pub struct Holder
+{
+    Box!<u32> item;
+}
+
+pub Box!<u32> mk(u32 x)
+{
+    return b;
+}
+
+pub Box!<u32> build()
+{
+    return Box!<u32>::new();
+}
+
+pub vec!<u32> makeVec()
+{
+    return vec!<u32>::withCap(4);
+}

@@ -495,22 +495,30 @@ pub struct Generator
     bool mergeConflicts(State* a, State* b)    {
         for (u32 t = 0; t < self.g.nterms; t++)
         {
-            u32 prods = 0;
+            // 256-bit mask of reductions (prod indices) on lookahead t.
+            // Must be wider than 32 bits: with >32 productions several
+            // distinct productions alias under `1u << (prod & 31)` and the
+            // conflict test misfires (wrong merges -> parse failures).
+            u32 prods[8] = {0, 0, 0, 0, 0, 0, 0, 0};
             for (u32 k = 0; k < a->n; k++)
             {
                 Item* it = &a->items[k];
                 if (it->dot != self.g.prods[it->prod].nrhs) continue;
                 if (!((it->la[t >> 5] >> (t & 31)) & 1u)) continue;
-                prods |= 1u << (it->prod & 31);
+                prods[it->prod >> 5] |= 1u << (it->prod & 31);
             }
             for (u32 k = 0; k < b->n; k++)
             {
                 Item* it = &b->items[k];
                 if (it->dot != self.g.prods[it->prod].nrhs) continue;
                 if (!((it->la[t >> 5] >> (t & 31)) & 1u)) continue;
-                prods |= 1u << (it->prod & 31);
+                prods[it->prod >> 5] |= 1u << (it->prod & 31);
             }
-            if (prods & (prods - 1)) return true;
+            u32 bits = 0;
+            for (u32 w = 0; w < 8; w++)
+                for (u32 bb = 0; bb < 32; bb++)
+                    if ((prods[w] >> bb) & 1u) bits++;
+            if (bits > 1) return true;
         }
         return false;
     }
