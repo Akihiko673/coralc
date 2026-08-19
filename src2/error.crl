@@ -1,0 +1,67 @@
+// Clang-style diagnostic reporting.
+mod str = import("std/text/string.crl");
+mod libc = import("std/platform/libc.crl");
+
+// Return the 1-based source line `line` as a view (without the newline).
+strView extractLine(strView src, u32 line)
+{
+    u64 idx = 0;
+    u32 cur = 1;
+    while (cur < line && idx < src.len)
+    {
+        if (src.ptr[idx] == '\n') cur++;
+        idx++;
+    }
+    if (cur < line) return strView::empty();
+    u64 start = idx;
+    while (idx < src.len && src.ptr[idx] != '\n') idx++;
+    return strView::fromParts(src.ptr + start, idx - start);
+}
+
+void pushUint(str.String* s, u32 v)
+{
+    u8 tmp[20];
+    i32 n = libc.snprintf(tmp, 20, "%u", v);
+    if (n < 0) n = 0;
+    if ((u64)n > 20) n = 20;
+    s->pushView(strView::fromParts((const char*)tmp, (u64)n));
+}
+
+// Emit a clang-style diagnostic:
+//   file:line:col: error: message [in ctx]
+//   <source line>
+//       ^
+pub void report(strView filename, strView src, u32 line, u32 col,
+                strView msg, strView ctx)
+{
+    str.String s = str.String::new();
+
+    s.pushView(filename);
+    s.pushChar(':');
+    pushUint(&s, line);
+    s.pushChar(':');
+    pushUint(&s, col);
+    s.pushView(strView::fromCstr(": error: "));
+    s.pushView(msg);
+    if (ctx.len > 0)
+    {
+        s.pushView(strView::fromCstr(" [in "));
+        s.pushView(ctx);
+        s.pushChar(']');
+    }
+    s.pushChar('\n');
+
+    strView lineText = extractLine(src, line);
+    s.pushView(lineText);
+    s.pushChar('\n');
+
+    u64 caret = col;
+    if (caret > lineText.len) caret = lineText.len;
+    if (caret < 1) caret = 1;
+    for (u64 i = 1; i < caret; i++) s.pushChar(' ');
+    s.pushChar('^');
+    s.pushChar('\n');
+
+    libc.write(2, s.asU8(), s.len);
+    s.free();
+}

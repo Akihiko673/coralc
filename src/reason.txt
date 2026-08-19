@@ -7,7 +7,6 @@
 //
 // similarly with struct, say String can be imported as std.String, but also as str.String or string.string,
 // so the compiler should fuse them into a single String struct, and use it with the appropriate arguments.
-
 // then full analysis, tyoechecking, semantic, static if possible, and variable stacking for defer.
 // andn other types of types checks.
 //
@@ -16,13 +15,13 @@
 // then another thing, char should be u8 by default, but can be overridden. add an any typpe that is actually a void* tyoe under the hood
 //
 // all attributes must be implemented, used. addition of constexpr or final, for compile time constants.
-
-// Cleanup is trait-based: a `Drop` trait in the language (contract: `void drop()`),
+// Cleanup is trait-based: a `Drop` trait in the language (rule: `void drop()`),
 // implemented by each std/lib type that owns resources. No language-level
-// destructors, no auto-injected destructor declarations, no `@[explicit_destructor]`.
+// destructors, no auto-injected destructor declarations , except trait drop.
 //
 // `@[no_drop]` is a file-level attribute, like `@[forced_pointer]` and `@[no_warn_unsafe]`:
-// it turns drop injection off for the whole file. Std files still define their drops;
+// it turns drop injection off for the whole file. Std files after the self host is complete will 
+// still define their drops;
 // the attribute stops the compiler from doing variable/type tracking for cleanup in
-// those modules, which is what keeps the std compile fast. User code that imports
+// those modules, which is what will keep the std compile fast. User code that imports
 // those modules gets the auto-drop; the std itself skips the tracking.

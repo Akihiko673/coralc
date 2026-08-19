@@ -1268,16 +1268,300 @@ pub struct StmtParser
             && o != termId((u8*)"++") && o != termId((u8*)"--");
     }
 
+    str.strView vof(u32 i)
+    {
+        tok.LexTok* tt = &self.toks[i];
+        return str.strView::fromParts((const char*)self.src + tt->start, tt->len);
+    }
+
+    bool isTypeStartTok(u32 tid)
+    {
+        return tid == tok.TOK_IDENT || (tid >= self.tTypeMinId && tid <= self.tTypeMaxId);
+    }
+
+    ast.TypeExpr* mkIdentTy(str.strView name, u32 line, u32 col)
+    {
+        ast.TypeExpr* ty = mman.alloc<ast.TypeExpr>(1);
+        ty->kind = ast.TYP_IDENT;
+        ty->name = name;
+        ty->elem = null; ty->count = null; ty->args = null; ty->nargs = 0;
+        ty->cargs = null; ty->ncargs = 0; ty->ret = null; ty->isConst = false;
+        ty->line = line; ty->col = col;
+        return ty;
+    }
+
+    ast.TypeExpr* mkPtrTy(ast.TypeExpr* e, u32 line, u32 col)
+    {
+        ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+        p->kind = ast.TYP_PTR; p->elem = e; p->name.ptr = null; p->name.len = 0;
+        p->count = null; p->args = null; p->nargs = 0; p->cargs = null; p->ncargs = 0;
+        p->ret = null; p->isConst = false; p->line = line; p->col = col;
+        return p;
+    }
+
+    ast.TypeExpr* mkArrTy(ast.TypeExpr* e, ast.Expr* c, u32 line, u32 col)
+    {
+        ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+        p->kind = ast.TYP_ARRAY; p->elem = e; p->name.ptr = null; p->name.len = 0;
+        p->count = c; p->args = null; p->nargs = 0; p->cargs = null; p->ncargs = 0;
+        p->ret = null; p->isConst = false; p->line = line; p->col = col;
+        return p;
+    }
+
+    ast.TypeExpr* mkGenTy(ast.TypeExpr* base, ast.TypeExpr** args, u32 nargs,
+                          ast.Expr** cargs, u32 ncargs, u32 line, u32 col)
+    {
+        ast.TypeExpr* p = mman.alloc<ast.TypeExpr>(1);
+        p->kind = ast.TYP_GENERIC; p->name = base->name; p->elem = null;
+        p->count = null; p->args = args; p->nargs = nargs;
+        p->cargs = cargs; p->ncargs = ncargs; p->ret = null;
+        p->isConst = false; p->line = line; p->col = col;
+        mman.dealloc<ast.TypeExpr>(base);
+        return p;
+    }
+
+    ast.Stmt* mkVarStmt(ast.TypeExpr* ty, str.strView name, u32 line, u32 col, ast.Expr* init)
+    {
+        ast.Stmt* s = mman.alloc<ast.Stmt>(1);
+        s->kind = ast.ST_VAR;
+        s->text = name;
+        s->type = ty;
+        s->a = init;
+        s->b = null; s->c = null; s->body = null; s->body2 = null; s->init = null;
+        s->stmts = null; s->nstmts = 0; s->cases = null; s->ncases = 0; s->defaultCase = null;
+        s->line = line; s->col = col;
+        return s;
+    }
+
+    bool parseType(u32* pos, ast.TypeExpr** out)
+    {
+        if (*pos >= self.ntoks) return false;
+        u32 tid = self.toks[*pos].id;
+        if (!self.isTypeStartTok(tid)) return false;
+        u32 l0 = self.toks[*pos].row;
+        u32 c0 = self.toks[*pos].col;
+        u32 start = self.toks[*pos].start;
+        (*pos)++;
+        while (*pos + 1 < self.ntoks &&
+               self.toks[*pos].id == termId((u8*)"::") &&
+               self.toks[*pos + 1].id == tok.TOK_IDENT)
+            *pos += 2;
+        u32 endp = (*pos > 0) ? (self.toks[*pos - 1].start + self.toks[*pos - 1].len) : start;
+        str.strView full = str.strView::fromParts((const char*)self.src + start, endp - start);
+        ast.TypeExpr* ty = self.mkIdentTy(full, l0, c0);
+        if (*pos < self.ntoks &&
+            (self.toks[*pos].id == termId((u8*)"<") || self.toks[*pos].id == termId((u8*)"!<")))
+        {
+            (*pos)++;
+            ast.TypeExpr** args = mman.alloc<ast.TypeExpr*>(16);
+            ast.Expr** cargs = mman.alloc<ast.Expr*>(16);
+            u32 nargs = 0, ncargs = 0;
+            bool first = true;
+            while (*pos < self.ntoks && self.toks[*pos].id != termId((u8*)">"))
+            {
+                if (!first)
+                {
+                    if (self.toks[*pos].id == termId((u8*)",")) (*pos)++;
+                    else break;
+                }
+                first = false;
+                if (*pos >= self.ntoks) break;
+                if (self.isTypeStartTok(self.toks[*pos].id))
+                {
+                    ast.TypeExpr* a;
+                    if (self.parseType(pos, &a) && nargs < 16) args[nargs++] = a;
+                    else { ast.freeType(ty); return false; }
+                }
+                else
+                {
+                    u32 lt = self.toks[*pos].id;
+                    if (lt == tok.TOK_INT || lt == tok.TOK_FLOAT
+                        || lt == tok.TOK_CHAR || lt == tok.TOK_STR)
+                    {
+                        ast.Expr* e = mman.alloc<ast.Expr>(1);
+                        e->kind = ast.EX_INT;
+                        tok.LexTok* ltt = &self.toks[*pos];
+                        e->text = str.strView::fromParts((const char*)self.src + ltt->start, ltt->len);
+                        e->a = null; e->b = null; e->c = null;
+                        e->args = null; e->nargs = 0; e->names = null;
+                        e->type = null; e->targs = null; e->ntargs = 0;
+                        e->post = false; e->line = ltt->row; e->col = ltt->col;
+                        if (ncargs < 16) cargs[ncargs++] = e;
+                        (*pos)++;
+                    }
+                    else
+                    {
+                        ast.freeType(ty);
+                        return false;
+                    }
+                }
+            }
+            if (*pos >= self.ntoks || self.toks[*pos].id != termId((u8*)">")) { ast.freeType(ty); return false; }
+            (*pos)++;
+            ty = self.mkGenTy(ty, args, nargs, cargs, ncargs, l0, c0);
+        }
+        while (*pos < self.ntoks &&
+               (self.toks[*pos].id == termId((u8*)"*") || self.toks[*pos].id == termId((u8*)"&")))
+        {
+            ty = self.mkPtrTy(ty, l0, c0);
+            (*pos)++;
+        }
+        while (*pos < self.ntoks && self.toks[*pos].id == termId((u8*)"["))
+        {
+            (*pos)++;
+            ast.Expr* sz = null;
+            if (self.toks[*pos].id != termId((u8*)"]"))
+            {
+                u32 stp[1];
+                stp[0] = termId((u8*)"]");
+                u32 consumed = 0;
+                res.Result<ast.Expr*, exprP.ParseErr> r = self.exp.parseFrom(
+                    self.src, self.toks, self.ntoks, *pos, stp, 1, &consumed);
+                if (r.isErr()) { ast.freeType(ty); return false; }
+                sz = r.value;
+                *pos = consumed;
+            }
+            if (*pos >= self.ntoks || self.toks[*pos].id != termId((u8*)"]")) { ast.freeType(ty); return false; }
+            (*pos)++;
+            ty = self.mkArrTy(ty, sz, l0, c0);
+        }
+        *out = ty;
+        return true;
+    }
+
+    bool tryParseStmtVarDecl(ast.Stmt** outStmt)
+    {
+        u32 pos = self.ip;
+        ast.TypeExpr* ty = null;
+        if (!self.parseType(&pos, &ty)) return false;
+        if (pos >= self.ntoks || self.toks[pos].id != tok.TOK_IDENT) { ast.freeType(ty); return false; }
+        str.strView name = self.vof(pos);
+        u32 nameRow = self.toks[pos].row, nameCol = self.toks[pos].col;
+        pos++;
+        if (pos >= self.ntoks) { ast.freeType(ty); return false; }
+        u32 nid = self.toks[pos].id;
+        if (nid == termId((u8*)";"))
+        {
+            self.ip = pos;
+            *outStmt = self.mkVarStmt(ty, name, nameRow, nameCol, null);
+            return true;
+        }
+        if (nid == termId((u8*)"="))
+        {
+            pos++;
+            u32 stp[1]; stp[0] = termId((u8*)";");
+            u32 consumed = 0;
+            res.Result<ast.Expr*, exprP.ParseErr> r = self.exp.parseFrom(
+                self.src, self.toks, self.ntoks, pos, stp, 1, &consumed);
+            if (r.isErr()) { ast.freeType(ty); return false; }
+            pos = consumed;
+            if (pos >= self.ntoks || self.toks[pos].id != termId((u8*)";")) { ast.freeType(ty); ast.freeExpr(r.value); return false; }
+            self.ip = pos;
+            *outStmt = self.mkVarStmt(ty, name, nameRow, nameCol, r.value);
+            return true;
+        }
+        if (nid == termId((u8*)"["))
+        {
+            pos++;
+            ast.Expr* sz = null;
+            if (self.toks[pos].id != termId((u8*)"]"))
+            {
+                u32 stp[1]; stp[0] = termId((u8*)"]");
+                u32 consumed = 0;
+                res.Result<ast.Expr*, exprP.ParseErr> r = self.exp.parseFrom(
+                    self.src, self.toks, self.ntoks, pos, stp, 1, &consumed);
+                if (r.isErr()) { ast.freeType(ty); return false; }
+                sz = r.value; pos = consumed;
+            }
+            if (pos >= self.ntoks || self.toks[pos].id != termId((u8*)"]")) { ast.freeType(ty); return false; }
+            pos++;
+            ast.TypeExpr* aty = self.mkArrTy(ty, sz, nameRow, nameCol);
+            if (pos < self.ntoks && self.toks[pos].id == termId((u8*)"="))
+            {
+                pos++;
+                u32 stp[1]; stp[0] = termId((u8*)";");
+                u32 consumed = 0;
+                res.Result<ast.Expr*, exprP.ParseErr> r = self.exp.parseFrom(
+                    self.src, self.toks, self.ntoks, pos, stp, 1, &consumed);
+                if (r.isErr()) { ast.freeType(aty); return false; }
+                pos = consumed;
+                if (pos >= self.ntoks || self.toks[pos].id != termId((u8*)";")) { ast.freeType(aty); ast.freeExpr(r.value); return false; }
+                self.ip = pos;
+                *outStmt = self.mkVarStmt(aty, name, nameRow, nameCol, r.value);
+                return true;
+            }
+            if (pos >= self.ntoks || self.toks[pos].id != termId((u8*)";")) { ast.freeType(aty); return false; }
+            self.ip = pos;
+            *outStmt = self.mkVarStmt(aty, name, nameRow, nameCol, null);
+            return true;
+        }
+        if (nid == termId((u8*)","))
+        {
+            ast.Stmt* blk = mman.alloc<ast.Stmt>(1);
+            blk->kind = ast.ST_BLOCK; blk->text = str.strView::empty();
+            blk->type = null; blk->a = null; blk->b = null; blk->c = null;
+            blk->body = null; blk->body2 = null; blk->init = null;
+            blk->cases = null; blk->ncases = 0; blk->defaultCase = null;
+            blk->line = nameRow; blk->col = nameCol;
+            u32 cap = 8; u32 n = 0;
+            ast.Stmt** arr = mman.alloc<ast.Stmt*>(cap);
+            arr[n++] = self.mkVarStmt(ty, name, nameRow, nameCol, null);
+            while (pos < self.ntoks && self.toks[pos].id == termId((u8*)","))
+            {
+                pos++;
+                if (pos >= self.ntoks || self.toks[pos].id != tok.TOK_IDENT)
+                {
+                    for (u32 k = 0; k < n; k++) ast.freeStmt(arr[k]);
+                    mman.dealloc<ast.Stmt*>(arr); mman.dealloc<ast.Stmt>(blk);
+                    return false;
+                }
+                str.strView nm = self.vof(pos);
+                u32 nr = self.toks[pos].row, nc = self.toks[pos].col;
+                pos++;
+                if (n >= cap)
+                {
+                    ast.Stmt** na = mman.alloc<ast.Stmt*>(cap * 2);
+                    for (u32 k = 0; k < n; k++) na[k] = arr[k];
+                    mman.dealloc<ast.Stmt*>(arr); arr = na; cap *= 2;
+                }
+                arr[n++] = self.mkVarStmt(null, nm, nr, nc, null);
+            }
+            if (pos >= self.ntoks || self.toks[pos].id != termId((u8*)";"))
+            {
+                for (u32 k = 0; k < n; k++) ast.freeStmt(arr[k]);
+                mman.dealloc<ast.Stmt*>(arr); mman.dealloc<ast.Stmt>(blk);
+                return false;
+            }
+            blk->stmts = arr; blk->nstmts = n;
+            self.ip = pos;
+            *outStmt = blk;
+            return true;
+        }
+        ast.freeType(ty);
+        return false;
+    }
+
     // runs the expression sub-parser at the current token for an ES slot;
-    // empty when the next token is a stop. Sets *out and advances self.ip.
-    bool intercept(u32 action, u64* out)
+    // empty when the next token is a stop. Sets *out, *outKind and advances self.ip.
+    bool intercept(u32 action, u64* out, u32* outKind)
     {
         u32 stops[2];
         u32 nstops = esStops(action, stops);
+        if (action == AC_ES_SEMI)
+        {
+            ast.Stmt* vs;
+            if (self.tryParseStmtVarDecl(&vs))
+            {
+                *out = (u64)vs;
+                *outKind = K_STMT;
+                return true;
+            }
+        }
         u64 val = 0;
         if (self.ip < self.ntoks && inStops(self.toks[self.ip].id, stops, nstops))
         {
             *out = 0;
+            *outKind = K_NULL;
             return true;
         }
         u32 consumed = 0;
@@ -1301,6 +1585,7 @@ pub struct StmtParser
         val = (u64)e;
         self.ip = consumed;
         *out = val;
+        *outKind = K_EXPR;
         return true;
     }
 
@@ -1937,6 +2222,11 @@ pub struct StmtParser
         }
         case AC_EXPR:
         {
+            if (self.skind[base] == K_STMT)
+            {
+                self.push(self.sem[base], K_STMT);
+                return;
+            }
             ast.Stmt* s = mman.alloc<ast.Stmt>(1);
             s->kind = ast.ST_EXPR;
             s->text = str.strView::empty();
@@ -3732,12 +4022,14 @@ pub struct StmtParser
                 libc.write(1, b, bl);
                 libc.write(1, (u8*)"\n", 1);
             }
-            bool identOverride = en->kind == lalr.ACT_SHIFT && tid == tok.TOK_IDENT
-                                 && es != 0xFF && !self.identContinuesType(self.ip);
-            if (es != 0xFF && (en->kind == lalr.ACT_ERROR || identOverride))
+            bool identOverride = tid == tok.TOK_IDENT && es != 0xFF
+                                 && !self.identContinuesType(self.ip);
+            bool typeKwOverride = self.isTypeStartTok(tid) && tid != tok.TOK_IDENT && es != 0xFF;
+            if (es != 0xFF && (en->kind == lalr.ACT_ERROR || identOverride || typeKwOverride))
             {
                 u64 val = 0;
-                if (!self.intercept(es, &val))
+                u32 kind = K_NULL;
+                if (!self.intercept(es, &val, &kind))
                 {
                     self.errRow = self.toks[self.ip].row;
                     self.errCol = self.toks[self.ip].col;
@@ -3763,7 +4055,7 @@ pub struct StmtParser
                     return null;
                 }
                 self.sem[self.sv] = val;
-                self.skind[self.sv] = val ? K_EXPR : K_NULL;
+                self.skind[self.sv] = kind;
                 self.sline[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].row : 0;
                 self.scol[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].col : 0;
                 self.sv++;
@@ -3798,7 +4090,8 @@ pub struct StmtParser
                 if (pr->action >= AC_ES_SEMI && pr->action <= AC_ES_BOTH)
                 {
                     u64 val = 0;
-                    if (!self.intercept(pr->action, &val))
+                    u32 kind = K_NULL;
+                    if (!self.intercept(pr->action, &val, &kind))
                     {
                         self.clearSem();
                         return null;
@@ -3809,7 +4102,7 @@ pub struct StmtParser
                         return null;
                     }
                     self.sem[self.sv] = val;
-                    self.skind[self.sv] = val ? K_EXPR : K_NULL;
+                    self.skind[self.sv] = kind;
                     self.sline[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].row : 0;
                     self.scol[self.sv] = self.ip < self.ntoks ? self.toks[self.ip].col : 0;
                     self.sv++;

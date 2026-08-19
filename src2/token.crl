@@ -1,0 +1,123 @@
+mod str = import("std/text/string");
+
+pub const u32 TOK_EOF = 0;
+pub const u32 TOK_IDENT = 1;
+pub const u32 TOK_INT = 2;
+pub const u32 TOK_FLOAT = 3;
+pub const u32 TOK_STR = 4;
+pub const u32 TOK_CHAR = 5;
+pub const u32 TOK_ANON_FIRST = 6;
+
+pub struct LexTok
+{
+    u32 id;
+    u32 start;
+    u32 len;
+    u32 row;
+    u32 col;
+}
+
+pub struct LexErr
+{
+    u32 start;
+    u32 row;
+    u32 col;
+    str.strView msg;
+}
+
+pub str.strView KW_TERMS[] = {
+    "mod", "import", "pub", "static",
+    "inline", "struct", "enum", "trait",
+    "const", "constexpr", "var", "typedef",
+    "distinct", "extern", "if", "else",
+    "while", "for", "loop", "switch",
+    "case", "default", "break", "continue",
+    "return", "defer", "comptime", "flag",
+    "asm", "volatile", "sizeof", "true",
+    "false", "null", "i8", "i16", "i32", "i64",
+    "u8", "u16", "u32", "u64", "f32", "f64",
+    "bool", "char", "void", "isize", "usize",
+    "assert",
+};
+
+pub str.strView OP_TERMS[] = {
+    "@[forced_unsafe_cast]",
+    "@[forced_null_deref]",
+    "@[no_warn_unsafe]",
+    "@[forced_pointer]",
+    "@no_null", "@[noret]",
+    "@reorder", "@packed",
+    "<<=", ">>=", "...",
+    "=>", "+=", "-=",
+    "*=", "/=", "%=",
+    "&=", "|=", "^=",
+    "==", "!=",
+    "!<", "<=", ">=",
+    "&&", "||",
+    "<<", ">>",
+    "++", "--",
+    "->", "::",
+    "=", "<", ">",
+    "!", "~", "#",
+    "+", "-", "*", "/",
+    "%", "&", "|", "^",
+    ".", ",", ":", ";",
+    "?", "@",
+    "(", ")",
+    "{", "}",
+    "[", "]",
+};
+
+pub str.strView ANON_TERMS[] = {
+    "mod", "import", "pub",
+    "static", "inline", "struct",
+    "enum", "trait", "const",
+    "var", "constexpr", "typedef",
+    "distinct", "extern", "if",
+    "else", "while", "for",
+    "loop", "switch", "case",
+    "default", "break", "continue",
+    "return", "defer", "comptime",
+    "flag", "asm", "volatile",
+    "sizeof", "true", "false",
+    "null", "i8", "i16", "i32",
+    "i64", "u8", "u16", "u32",
+    "u64", "f32", "f64",
+    "bool", "char", "void",
+    "isize", "usize", "<<=",
+    ">>=", "...", "=>", "+=",
+    "-=", "*=", "/=", "%=",
+    "&=", "|=", "^=", "==",
+    "!=", "!<", "<=", ">=",
+    "&&", "||", "<<", ">>",
+    "++", "--", "->", "::",
+    "=", "<", ">", "!", "~",
+    "+", "-", "*", "/", "%",
+    "&", "|", "^", ".", ",",
+    ":", ";", "?", "@", "(",
+    ")", "{", "}", "[", "]",
+    "assert",
+    "@[forced_unsafe_cast]",
+    "@[forced_null_deref]",
+    "@[no_warn_unsafe]",
+    "@[forced_pointer]",
+    "@no_null",
+    "@[noret]",
+    "@reorder",
+    "@packed",
+};
+
+pub const u32 NUM_OP = 59;      // OP_TERMS length (scanPunct bound)
+pub const u32 NUM_ANON = 108;   // ANON_TERMS length
+
+pub u32 terminalId(str.strView s)
+{
+    for (u32 i = 0; i < NUM_ANON; i++)
+    {
+        str.strView t = ANON_TERMS[i];
+        u32 j = 0;
+        while (j < t.len && j < s.len && t.ptr[j] == s.ptr[j]) j++;
+        if (j == t.len && j == s.len) return TOK_ANON_FIRST + i;
+    }
+    return 0xFFFFFFFF;
+}

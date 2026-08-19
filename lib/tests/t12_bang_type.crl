@@ -22,3 +22,12 @@ pub vec!<u32> makeVec()
 {
     return vec!<u32>::withCap(4);
 }
+
+pub u32 demo()
+{
+    vec!<u32> v;
+    u32 x = 5;
+    Box!<u32> b = mk(3);
+    arr!<u32, 4> a = newArr();
+    return x;
+}
