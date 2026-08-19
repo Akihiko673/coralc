@@ -1,0 +1,25 @@
+// tracking types across scopes, to drop free() functions for instances of types implementing the drop trait
+// or trqcking of. wat zig does.
+Modules, naming, imports — Zig
+1. How modules work. Zig has no registry or package table. Every .zig file is a module. You bind it with const typ = @import("types.zig"); — this creates a comptime constant whose value is the module (a struct). Everything inside is reachable as typ.name, typ.foo(), etc. The binding is local to the importing file; another file can bind the same module to a different name — t, x, anything. The alias never matters beyond the file it's written in.
+2. pub. Only pub decls are meant to be used from outside, but there's no hard enforcement at comptime in older builds (0.13 and earlier: typed(module).foo still worked). It's a visibility convention + safety mechanism, not a linker mechanism.
+3. Naming. Source convention only: files snake_case.zig, types CamelCase, functions camelCase. The compiler doesn't care. There is no name mangling at all:
+- No C++-style overloading → each pub fn foo has exactly one definition → the source name is sufficient.
+- extern fn/@extern keep the exact C ABI name — byte-for-byte in the symbol table.
+- Same name in two files: legal, because qualifiers disambiguate at comptime (a.foo vs b.foo are distinct decls). If both are real functions that emit code, the compiler gives each a unique object-level symbol (names like types.foo / main.foo in .symtab) — no duplicates, no collision, no mangling of identifiers.
+- Generic instantiations (e.g. ArrayList(u8) vs ArrayList(f32)) monomorphize into separate functions whose symbols embed the path + type args to keep them unique — the only case where type info shows up in symbol names.
+How functions are kept in assembly
+Source name → symbol → address. After lowering, each function becomes a sequence of machine instructions placed in .text, labeled by its symbol:
+types.foo:          ; label = symbol, that's ALL the naming that exists
+        push rbp
+        mov  rbp, rsp
+        mov  eax, 42
+        pop  rbp
+        ret
+- The marker for a function's start is just its label. Names exist only in the symbol table (.symtab + .strtab) and, if compiled with debug info, .debug_info. The machine code itself contains no names whatsoever — only addresses.
+- Direct calls: call foo compiles to a single instruction call rel32 — a PC-relative jump to the label's address. The linker patches the displacement once it knows where foo lands. Total cost: 5 bytes, zero indirection.
+- Function pointers: a fn value = just an address in a register. const f = foo; → lea rax, [rip + foo]. Calling f() = call rax. No metadata, no bound objects.
+- Comptime values (pub const GBool = bool, alias bounds): never reach assembly. No symbol, no bytes. Pure compile-time.
+- Extern / C ABI: extern fn produces an unresolved reference — a call whose displacement the linker fills in from another object's symbol. Kept bare and unmangled.
+- Shared libraries / dynamic loading: calls that cross a .so boundary go through the PLT (call foo@PLT) or GOT (call [rip+got]). The loader patches those slots at load time. The address you get from dlsym is the actual function's entry point in .text.
+The whole picture: the runtime never sees names. nm sees names; the loader sees names; your machine code sees only slot offsets, displacements, and register-held addresses. Once any two components exchange addresses at load time (a lookup keyed by string, performed once), every later interaction is plain direct or indirect calls. Strings are startup bookkeeping; the steady state is pure addresses.

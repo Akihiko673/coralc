@@ -1,4 +1,4 @@
-// src2/parser.crl — port of py/parser.py to Coral. Recursive descent.
+// src/parser.crl — port of py/parser.py to Coral. Recursive descent.
 // Structure: pure helpers first, then pub struct Parser holding all parse
 // methods (methods operate on the implicit `self` receiver). Attributes:
 // file-level @[[...]] / @[...] / @name are skipped; decl-level [[...]] are
