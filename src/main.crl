@@ -95,13 +95,17 @@ i32 main(u32 argc, char** argv)
     }
     else if (p.errMsg.len > 0)
     {
-        libc.write(2, (const u8*)p.errMsg.ptr, (u64)p.errMsg.len);
-        libc.write(2, (const u8*)p.errCtx.ptr, (u64)p.errCtx.len);
+        error.reportCode(p.errCode.asView(), path, str.strView::fromParts((const char*)src, len),
+                         p.errLine, p.errCol, error.LVL_ERROR, p.errMsg.asView(), p.errHelp.asView());
         return 1;
     }
     else
     {
-        libc.write(2, (const u8*)"parse failed\n", 13);
+        error.reportCode(str.strView::fromCstr("SYN-1999"), path,
+                         str.strView::fromParts((const char*)src, len),
+                         1, 1, error.LVL_ERROR,
+                         str.strView::fromCstr("parse failed"),
+                         str.strView::fromCstr("the input could not be parsed into a program"));
         return 1;
     }
 }

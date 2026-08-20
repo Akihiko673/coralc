@@ -10,6 +10,7 @@ mod libc = import("std/platform/libc.crl");
 mod tok = import("token");
 mod lex = import("lexer");
 mod parse = import("parser");
+mod error = import("error");
 
 pub struct Loader
 {
@@ -174,11 +175,30 @@ ast.Program* loadOne(Loader* L, const char* resolved, u32 resLen)
     if (!loaderRead(resolved, &src, &srclen)) return null;
     lex.Lexer lx = lex.Lexer::new(src, srclen);
     lex.LexResult lr = lx.lex();
-    if (lr.nerrs > 0) return null;
+    if (lr.nerrs > 0)
+    {
+        str.strView f = str.strView::fromCstr(resolved);
+        for (u32 i = 0; i < lr.nerrs; i++)
+        {
+            tok.LexErr* e = &lr.errs[i];
+            error.reportCode(e->code, f, str.strView::fromParts((const char*)src, srclen),
+                             e->row, e->col, error.LVL_ERROR, e->msg, e->help);
+        }
+        return null;
+    }
     parse.Parser p = parse.Parser::new(lr.toks, lr.n, src, srclen,
                                        str.strView::fromCstr(resolved));
     ast.Program* prog = p.parseProgram();
-    if (prog == null) return null;
+    if (prog == null)
+    {
+        if (p.errMsg.len > 0)
+        {
+            error.reportCode(p.errCode.asView(), str.strView::fromCstr(resolved),
+                             str.strView::fromParts((const char*)src, srclen),
+                             p.errLine, p.errCol, error.LVL_ERROR, p.errMsg.asView(), p.errHelp.asView());
+        }
+        return null;
+    }
     // register BEFORE recursing so import cycles terminate
     loaderAdd(L, prog, resolved, resLen);
     char buf[512];

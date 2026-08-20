@@ -66,23 +66,45 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
 {
     str.String s = str.String::new();
 
+    // ANSI colour helpers (ESC byte 27 followed by a suffix; avoids \x in
+    // string literals so the bootstrap compiler accepts them).
+    u8 ESC = 27;
+    strView C_RESET = strView::fromCstr("[0m");
+    strView C_LEVEL = strView::fromCstr("[1;31m"); // error: bold red
+    strView C_CODE  = strView::fromCstr("[35m");   // code: magenta
+    strView C_BOX   = strView::fromCstr("[90m");   // box / gutter: grey
+    strView C_CARET = strView::fromCstr("[1;31m"); // caret: bold red
+    strView C_HELP  = strView::fromCstr("[36m");   // help: cyan
+    if (level == LVL_WARN) C_LEVEL = strView::fromCstr("[33m");
+    else if (level == LVL_INFO || level == LVL_NOTE) C_LEVEL = strView::fromCstr("[36m");
+
     // header: error[CODE]: msg  (or error: msg)
+    s.pushChar((char)ESC);
+    s.pushView(C_LEVEL);
     if (level == LVL_ERROR) s.pushView(strView::fromCstr("error"));
     else if (level == LVL_WARN) s.pushView(strView::fromCstr("warning"));
     else if (level == LVL_INFO) s.pushView(strView::fromCstr("info"));
     else s.pushView(strView::fromCstr("note"));
     if (code.len > 0)
     {
+        s.pushChar((char)ESC);
+        s.pushView(C_CODE);
         s.pushChar('[');
         s.pushView(code);
         s.pushChar(']');
     }
+    s.pushChar((char)ESC);
+    s.pushView(C_RESET);
     s.pushView(strView::fromCstr(": "));
     s.pushView(msg);
     s.pushChar('\n');
 
     // location line
+    s.pushChar((char)ESC);
+    s.pushView(C_BOX);
     s.pushView(strView::fromCstr("  ┌─► "));
+    s.pushChar((char)ESC);
+    s.pushView(C_RESET);
     s.pushView(filename);
     s.pushChar(':');
     pushUint(&s, line);
@@ -91,7 +113,11 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
     s.pushChar('\n');
 
     // blank gutter
+    s.pushChar((char)ESC);
+    s.pushView(C_BOX);
     s.pushView(strView::fromCstr("  │\n"));
+    s.pushChar((char)ESC);
+    s.pushView(C_RESET);
 
     // context window: one line above, the error line, one line below
     u32 numW = digits(line + 1);
@@ -104,9 +130,13 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
         strView lt = extractLine(src, (u32)ln);
         if (lt.len == 0 && off != 0) continue;
 
+        s.pushChar((char)ESC);
+        s.pushView(C_BOX);
         s.pushView(strView::fromCstr("  │ "));
         pushPadUint(&s, (u32)ln, numW);
         s.pushView(strView::fromCstr(" │ "));
+        s.pushChar((char)ESC);
+        s.pushView(C_RESET);
         s.pushView(lt);
         s.pushChar('\n');
     }
@@ -115,17 +145,36 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
     u32 prefixLen = 3 + numW + 3; // "  │ " + numW + " │ "  (3 + numW + 3)
     i32 caretSpaces = (i32)prefixLen + (i32)col - 4;
     if (caretSpaces < 0) caretSpaces = 0;
+    s.pushChar((char)ESC);
+    s.pushView(C_BOX);
     s.pushView(strView::fromCstr("  |"));
+    s.pushChar((char)ESC);
+    s.pushView(C_RESET);
     for (i32 i = 0; i < caretSpaces; i++) s.pushChar(' ');
-    s.pushView(strView::fromCstr("▲\n"));
+    s.pushChar((char)ESC);
+    s.pushView(C_CARET);
+    s.pushView(strView::fromCstr("▲"));
+    s.pushChar((char)ESC);
+    s.pushView(C_RESET);
+    s.pushChar('\n');
 
     // help / suggestion line
     if (help.len > 0)
     {
+        s.pushChar((char)ESC);
+        s.pushView(C_BOX);
         s.pushView(strView::fromCstr("  │"));
+        s.pushChar((char)ESC);
+        s.pushView(C_RESET);
         for (i32 i = 0; i < caretSpaces; i++) s.pushChar(' ');
+        s.pushChar((char)ESC);
+        s.pushView(C_BOX);
         s.pushView(strView::fromCstr("╰─ "));
+        s.pushChar((char)ESC);
+        s.pushView(C_HELP);
         s.pushView(help);
+        s.pushChar((char)ESC);
+        s.pushView(C_RESET);
         s.pushChar('\n');
     }
 

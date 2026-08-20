@@ -172,6 +172,8 @@ pub struct Parser
     u32 errCol;
     str.String errMsg;
     str.String errCtx;
+    str.String errCode;
+    str.String errHelp;
     str.strView* fattrs;
     u32 nfattrs;
     u32 fattrsCap;
@@ -195,6 +197,8 @@ pub struct Parser
         p.errored = false;
         p.errMsg = str.String::new();
         p.errCtx = str.String::new();
+        p.errCode = str.String::new();
+        p.errHelp = str.String::new();
         p.nattrs = 0;
         p.gtgtConsumed = false;
         p.decls = null;
@@ -300,7 +304,7 @@ pub struct Parser
 
     // errors
 
-    void setErrAt(tok.LexTok* t, str.String* msg)
+    void setErrAt(tok.LexTok* t, str.String* msg, str.String* code, str.String* help)
     {
         if (self.errored) return;
         self.errored = true;
@@ -309,6 +313,12 @@ pub struct Parser
         self.errMsg.free();
         self.errMsg = str.String::new();
         for (u64 i = 0; i < msg->len; i++) self.errMsg.pushChar(msg->ptr[i]);
+        self.errCode.free();
+        self.errCode = str.String::new();
+        if (code != null) for (u64 i = 0; i < code->len; i++) self.errCode.pushChar(code->ptr[i]);
+        self.errHelp.free();
+        self.errHelp = str.String::new();
+        if (help != null) for (u64 i = 0; i < help->len; i++) self.errHelp.pushChar(help->ptr[i]);
         self.errCtx.free();
         self.errCtx = str.String::new();
         if (self.nctx > 0)
@@ -323,22 +333,32 @@ pub struct Parser
         }
     }
 
-    void errorMsg(const char* m)
+    // Build a coded diagnostic at token `t`.
+    void setErr(tok.LexTok* t, const char* code, const char* m, const char* help)
     {
         if (self.errored) return;
         str.String s = str.String::new();
         s.pushView(str.strView::fromCstr(m));
-        self.setErrAt(self.peekTok(0), &s);
+        str.String c = str.String::new();
+        c.pushView(str.strView::fromCstr(code));
+        str.String h = str.String::new();
+        if (help != null) h.pushView(str.strView::fromCstr(help));
+        self.setErrAt(t, &s, &c, &h);
         s.free();
+        c.free();
+        h.free();
     }
 
-    void errorTok(tok.LexTok* t, const char* m)
+    void errorMsg(const char* code, const char* m, const char* help)
     {
         if (self.errored) return;
-        str.String s = str.String::new();
-        s.pushView(str.strView::fromCstr(m));
-        self.setErrAt(t, &s);
-        s.free();
+        self.setErr(self.peekTok(0), code, m, help);
+    }
+
+    void errorTok(tok.LexTok* t, const char* code, const char* m, const char* help)
+    {
+        if (self.errored) return;
+        self.setErr(t, code, m, help);
     }
 
     void tokenDisplayStr(str.String* s, tok.LexTok* t)
@@ -375,8 +395,14 @@ pub struct Parser
         else s.pushView(str.strView::fromCstr("expected token"));
         s.pushView(str.strView::fromCstr(", found "));
         self.tokenDisplayStr(&s, got);
-        self.setErrAt(got, &s);
+        str.String c = str.String::new();
+        c.pushView(str.strView::fromCstr("SYN-1002"));
+        str.String h = str.String::new();
+        h.pushView(str.strView::fromCstr("a closing delimiter or required token is missing; check the surrounding grammar"));
+        self.setErrAt(got, &s, &c, &h);
         s.free();
+        c.free();
+        h.free();
     }
 
     bool expect(u32 t)
@@ -835,7 +861,9 @@ pub struct Parser
                 s.pushView(str.strView::fromCstr(" pos="));
                 s.pushView(str.strView::fromParts((const char*)(self.source.ptr + t->start), 16));
                 self.errLine = t->row;
-                self.setErrAt(t, &s);
+                self.setErr(t, "SYN-1999",
+                    "parser stall detected",
+                    "the parser made no forward progress; the preceding construct is likely grammatically invalid");
                 s.free();
                 return true;
             }
@@ -1004,7 +1032,7 @@ pub struct Parser
             }
             else
             {
-                self.errorMsg("expected a type after '('");
+                self.errorMsg("SYN-1003", "expected a type after '('", "a parenthesized type must contain a complete type expression");
             }
         }
         else
@@ -1203,7 +1231,7 @@ pub struct Parser
             self.gtgtConsumed = true;
             return true;
         }
-        self.errorMsg("expected '>' to close the generic argument list");
+        self.errorMsg("SYN-1002", "expected '>' to close the generic argument list", "generic argument lists are terminated by '>'");
         return false;
     }
 
@@ -2039,7 +2067,9 @@ pub struct Parser
         str.String s = str.String::new();
         s.pushView(str.strView::fromCstr("unexpected token in expression: "));
         self.tokenDisplayStr(&s, t);
-        self.setErrAt(t, &s);
+        self.setErr(t, "SYN-1002",
+            "unexpected token in expression",
+            "this token does not fit the grammar expected at this position; remove it or complete the surrounding construct");
         s.free();
         return null;
     }
@@ -2930,13 +2960,13 @@ pub struct Parser
             ast.Decl* d = self.parseTypeFirstDecl(exported, false, false);
             if (d == null && self.pos == m.pos && !self.errored)
             {
-                self.errorMsg("could not parse declaration");
+                self.errorMsg("SYN-1998", "could not parse declaration", "the declaration is malformed; check its syntax");
                 return 0;
             }
             *o1 = d;
             return d != null ? 1 : 0;
         }
-        self.errorMsg("unexpected token at top level");
+        self.errorMsg("SYN-1003", "unexpected token at top level", "top-level input must be a declaration (struct, fn, const, import, ...)");
         return 0;
     }
 

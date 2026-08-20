@@ -42,10 +42,10 @@ pub struct Check
         return c;
     }
 
-    void errDecl(ast.Decl* d, str.strView msg)
+    void errDecl(ast.Decl* d, str.strView code, str.strView msg, str.strView help)
     {
-        error.reportLevel(self.filename, self.src, d->line, d->col,
-                          error.LVL_ERROR, msg, str.strView::empty());
+        error.reportCode(code, self.filename, self.src, d->line, d->col,
+                         error.LVL_ERROR, msg, help);
         self.nerrors++;
     }
 
@@ -55,11 +55,11 @@ pub struct Check
         s->type = ct;
         if (!scopes.scopeDeclare(top, s))
         {
-            self.errDecl(d, "redeclaration of '");
+            self.errDecl(d, str.strView::fromCstr("TC-REDECL"), str.strView::fromCstr("redeclaration of '"), str.strView::empty());
             str.String msg = str.String::new();
             msg.pushView(d->name);
             msg.pushChar('\'');
-            self.errDecl(d, str.strView::fromParts(msg.ptr, msg.len));
+            self.errDecl(d, str.strView::fromCstr("TC-REDECL"), str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
             msg.free();
         }
     }
@@ -202,7 +202,7 @@ pub struct Check
                     if (ct != null && !types.assignable(ct, vt, d->value->kind, d->value->text)
                         && !types.constFitsExpr(d->value, ct))
                     {
-                        self.errDecl(d, "initializer for '");
+                        self.errDecl(d, str.strView::fromCstr("TC-ASSIGN"), str.strView::fromCstr("initializer for '"), str.strView::empty());
                         str.String msg = str.String::new();
                         msg.pushView(d->name);
                         msg.pushView(str.strView::fromCstr("' has type '"));
@@ -210,7 +210,7 @@ pub struct Check
                         msg.pushView(str.strView::fromCstr("', expected '"));
                         msg.pushView(types.typeName(ct));
                         msg.pushView(str.strView::fromCstr("' (no implicit conversion)"));
-                        self.errDecl(d, str.strView::fromParts(msg.ptr, msg.len));
+                        self.errDecl(d, str.strView::fromCstr("TC-ASSIGN"), str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
                         msg.free();
                     }
                 }
