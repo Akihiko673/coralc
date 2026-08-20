@@ -1,0 +1,1165 @@
+// Expression and statement typing. Coral has NO implicit conversions, so
+// every value flows through types.assignable(): identical types only, plus
+// integer/float/char literals that fit the context type and the null literal
+// for pointer-ish targets. Anything else is an error naming both types —
+// never compiled on like C.
+//
+// Imports are opaque (TY_UNKNOWN) at this stage, so module-qualified names
+// and their calls are transparent: strictness is per-file. Within-file
+// functions, structs, methods, and consts are fully typed.
+mod ast = import("ast/ast.crl");
+mod str = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod libc = import("std/platform/libc.crl");
+mod error = import("error");
+mod types = import("typecheck/types.crl");
+mod scopes = import("typecheck/scopes.crl");
+
+pub struct Typer
+{
+    ast.Program* prog;
+    str.strView src;
+    str.strView filename;
+    scopes.Scope* top;
+    scopes.ModuleTable* mods;
+    u32* nerrors;
+    u32* nwarnings;
+    bool noWarnUnsafe;  // file attr @[[no_warn_unsafe]]: demote unsafe warnings
+    bool forcedSkip;    // file has forced_* attrs: borrow-check skips
+    bool warnUnused;    // unused-local warnings on unless no_warn_unsafe
+
+    // per-function state
+    scopes.Scope* fnScope;
+    types.CType* retType;
+    ast.Decl* curFn;
+    str.strView* gnames;
+    u32 ng;
+}
+
+static Typer new(ast.Program* prog, str.strView src, str.strView filename,
+                 scopes.Scope* top, scopes.ModuleTable* mods, u32* nerrors, u32* nwarnings,
+                 bool noWarnUnsafe, bool forcedSkip)
+{
+    Typer t;
+    t.prog = prog;
+    t.src = src;
+    t.filename = filename;
+    t.top = top;
+    t.mods = mods;
+    t.nerrors = nerrors;
+    t.nwarnings = nwarnings;
+    t.noWarnUnsafe = noWarnUnsafe;
+    t.forcedSkip = forcedSkip;
+    t.warnUnused = !noWarnUnsafe;
+    t.fnScope = null;
+    t.retType = null;
+    t.curFn = null;
+    t.gnames = null;
+    t.ng = 0;
+    return t;
+}
+
+void errAt(Typer* t, u32 line, u32 col, str.strView msg)
+{
+    error.reportLevel(t->filename, t->src, line, col, error.LVL_ERROR, msg, str.strView::empty());
+    (*t->nerrors)++;
+}
+
+void warnAt(Typer* t, u32 line, u32 col, str.strView msg)
+{
+    error.reportLevel(t->filename, t->src, line, col, error.LVL_WARN, msg, str.strView::empty());
+    (*t->nwarnings)++;
+}
+
+bool strEq2(str.strView a, const char* b)
+{
+    u64 n = 0;
+    while (b[n] != 0) n++;
+    if (a.len != n) return false;
+    return libc.memcmp((const void*)a.ptr, (const void*)b, n) == 0;
+}
+
+void pushUInt(str.String* s, u64 v)
+{
+    u8 buf[24];
+    i32 n = libc.snprintf(buf, 24, "%llu", v);
+    if (n > 0) s->pushView(str.strView::fromParts((const char*)buf, (u64)n));
+}
+
+// error with a composed message
+void errComposed(Typer* t, u32 line, u32 col, str.strView* parts, u32 nparts)
+{
+    str.String msg = str.String::new();
+    for (u32 i = 0; i < nparts; i++) msg.pushView(parts[i]);
+    errAt(t, line, col, str.strView::fromParts(msg.ptr, msg.len));
+    msg.free();
+}
+
+void errTwoStr(Typer* t, u32 line, u32 col, const char* lead, str.strView a, const char* mid, str.strView b, const char* tail)
+{
+    str.String msg = str.String::new();
+    msg.pushView(str.strView::fromCstr(lead));
+    msg.pushView(a);
+    msg.pushView(str.strView::fromCstr(mid));
+    msg.pushView(b);
+    msg.pushView(str.strView::fromCstr(tail));
+    errAt(t, line, col, str.strView::fromParts(msg.ptr, msg.len));
+    msg.free();
+}
+
+types.CType* typeExpr(Typer* t, ast.Expr* e);
+
+types.CType* effective(types.CType* ct)
+{
+    return types.effective(ct);
+}
+
+ast.Decl* namedDecl(types.CType* ct)
+{
+    if (ct == null) return null;
+    if (ct->kind != types.TY_NAMED) return null;
+    return ct->decl;
+}
+
+// Follow pointer/slice indirections to reach the base type for member lookup.
+types.CType* memberBase(types.CType* ot)
+{
+    types.CType* b = effective(ot);
+    while (b != null && (b->kind == types.TY_PTR || b->kind == types.TY_SLICE || b->kind == types.TY_ARRAY))
+    {
+        b = b->elem;
+    }
+    return b;
+}
+
+types.CType* typeIdent(Typer* t, str.strView name, u32 line, u32 col)
+{
+    // qualified by :: (Enum::Variant, Struct::method, mod.Name)
+    for (u32 i = 0; i + 1 < name.len; i++)
+    {
+        if (name.ptr[i] == ':' && name.ptr[i + 1] == ':')
+        {
+            str.strView head = str.strView::fromParts(name.ptr, i);
+            str.strView rest = str.strView::fromParts(name.ptr + i + 2, name.len - i - 2);
+            scopes.Sym* s = scopes.scopeLookup(t->top, head);
+            if (scopes.modsLookup(t->mods, head))
+            {
+                return scopes.opaqueType(name, line, col);
+            }
+            if (s != null && s->kind == scopes.SYM_ENUM)
+            {
+                // enum variant reference -> enum type
+                scopes.symMarkUsed(s);
+                return scopes.symTypeFromName(s, head, line, col);
+            }
+            if (s != null && (s->kind == scopes.SYM_STRUCT || s->kind == scopes.SYM_TRAIT)
+                && s->decl != null)
+            {
+                // struct/trait static or trait method reference
+                ast.Decl* m = scopes.findMethod(s->decl, t->prog, rest);
+                if (m != null) return fnSig(t, m);
+                return scopes.opaqueType(name, line, col);
+            }
+            return scopes.opaqueType(name, line, col);
+        }
+    }
+
+    scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, name);
+    if (s == null) s = scopes.scopeLookup(t->top, name);
+    if (s == null)
+    {
+        errTwoStr(t, line, col, "unresolved name '", name, "'", str.strView::empty(), "");
+        return scopes.opaqueType(name, line, col);
+    }
+    scopes.symMarkUsed(s);
+    if (s->type != null)
+    {
+        if (s->kind == scopes.SYM_FUNC)
+        {
+            return fnSig(t, s->decl);
+        }
+        if (s->kind == scopes.SYM_STRUCT || s->kind == scopes.SYM_ENUM
+            || s->kind == scopes.SYM_TYPEDEF || s->kind == scopes.SYM_DISTINCT
+            || s->kind == scopes.SYM_TRAIT)
+        {
+            return scopes.symTypeFromName(s, name, line, col);
+        }
+        return s->type;
+    }
+    return scopes.opaqueType(name, line, col);
+}
+
+// Build the FUNC signature type for a function/method decl, resolving param
+// and return types in the decl's own generic context.
+types.CType* fnSig(Typer* t, ast.Decl* d)
+{
+    if (d == null) return null;
+    types.CType* sig = mman.alloc<types.CType>(1);
+    sig->kind = types.TY_FUNC;
+    sig->nparams = d->nparams;
+    sig->variadic = d->variadic;
+    if (d->nparams > 0)
+    {
+        sig->params = mman.alloc<types.CType*>(d->nparams);
+        for (u32 i = 0; i < d->nparams; i++)
+        {
+            ast.Param p = d->params[i];
+            sig->params[i] = p.type != null
+                ? scopes.resolveTypeExpr(p.type, t->top, t->mods, d->generics, d->ngenerics)
+                : scopes.opaqueType(str.strView::empty(), 0, 0);
+        }
+    }
+    sig->ret = d->type != null
+        ? scopes.resolveTypeExpr(d->type, t->top, t->mods, d->generics, d->ngenerics)
+        : scopes.opaqueType(str.strView::empty(), 0, 0);
+    return sig;
+}
+
+void checkArgs(Typer* t, ast.Expr* call, types.CType* sig, bool hasGeneric)
+{
+    u32 np = sig != null ? sig->nparams : 0;
+    bool variadic = sig != null && sig->variadic;
+    if (!variadic && call->nargs != np)
+    {
+        str.String msg = str.String::new();
+        msg.pushView(str.strView::fromCstr("expected "));
+        pushUInt(&msg, np);
+        msg.pushView(str.strView::fromCstr(np == 1 ? " argument, found " : " arguments, found "));
+        pushUInt(&msg, call->nargs);
+        errAt(t, call->line, call->col, str.strView::fromParts(msg.ptr, msg.len));
+        msg.free();
+        return;
+    }
+    if (hasGeneric) return; // generic callee: arity checked above
+    for (u32 i = 0; i < call->nargs; i++)
+    {
+        if (!variadic || i < np)
+        {
+            types.CType* pt = sig != null ? sig->params[i] : null;
+            types.CType* at = typeExpr(t, call->args[i]);
+            if (at == null || pt == null) continue;
+            if (!types.assignable(pt, at, call->args[i]->kind, call->args[i]->text))
+            {
+                str.String msg = str.String::new();
+                msg.pushView(str.strView::fromCstr("argument "));
+                pushUInt(&msg, i + 1);
+                msg.pushView(str.strView::fromCstr(" has type '"));
+                msg.pushView(types.typeName(at));
+                msg.pushView(str.strView::fromCstr("', expected '"));
+                msg.pushView(types.typeName(pt));
+                msg.pushView(str.strView::fromCstr("' (no implicit conversion)"));
+                errAt(t, call->args[i]->line, call->args[i]->col, str.strView::fromParts(msg.ptr, msg.len));
+                msg.free();
+            }
+        }
+        else
+        {
+            typeExpr(t, call->args[i]);
+        }
+    }
+}
+
+void typeArgsOnce(Typer* t, ast.Expr* call)
+{
+    for (u32 i = 0; i < call->nargs; i++) typeExpr(t, call->args[i]);
+}
+
+types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
+{
+    // module-qualified function call: mod.fn(...) -> opaque result
+    if (callee->kind == ast.EX_DOT)
+    {
+        ast.Expr* obj = callee->a;
+        while (obj != null && obj->kind == ast.EX_PAREN) obj = obj->a;
+        if (obj != null && obj->kind == ast.EX_IDENT)
+        {
+            scopes.Sym* so = scopes.scopeLookup(t->top, obj->text);
+            if (so != null && so->kind == scopes.SYM_MODULE)
+            {
+                typeArgsOnce(t, call);
+                return scopes.opaqueType(callee->text, call->line, call->col);
+            }
+        }
+    }
+
+    // method call: obj.method(args) or self.method(args)
+    if (callee->kind == ast.EX_DOT || callee->kind == ast.EX_ARROW)
+    {
+        types.CType* ot = typeExpr(t, callee->a);
+        str.strView mname = callee->text;
+        types.CType* mb = memberBase(ot);
+        ast.Decl* structDecl = mb != null && mb->kind == types.TY_NAMED ? mb->decl : null;
+        ast.Decl* m = scopes.findMethod(structDecl, t->prog, mname);
+        if (m == null && structDecl == null)
+        {
+            // enum methods or opaque receivers
+        }
+        if (m != null)
+        {
+            types.CType* sig = fnSig(t, m);
+            checkArgs(t, call, sig, m->ngenerics > 0);
+            return sig->ret;
+        }
+        typeArgsOnce(t, call);
+        return scopes.opaqueType(mname, call->line, call->col);
+    }
+
+    // generic call: fn<T>(...) (or cast<T>(x))
+    if (callee->kind == ast.EX_GENERIC)
+    {
+        ast.Expr* base = callee->a;
+        if (base != null && base->kind == ast.EX_IDENT && strEq2(base->text, "cast"))
+        {
+            typeArgsOnce(t, call);
+            if (callee->ntargs > 0)
+            {
+                types.CType* ct = scopes.resolveTypeExpr(callee->targs[0], t->top, t->mods, t->gnames, t->ng);
+                return ct != null ? ct : scopes.opaqueType(str.strView::empty(), call->line, call->col);
+            }
+            return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+        }
+        if (base != null && base->kind == ast.EX_IDENT)
+        {
+            scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
+            if (s == null) s = scopes.scopeLookup(t->top, base->text);
+            if (s != null && s->kind == scopes.SYM_FUNC)
+            {
+                scopes.symMarkUsed(s);
+                types.CType* sig = fnSig(t, s->decl);
+                checkArgs(t, call, sig, s->decl->ngenerics > 0);
+                return sig->ret;
+            }
+            if (s != null)
+            {
+                scopes.symMarkUsed(s);
+            }
+            // generic struct instantiation or unknown -> opaque arg typing
+            typeArgsOnce(t, call);
+            return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+        }
+        typeArgsOnce(t, call);
+        return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+    }
+
+    // plain identifier call
+    if (callee->kind == ast.EX_IDENT)
+    {
+        scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, callee->text);
+        if (s == null) s = scopes.scopeLookup(t->top, callee->text);
+        if (s != null)
+        {
+            scopes.symMarkUsed(s);
+            if (s->kind == scopes.SYM_FUNC)
+            {
+                types.CType* sig = fnSig(t, s->decl);
+                checkArgs(t, call, sig, s->decl->ngenerics > 0);
+                return sig->ret;
+            }
+            if (s->type != null && s->type->kind == types.TY_FUNC)
+            {
+                checkArgs(t, call, s->type, false);
+                return s->type->ret;
+            }
+        }
+        else
+        {
+            errTwoStr(t, callee->line, callee->col, "unresolved callee '", callee->text, "'", str.strView::empty(), "");
+        }
+        typeArgsOnce(t, call);
+        return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+    }
+
+    // indirect call through an expression of function-pointer type
+    types.CType* sig = typeExpr(t, callee);
+    if (sig != null && sig->kind == types.TY_FUNC)
+    {
+        checkArgs(t, call, sig, false);
+        return sig->ret;
+    }
+    typeArgsOnce(t, call);
+    return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+}
+
+bool indexPathInBounds(Typer* t, ast.Expr* idx, types.CType* arr)
+{
+    if (idx == null) return true;
+    if (arr == null || arr->kind != types.TY_ARRAY || !arr->countKnown) return true;
+    u64 iv = 0;
+    if (arr->count == 0)
+    {
+        errAt(t, idx->line, idx->col, str.strView::fromCstr("index out of bounds: fixed array has no elements"));
+        return false;
+    }
+    if (!scopes.countFold(idx, &iv)) return true; // runtime index
+    if (iv >= arr->count)
+    {
+        str.String msg = str.String::new();
+        msg.pushView(str.strView::fromCstr("index "));
+        pushUInt(&msg, iv);
+        msg.pushView(str.strView::fromCstr(" out of bounds for fixed array of length "));
+        pushUInt(&msg, arr->count);
+        errAt(t, idx->line, idx->col, str.strView::fromParts(msg.ptr, msg.len));
+        msg.free();
+        return false;
+    }
+    return true;
+}
+
+types.CType* typeExpr(Typer* t, ast.Expr* e)
+{
+    if (e == null) return scopes.opaqueType(str.strView::empty(), 0, 0);
+    switch (e->kind)
+    {
+    case ast.EX_INT:
+        return types.literalIntDefaultType(e->text);
+    case ast.EX_FLOAT:
+        {
+            types.CType* ct = mman.alloc<types.CType>(1);
+            ct->kind = types.TY_FLOAT;
+            ct->width = 64;
+            if (e->text.len > 0)
+            {
+                u8 last = (u8)e->text.ptr[e->text.len - 1];
+                if (last == 'f' || last == 'F') ct->width = 32;
+            }
+            return ct;
+        }
+    case ast.EX_STR:
+        {
+            types.CType* ct = mman.alloc<types.CType>(1);
+            ct->kind = types.TY_NAMED;
+            ct->decl = null;
+            ct->name = str.strView::fromCstr("string literal");
+            return ct;
+        }
+    case ast.EX_CHAR:
+        {
+            types.CType* ct = mman.alloc<types.CType>(1);
+            ct->kind = types.TY_CHAR;
+            return ct;
+        }
+    case ast.EX_BOOL:
+        {
+            types.CType* ct = mman.alloc<types.CType>(1);
+            ct->kind = types.TY_BOOL;
+            return ct;
+        }
+    case ast.EX_NULL:
+        {
+            types.CType* ct = mman.alloc<types.CType>(1);
+            ct->kind = types.TY_NULL;
+            return ct;
+        }
+    case ast.EX_IDENT:
+        return typeIdent(t, e->text, e->line, e->col);
+    case ast.EX_PAREN:
+        return typeExpr(t, e->a);
+
+    case ast.EX_UNARY:
+        {
+            if (strEq2(e->text, "-") || strEq2(e->text, "+"))
+            {
+                types.CType* x = typeExpr(t, e->a);
+                if (x != null && !types.isNumeric(x) && x->kind != types.TY_UNKNOWN)
+                {
+                    errAt(t, e->line, e->col, str.strView::fromCstr("unary '-/+' applied to non-numeric value"));
+                }
+                return x != null ? x : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            if (strEq2(e->text, "!"))
+            {
+                types.CType* x = typeExpr(t, e->a);
+                if (x != null && x->kind != types.TY_BOOL && x->kind != types.TY_UNKNOWN)
+                {
+                    errAt(t, e->line, e->col, str.strView::fromCstr("logical '!' applied to non-bool value"));
+                }
+                types.CType* b = mman.alloc<types.CType>(1);
+                b->kind = types.TY_BOOL;
+                return b;
+            }
+            if (strEq2(e->text, "~"))
+            {
+                types.CType* x = typeExpr(t, e->a);
+                if (x != null && x->kind != types.TY_INT && x->kind != types.TY_CHAR && x->kind != types.TY_UNKNOWN)
+                {
+                    errAt(t, e->line, e->col, str.strView::fromCstr("bitwise '~' applied to non-integer value"));
+                }
+                return x != null && (x->kind == types.TY_INT || x->kind == types.TY_CHAR)
+                    ? x : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            if (strEq2(e->text, "++") || strEq2(e->text, "--"))
+            {
+                types.CType* x = typeExpr(t, e->a);
+                return x != null && types.isNumeric(x) ? x : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            return typeExpr(t, e->a);
+        }
+
+    case ast.EX_DEREF:
+        {
+            types.CType* x = typeExpr(t, e->a);
+            while (x != null && (x->kind == types.TY_PTR || x->kind == types.TY_SLICE || x->kind == types.TY_ARRAY))
+            {
+                x = x->elem; // deref once
+                break;
+            }
+            return x != null ? x : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+
+    case ast.EX_ADDR:
+        {
+            types.CType* x = typeExpr(t, e->a);
+            types.CType* p = mman.alloc<types.CType>(1);
+            p->kind = types.TY_PTR;
+            p->elem = x;
+            return p;
+        }
+
+    case ast.EX_BINARY:
+        return typeBinary(t, e);
+
+    case ast.EX_TERNARY:
+        {
+            types.CType* c = typeExpr(t, e->a);
+            if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+            {
+                errAt(t, e->a->line, e->a->col, str.strView::fromCstr("ternary condition is not boolean"));
+            }
+            types.CType* b = typeExpr(t, e->b);
+            types.CType* cc = typeExpr(t, e->c);
+            if (b != null && b->kind == types.TY_UNKNOWN) return cc;
+            if (cc != null && cc->kind == types.TY_UNKNOWN) return b;
+            return b != null ? b : cc;
+        }
+
+    case ast.EX_CALL:
+        return typeCall(t, e->a, e);
+
+    case ast.EX_DOT:
+    case ast.EX_ARROW:
+        return typeMember(t, e);
+
+    case ast.EX_INDEX:
+        {
+            types.CType* o = typeExpr(t, e->a);
+            types.CType* ix = typeExpr(t, e->b);
+            bool _ = ix != null;
+            if (o == null) return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            types.CType* eff = o->kind == types.TY_NAMED ? effective(o) : o;
+            if (eff->kind == types.TY_PTR || eff->kind == types.TY_SLICE || eff->kind == types.TY_ARRAY)
+            {
+                indexPathInBounds(t, e->b, eff);
+                return eff->elem != null ? eff->elem : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            if (eff->kind == types.TY_NAMED)
+            {
+                // String / strView / Vec index via opaque member ops
+                return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+
+    case ast.EX_CAST:
+        {
+            types.CType* x = typeExpr(t, e->a);
+            if (e->type != null)
+            {
+                types.CType* ct = scopes.resolveTypeExpr(e->type, t->top, t->mods, t->gnames, t->ng);
+                return ct != null ? ct : x;
+            }
+            return x;
+        }
+
+    case ast.EX_SIZEOF:
+        {
+            types.CType* st = mman.alloc<types.CType>(1);
+            st->kind = types.TY_INT;
+            st->width = 64;
+            st->isSigned = false;
+            return st;
+        }
+
+    case ast.EX_TYPELIT:
+        if (e->type != null)
+            return scopes.resolveTypeExpr(e->type, t->top, t->mods, t->gnames, t->ng);
+        return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+
+    case ast.EX_GENERIC:
+        {
+            ast.Expr* base = e->a;
+            if (base != null && base->kind == ast.EX_IDENT)
+            {
+                scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
+                if (s == null) s = scopes.scopeLookup(t->top, base->text);
+                if (s != null && s->kind == scopes.SYM_FUNC)
+                {
+                    scopes.symMarkUsed(s);
+                    return fnSig(t, s->decl);
+                }
+                if (s != null)
+                {
+                    scopes.symMarkUsed(s);
+                    if (s->kind == scopes.SYM_STRUCT || s->kind == scopes.SYM_ENUM
+                        || s->kind == scopes.SYM_TYPEDEF || s->kind == scopes.SYM_DISTINCT)
+                    {
+                        return scopes.symTypeFromName(s, base->text, e->line, e->col);
+                    }
+                }
+                return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+
+    case ast.EX_INIT:
+        return typeInit(t, e);
+    }
+    return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+}
+
+types.CType* typeBinary(Typer* t, ast.Expr* e)
+{
+    str.strView op = e->text;
+    types.CType* l = typeExpr(t, e->a);
+    types.CType* r = typeExpr(t, e->b);
+    bool litL = e->a->kind == ast.EX_INT || e->a->kind == ast.EX_FLOAT;
+    bool litR = e->b->kind == ast.EX_INT || e->b->kind == ast.EX_FLOAT;
+
+    if (strEq2(op, "&&") || strEq2(op, "||"))
+    {
+        if (l != null && l->kind != types.TY_BOOL && l->kind != types.TY_UNKNOWN)
+            errAt(t, e->a->line, e->a->col, str.strView::fromCstr("logical operand is not boolean"));
+        if (r != null && r->kind != types.TY_BOOL && r->kind != types.TY_UNKNOWN)
+            errAt(t, e->b->line, e->b->col, str.strView::fromCstr("logical operand is not boolean"));
+        types.CType* b = mman.alloc<types.CType>(1);
+        b->kind = types.TY_BOOL;
+        return b;
+    }
+
+    if (strEq2(op, "==") || strEq2(op, "!=") || strEq2(op, "<") || strEq2(op, "<=")
+        || strEq2(op, ">") || strEq2(op, ">=") || strEq2(op, "!<"))
+    {
+        types.CType* le = effective(l);
+        types.CType* re = effective(r);
+        if (le != null && re != null && le->kind != types.TY_UNKNOWN && re->kind != types.TY_UNKNOWN)
+        {
+            bool ok = false;
+            if (litL) ok = types.isNumeric(re);
+            else if (litR) ok = types.isNumeric(le);
+            else if (le->kind == types.TY_NULL) ok = re->kind == types.TY_PTR || re->kind == types.TY_SLICE;
+            else if (re->kind == types.TY_NULL) ok = le->kind == types.TY_PTR || le->kind == types.TY_SLICE;
+            else if (types.typesEqual(le, re)) ok = true;
+            if (!ok)
+            {
+                errTwoStr(t, e->line, e->col, "cannot compare '", types.typeName(le),
+                          "' and '", types.typeName(re), "'");
+            }
+        }
+        types.CType* b = mman.alloc<types.CType>(1);
+        b->kind = types.TY_BOOL;
+        return b;
+    }
+
+    if (l != null && r != null)
+    {
+        types.CType* le = effective(l);
+        types.CType* re = effective(r);
+        if (le->kind == types.TY_UNKNOWN || re->kind == types.TY_UNKNOWN)
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        bool isShift = strEq2(op, "<<") || strEq2(op, ">>");
+        bool isBit = strEq2(op, "&") || strEq2(op, "|") || strEq2(op, "^");
+        bool isArith = strEq2(op, "+") || strEq2(op, "-") || strEq2(op, "*")
+            || strEq2(op, "/") || strEq2(op, "%");
+        if (isShift)
+        {
+            if (re->kind != types.TY_INT && re->kind != types.TY_CHAR && re->kind != types.TY_UNKNOWN)
+                errAt(t, e->b->line, e->b->col, str.strView::fromCstr("shift amount is not an integer"));
+            if (le->kind == types.TY_INT || le->kind == types.TY_CHAR) return le;
+            errAt(t, e->a->line, e->a->col, str.strView::fromCstr("shifted value is not an integer"));
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+        if (isBit)
+        {
+            if (litL && re->kind == types.TY_INT) return re;
+            if (litR && le->kind == types.TY_INT) return le;
+            if ((le->kind == types.TY_INT || le->kind == types.TY_CHAR)
+                && (re->kind == types.TY_INT || re->kind == types.TY_CHAR))
+            {
+                return le->kind == types.TY_INT ? le : re;
+            }
+            errAt(t, e->line, e->col, str.strView::fromCstr("bitwise operator on non-integer operand"));
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+        if (isArith)
+        {
+            bool lInt = le->kind == types.TY_INT || le->kind == types.TY_CHAR;
+            bool rInt = re->kind == types.TY_INT || re->kind == types.TY_CHAR;
+            bool lFlt = le->kind == types.TY_FLOAT;
+            bool rFlt = re->kind == types.TY_FLOAT;
+            if (litL && litR) return le->kind == types.TY_FLOAT ? lf32Or64(le, re) : re;
+            if (litL) return re;
+            if (litR) return le;
+            if (lInt && rInt) return le->kind == types.TY_CHAR ? re : le;
+            if (lFlt && rFlt) return le->width >= re->width ? le : re;
+            errTwoStr(t, e->line, e->col, "arithmetic on incompatible operands '", types.typeName(le),
+                      "' and '", types.typeName(re), "'");
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+    }
+    return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+}
+
+types.CType* lf32Or64(types.CType* a, types.CType* b)
+{
+    if (a->kind == types.TY_FLOAT) return a;
+    return b;
+}
+
+types.CType* typeMember(Typer* t, ast.Expr* e)
+{
+    ast.Expr* obj = e->a;
+    str.strView mem = e->text;
+
+    // module member access: mod.fn / mod.Value
+    if (obj != null && obj->kind == ast.EX_IDENT)
+    {
+        scopes.Sym* so = scopes.scopeLookup(t->top, obj->text);
+        if (so != null && so->kind == scopes.SYM_MODULE)
+        {
+            return scopes.opaqueType(str.strView::fromCstr("module"), e->line, e->col);
+        }
+    }
+    // enum variant: Enum.Variant
+    if (obj != null && obj->kind == ast.EX_IDENT)
+    {
+        scopes.Sym* so = scopes.scopeLookup(t->top, obj->text);
+        if (so != null && so->kind == scopes.SYM_ENUM)
+        {
+            for (u32 i = 0; i < so->decl->nvariants; i++)
+            {
+                if (scopes.sEq(so->decl->variants[i].name, mem))
+                {
+                    scopes.symMarkUsed(so);
+                    return scopes.symTypeFromName(so, obj->text, e->line, e->col);
+                }
+            }
+            errTwoStr(t, e->line, e->col, "no such variant '", mem, "' in enum", str.strView::empty(), "");
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+    }
+
+    types.CType* ot = typeExpr(t, obj);
+    types.CType* mb = memberBase(ot);
+    if (mb != null && mb->kind == types.TY_NAMED && mb->decl != null)
+    {
+        if (mb->decl->kind == ast.DT_STRUCT)
+        {
+            ast.StructField* f = scopes.findField(mb->decl, mem);
+            if (f != null && f->type != null)
+            {
+                types.CType* ft = scopes.resolveTypeExpr(f->type, t->top, t->mods, t->gnames, t->ng);
+                return ft != null ? ft : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            }
+            errTwoStr(t, e->line, e->col, "struct '", mb->decl->name, "' has no member named '", mem, "'");
+            return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        }
+        if (mb->decl->kind == ast.DT_ENUM)
+        {
+            for (u32 i = 0; i < mb->decl->nvariants; i++)
+            {
+                if (scopes.sEq(mb->decl->variants[i].name, mem))
+                {
+                    return scopes.symTypeFromName(scopes.scopeLookup(t->top, mb->decl->name), mb->decl->name, e->line, e->col);
+                }
+            }
+        }
+        // opaque named (String/strView/vec..) -> member unknown
+        return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+    }
+    return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+}
+
+types.CType* typeInit(Typer* t, ast.Expr* e)
+{
+    types.CType* target = null;
+    if (e->type != null)
+    {
+        target = scopes.resolveTypeExpr(e->type, t->top, t->mods, t->gnames, t->ng);
+    }
+    if (target != null && target->kind == types.TY_NAMED && target->decl != null
+        && target->decl->kind == ast.DT_STRUCT)
+    {
+        if (e->names != null)
+        {
+            // named fields
+            for (u32 i = 0; i < e->nargs; i++)
+            {
+                ast.Expr* val = e->args[i];
+                str.strView fname = e->names[i];
+                ast.StructField* f = scopes.findField(target->decl, fname);
+                if (f == null)
+                {
+                    errTwoStr(t, val->line, val->col, "struct '", target->decl->name,
+                              "' has no field '", fname, "'");
+                    typeExpr(t, val);
+                    continue;
+                }
+                types.CType* vt = typeExpr(t, val);
+                types.CType* ft = scopes.resolveTypeExpr(f->type, t->top, t->mods, t->gnames, t->ng);
+                if (ft != null && !types.assignable(ft, vt, val->kind, val->text))
+                {
+                    errTwoStr(t, val->line, val->col, "field '", fname,
+                              "' expects '", types.typeName(ft), "' but got '");
+                    str.String tail = str.String::new();
+                    tail.pushView(types.typeName(vt));
+                    tail.pushView(str.strView::fromCstr("' (no implicit conversion)"));
+                    errAt(t, val->line, val->col, str.strView::fromParts(tail.ptr, tail.len));
+                    tail.free();
+                }
+            }
+        }
+        else
+        {
+            // positional
+            for (u32 i = 0; i < e->nargs; i++)
+            {
+                ast.Expr* val = e->args[i];
+                if (i >= target->decl->nfields)
+                {
+                    errAt(t, val->line, val->col, str.strView::fromCstr("too many fields in struct literal"));
+                    typeExpr(t, val);
+                    continue;
+                }
+                ast.StructField f = target->decl->fields[i];
+                types.CType* vt = typeExpr(t, val);
+                types.CType* ft = scopes.resolveTypeExpr(f.type, t->top, t->mods, t->gnames, t->ng);
+                if (ft != null && !types.assignable(ft, vt, val->kind, val->text))
+                {
+                    errTwoStr(t, val->line, val->col, "field '", f.name,
+                              "' expects '", types.typeName(ft), "' but got '");
+                    str.String tail = str.String::new();
+                    tail.pushView(types.typeName(vt));
+                    tail.pushView(str.strView::fromCstr("' (no implicit conversion)"));
+                    errAt(t, val->line, val->col, str.strView::fromParts(tail.ptr, tail.len));
+                    tail.free();
+                }
+            }
+        }
+        return target;
+    }
+    for (u32 i = 0; i < e->nargs; i++) typeExpr(t, e->args[i]);
+    return target != null ? target : scopes.opaqueType(str.strView::empty(), e->line, e->col);
+}
+
+// ---- statement typing ----------------------------------------------------
+
+void typeBody(Typer* t, ast.Stmt* body);
+
+void pushBlock(Typer* t, str.strView label)
+{
+    t->fnScope = scopes.scopeNew(t->fnScope, label, t->fnScope != null ? t->fnScope->depth + 1 : 0);
+}
+
+void popBlock(Typer* t, bool reportUnused)
+{
+    scopes.Scope* s = t->fnScope;
+    if (s == null) return;
+    if (reportUnused && t->warnUnused)
+    {
+        for (u32 i = 0; i < s->nsyms; i++)
+        {
+            scopes.Sym* sm = s->syms[i];
+            if (sm->kind == scopes.SYM_LOCAL && !sm->used)
+            {
+                errTwoStr(t, sm->line, sm->col, "unused variable '", sm->name, "'", str.strView::empty(), "");
+            }
+        }
+    }
+    t->fnScope = s->parent;
+    scopes.scopeFree(s);
+}
+
+void declareLocal(Typer* t, str.strView name, types.CType* type, u32 line, u32 col)
+{
+    scopes.Sym* s = scopes.symNew(name, scopes.SYM_LOCAL, null, line, col);
+    s->type = type;
+    if (!scopes.scopeDeclare(t->fnScope, s))
+    {
+        errTwoStr(t, line, col, "redeclaration of local variable '", name, "'", str.strView::empty(), "");
+    }
+}
+
+void typeStmt(Typer* t, ast.Stmt* s)
+{
+    if (s == null) return;
+    switch (s->kind)
+    {
+    case ast.ST_BLOCK:
+        pushBlock(t, str.strView::fromCstr("block"));
+        for (u32 i = 0; i < s->nstmts; i++) typeStmt(t, s->stmts[i]);
+        popBlock(t, true);
+        break;
+
+    case ast.ST_VAR:
+        {
+            types.CType* at = null;
+            if (s->type != null)
+                at = scopes.resolveTypeExpr(s->type, t->top, t->mods, t->gnames, t->ng);
+            types.CType* it = null;
+            if (s->a != null)
+            {
+                it = typeExpr(t, s->a);
+                if (at != null && it != null && !types.assignable(at, it, s->a->kind, s->a->text))
+                {
+                    errTwoStr(t, s->line, s->col, "cannot assign '", types.typeName(it),
+                              "' to variable of type '", types.typeName(at), "' (no implicit conversion)");
+                }
+            }
+            types.CType* vt = at != null ? at : it;
+            if (vt == null) vt = scopes.opaqueType(str.strView::empty(), s->line, s->col);
+            declareLocal(t, s->text, vt, s->line, s->col);
+            break;
+        }
+
+    case ast.ST_RETURN:
+        {
+            if (s->a != null)
+            {
+                types.CType* v = typeExpr(t, s->a);
+                if (t->retType != null && t->retType->kind != types.TY_VOID
+                    && t->retType->kind != types.TY_UNKNOWN)
+                {
+                    if (!types.assignable(t->retType, v, s->a->kind, s->a->text))
+                    {
+                        errTwoStr(t, s->line, s->col, "cannot return '", types.typeName(v),
+                                  "' from function returning '", types.typeName(t->retType), "'");
+                    }
+                }
+                else if (t->retType != null && t->retType->kind == types.TY_VOID)
+                {
+                    errAt(t, s->line, s->col, str.strView::fromCstr("void function cannot return a value"));
+                }
+            }
+            else if (t->retType != null && t->retType->kind != types.TY_VOID
+                     && t->retType->kind != types.TY_UNKNOWN)
+            {
+                str.String msg = str.String::new();
+                msg.pushView(str.strView::fromCstr("function must return a value of type '"));
+                msg.pushView(types.typeName(t->retType));
+                msg.pushView(str.strView::fromCstr("'"));
+                errAt(t, s->line, s->col, str.strView::fromParts(msg.ptr, msg.len));
+                msg.free();
+            }
+            break;
+        }
+
+    case ast.ST_IF:
+        {
+            if (s->a != null)
+            {
+                types.CType* c = typeExpr(t, s->a);
+                if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+                {
+                    errAt(t, s->a->line, s->a->col, str.strView::fromCstr("if condition is not boolean"));
+                }
+            }
+            typeStmt(t, s->body);
+            typeStmt(t, s->body2);
+            break;
+        }
+
+    case ast.ST_WHILE:
+    case ast.ST_LOOP:
+        {
+            if (s->kind == ast.ST_WHILE && s->a != null)
+            {
+                types.CType* c = typeExpr(t, s->a);
+                if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+                {
+                    errAt(t, s->a->line, s->a->col, str.strView::fromCstr("while condition is not boolean"));
+                }
+            }
+            pushBlock(t, str.strView::fromCstr("loop"));
+            typeStmt(t, s->body);
+            popBlock(t, true);
+            break;
+        }
+
+    case ast.ST_FOR:
+        {
+            typeStmt(t, s->init);
+            if (s->b != null)
+            {
+                types.CType* c = typeExpr(t, s->b);
+                if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+                {
+                    errAt(t, s->b->line, s->b->col, str.strView::fromCstr("for condition is not boolean"));
+                }
+            }
+            if (s->c != null) typeExpr(t, s->c);
+            pushBlock(t, str.strView::fromCstr("for"));
+            typeStmt(t, s->body);
+            popBlock(t, true);
+            break;
+        }
+
+    case ast.ST_FORIN:
+        {
+            types.CType* it = typeExpr(t, s->a);
+            types.CType* elem = scopes.opaqueType(str.strView::empty(), s->line, s->col);
+            if (it != null)
+            {
+                if (it->kind == types.TY_ARRAY || it->kind == types.TY_SLICE || it->kind == types.TY_PTR)
+                    elem = it->elem != null ? it->elem : elem;
+                else if (it->kind == types.TY_NAMED)
+                {
+                    // String / strView iterate element-wise
+                    elem = mman.alloc<types.CType>(1);
+                    elem->kind = types.TY_CHAR;
+                }
+            }
+            declareLocal(t, s->text, elem, s->line, s->col);
+            pushBlock(t, str.strView::fromCstr("forin"));
+            typeStmt(t, s->body);
+            popBlock(t, true);
+            break;
+        }
+
+    case ast.ST_EXPR:
+        typeExpr(t, s->a);
+        break;
+
+    case ast.ST_ASSERT:
+        {
+            types.CType* c = typeExpr(t, s->a);
+            if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+            {
+                errAt(t, s->a->line, s->a->col, str.strView::fromCstr("assert condition is not boolean"));
+            }
+            break;
+        }
+
+    case ast.ST_SWITCH:
+        {
+            types.CType* subj = typeExpr(t, s->a);
+            subj = effective(subj);
+            for (u32 i = 0; i < s->ncases; i++)
+            {
+                ast.StmtCase* sc = s->cases[i];
+                if (sc == null) continue;
+                if (sc->value != null)
+                {
+                    types.CType* cv = typeExpr(t, sc->value);
+                    if (subj != null && subj->kind != types.TY_UNKNOWN
+                        && cv != null && cv->kind != types.TY_UNKNOWN
+                        && !types.typesEqual(subj, cv)
+                        && !types.assignable(subj, cv, sc->value->kind, sc->value->text))
+                    {
+                        errAt(t, sc->value->line, sc->value->col, str.strView::fromCstr("case value type does not match switch subject"));
+                    }
+                }
+                pushBlock(t, str.strView::fromCstr("case"));
+                for (u32 j = 0; j < sc->nbody; j++) typeStmt(t, sc->body[j]);
+                popBlock(t, true);
+            }
+            if (s->defaultCase != null)
+            {
+                pushBlock(t, str.strView::fromCstr("default"));
+                for (u32 j = 0; j < s->defaultCase->nbody; j++) typeStmt(t, s->defaultCase->body[j]);
+                popBlock(t, true);
+            }
+            break;
+        }
+
+    case ast.ST_BREAK:
+    case ast.ST_CONTINUE:
+        break;
+
+    case ast.ST_ASM:
+        break;
+
+    case ast.ST_DEFER:
+        pushBlock(t, str.strView::fromCstr("defer"));
+        typeStmt(t, s->body);
+        popBlock(t, true);
+        break;
+
+    case ast.ST_FLAG:
+        // platform-specific bodies may reference targets unknown here — skip
+        break;
+    }
+}
+
+void typeBody(Typer* t, ast.Stmt* body)
+{
+    typeStmt(t, body);
+}
+
+ast.Decl* findNamedStruct(Typer* t, str.strView name)
+{
+    scopes.Sym* s = scopes.scopeLookup(t->top, name);
+    if (s != null && s->decl != null && s->decl->kind == ast.DT_STRUCT) return s->decl;
+    return null;
+}
+
+// Entry for a function/method body.
+void typeFunction(Typer* t, ast.Decl* d)
+{
+    if (d == null || d->body == null) return;
+    t->curFn = d;
+    t->fnScope = scopes.scopeNew(null, d->name, 0);
+    t->retType = d->type != null
+        ? scopes.resolveTypeExpr(d->type, t->top, t->mods, d->generics, d->ngenerics)
+        : scopes.opaqueType(str.strView::empty(), d->line, d->col);
+    t->gnames = d->generics;
+    t->ng = d->ngenerics;
+
+    bool isMethod = d->structName.len > 0;
+    if (isMethod && !d->isStatic)
+    {
+        // implicit self: pointer to the owning struct
+        scopes.Sym* self = scopes.symNew(str.strView::fromCstr("self"), scopes.SYM_PARAM, d, d->line, d->col);
+        ast.Decl* sd = findNamedStruct(t, d->structName);
+        types.CType* stp = mman.alloc<types.CType>(1);
+        stp->kind = types.TY_PTR;
+        stp->elem = sd != null ? scopes.namedType(sd, d->structName, d->line, d->col)
+                               : scopes.opaqueType(d->structName, d->line, d->col);
+        self->type = stp;
+        self->used = true;
+        if (!scopes.scopeDeclare(t->fnScope, self))
+        {
+            errAt(t, d->line, d->col, str.strView::fromCstr("duplicate self parameter"));
+        }
+    }
+    for (u32 i = 0; i < d->nparams; i++)
+    {
+        ast.Param p = d->params[i];
+        scopes.Sym* s = scopes.symNew(p.name, scopes.SYM_PARAM, d, d->line, d->col);
+        s->type = p.type != null
+            ? scopes.resolveTypeExpr(p.type, t->top, t->mods, d->generics, d->ngenerics)
+            : scopes.opaqueType(str.strView::empty(), d->line, d->col);
+        if (!scopes.scopeDeclare(t->fnScope, s))
+        {
+            errTwoStr(t, d->line, d->col, "duplicate parameter '", p.name, "'", str.strView::empty(), "");
+        }
+    }
+
+    typeStmt(t, d->body);
+    scopes.Scope* fs = t->fnScope;
+    if (fs != null && t->warnUnused)
+    {
+        for (u32 i = 0; i < fs->nsyms; i++)
+        {
+            scopes.Sym* sm = fs->syms[i];
+            if (sm->kind == scopes.SYM_LOCAL && !sm->used)
+            {
+                errTwoStr(t, sm->line, sm->col, "unused variable '", sm->name, "'", str.strView::empty(), "");
+            }
+        }
+    }
+    t->fnScope = null;
+    scopes.scopeFree(fs);
+    t->retType = null;
+    t->curFn = null;
+    t->gnames = null;
+    t->ng = 0;
+}

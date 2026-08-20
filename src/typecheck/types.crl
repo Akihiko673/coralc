@@ -1,0 +1,374 @@
+// Type representation and resolution for the semantic passes.
+// CType trees are never freed by the checker (the compiler process is
+// short-lived). Module-qualified names that cannot be resolved in this file
+// (imported modules are opaque until the import pass) resolve to TY_UNKNOWN
+// so the strict typing rules degrade gracefully and never crash.
+mod ast = import("ast/ast.crl");
+mod str = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod libc = import("std/platform/libc.crl");
+
+pub const u32 TY_UNKNOWN = 0;   // unresolved / poison / opaque module escape
+pub const u32 TY_VOID = 1;
+pub const u32 TY_BOOL = 2;
+pub const u32 TY_CHAR = 3;
+pub const u32 TY_INT = 4;
+pub const u32 TY_FLOAT = 5;
+pub const u32 TY_PTR = 6;
+pub const u32 TY_ARRAY = 7;     // fixed array with known or unknown extent
+pub const u32 TY_SLICE = 8;     // unsized array (TYP_ARRAY without count)
+pub const u32 TY_FUNC = 9;
+pub const u32 TY_NAMED = 10;    // struct/enum/typedef/distinct instance
+pub const u32 TY_NULL = 11;     // the null literal type
+
+pub struct CType
+{
+    u32 kind;
+    u32 width;          // INT/FLOAT bits: 8/16/32/64
+    bool isSigned;      // INT
+    CType* elem;        // PTR/SLICE/ARRAY element; TYPEDEF expands to base
+    u64 count;          // ARRAY extent (0 when unknown)
+    bool countKnown;
+    CType* ret;         // FUNC return
+    CType** params;     // FUNC params
+    u32 nparams;
+    bool variadic;      // FUNC
+    ast.Decl* decl;     // NAMED: the resolved decl (struct/enum/typedef/distinct)
+    str.strView name;   // canonical display name (may carry generic args)
+    bool isConstPtr;    // PTR: const-qualified pointer
+    u32 line;
+    u32 col;
+}
+
+// primitive type table: i8..i64, u8..u64, f32/f64, bool, char, void,
+// isize/usize. Returns false for non-primitive names.
+bool primType(str.strView n, CType* out)
+{
+    out->kind = TY_UNKNOWN;
+    out->width = 0;
+    out->isSigned = false;
+    out->elem = null;
+    out->count = 0;
+    out->countKnown = false;
+    out->ret = null;
+    out->params = null;
+    out->nparams = 0;
+    out->variadic = false;
+    out->decl = null;
+    out->name = n;
+    out->isConstPtr = false;
+    out->line = 0;
+    out->col = 0;
+
+    if (n.len == 2 && 0 == 0)
+    {
+        bool i = n.ptr[0] == 'i';
+        bool u = n.ptr[0] == 'u';
+        if ((i || u) && (n.ptr[1] == '8'))
+        {
+            out->kind = TY_INT;
+            out->width = 8;
+            out->isSigned = i;
+            return true;
+        }
+        if ((i || u) && (n.ptr[1] == '1') && n.len >= 3)
+        {
+            out->kind = TY_INT;
+            out->width = 16;
+            out->isSigned = i;
+            return true;
+        }
+        if ((i || u) && (n.ptr[1] == '3') && n.len >= 3)
+        {
+            out->kind = TY_INT;
+            out->width = 32;
+            out->isSigned = i;
+            return true;
+        }
+        if ((i || u) && (n.ptr[1] == '6') && n.len >= 3)
+        {
+            out->kind = TY_INT;
+            out->width = 64;
+            out->isSigned = i;
+            return true;
+        }
+    }
+    if (n.len == 3 && n.ptr[0] == 'f' && n.ptr[1] == '3' && n.ptr[2] == '2')
+    {
+        out->kind = TY_FLOAT;
+        out->width = 32;
+        return true;
+    }
+    if (n.len == 3 && n.ptr[0] == 'f' && n.ptr[1] == '6' && n.ptr[2] == '4')
+    {
+        out->kind = TY_FLOAT;
+        out->width = 64;
+        return true;
+    }
+    if (n.len == 4 && n.ptr[0] == 'b' && n.ptr[1] == 'o' && n.ptr[2] == 'o' && n.ptr[3] == 'l')
+    {
+        out->kind = TY_BOOL;
+        return true;
+    }
+    if (n.len == 4 && n.ptr[0] == 'c' && n.ptr[1] == 'h' && n.ptr[2] == 'a' && n.ptr[3] == 'r')
+    {
+        out->kind = TY_CHAR;
+        return true;
+    }
+    if (n.len == 4 && n.ptr[0] == 'v' && n.ptr[1] == 'o' && n.ptr[2] == 'i' && n.ptr[3] == 'd')
+    {
+        out->kind = TY_VOID;
+        return true;
+    }
+    if (n.len == 5 && n.ptr[0] == 'i' && n.ptr[1] == 's' && n.ptr[2] == 'i' && n.ptr[3] == 'z' && n.ptr[4] == 'e')
+    {
+        out->kind = TY_INT;
+        out->width = 64;
+        out->isSigned = true;
+        return true;
+    }
+    if (n.len == 5 && n.ptr[0] == 'u' && n.ptr[1] == 's' && n.ptr[2] == 'i' && n.ptr[3] == 'z' && n.ptr[4] == 'e')
+    {
+        out->kind = TY_INT;
+        out->width = 64;
+        out->isSigned = false;
+        return true;
+    }
+    return false;
+}
+
+u64 intFitsMax(u32 width)
+{
+    if (width >= 64) return 0xFFFFFFFFFFFFFFFFu;
+    if (width == 32) return 0xFFFFFFFFu;
+    if (width == 16) return 0xFFFFu;
+    return 0xFFu;
+}
+
+// Does an integer literal VALUE fit an int/char type? `litSigned` marks
+// literals written with a minus sign (negative magnitude is implicit).
+bool intFits(bool isSigned, u64 mag, u32 width, bool litSigned)
+{
+    if (width >= 64)
+    {
+        if (!litSigned) return true;
+        return mag <= 0x8000000000000000u;
+    }
+    u64 m = intFitsMax(width);
+    if (isSigned)
+    {
+        u64 half = ((u64)1) << (width - 1u);
+        if (litSigned) return mag <= half;
+        return mag <= half;
+    }
+    return mag <= m;
+}
+
+bool typesEqual(CType* a, CType* b)
+{
+    if (a == null || b == null) return false;
+    if (a->kind == TY_UNKNOWN || b->kind == TY_UNKNOWN) return false;
+    if (a->kind != b->kind) return false;
+    switch (a->kind)
+    {
+    case TY_VOID:
+    case TY_BOOL:
+        return true;
+    case TY_CHAR:
+        return true;
+    case TY_INT:
+        return a->width == b->width && a->isSigned == b->isSigned;
+    case TY_FLOAT:
+        return a->width == b->width;
+    case TY_PTR:
+    case TY_SLICE:
+        if (a->isConstPtr != b->isConstPtr) return false;
+        return typesEqual(a->elem, b->elem);
+    case TY_ARRAY:
+        if (!a->countKnown || !b->countKnown) return false;
+        if (a->count != b->count) return false;
+        return typesEqual(a->elem, b->elem);
+    case TY_NULL:
+        return true;
+    case TY_FUNC:
+        if (a->nparams != b->nparams || a->variadic != b->variadic) return false;
+        for (u32 i = 0; i < a->nparams; i++)
+        {
+            if (!typesEqual(a->params[i], b->params[i])) return false;
+        }
+        return typesEqual(a->ret, b->ret);
+    case TY_NAMED:
+        return a->decl == b->decl && a->name.len == b->name.len
+            && libc.memcmp((const void*)a->name.ptr, (const void*)b->name.ptr, a->name.len) == 0;
+    }
+    return false;
+}
+
+// Effective type for assignment/comparison: typedefs expand to their base;
+// distincts stay opaque (only identical distincts match).
+CType* effective(CType* t)
+{
+    if (t == null) return null;
+    while (t->kind == TY_NAMED && t->decl != null && t->decl->kind == ast.DT_TYPEDEF && t->elem != null)
+    {
+        t = t->elem;
+    }
+    return t;
+}
+
+str.strView typeName(CType* t)
+{
+    if (t == null) return str.strView::fromCstr("?");
+    if (t->kind == TY_UNKNOWN) return str.strView::fromCstr("?");
+    if (t->kind == TY_NAMED && t->name.len > 0) return t->name;
+    if (t->kind == TY_VOID) return str.strView::fromCstr("void");
+    if (t->kind == TY_BOOL) return str.strView::fromCstr("bool");
+    if (t->kind == TY_CHAR) return str.strView::fromCstr("char");
+    if (t->kind == TY_NULL) return str.strView::fromCstr("null");
+    if (t->kind == TY_FLOAT) return t->width == 32 ? str.strView::fromCstr("f32") : str.strView::fromCstr("f64");
+    if (t->kind == TY_INT)
+    {
+        if (t->width == 8) return t->isSigned ? str.strView::fromCstr("i8") : str.strView::fromCstr("u8");
+        if (t->width == 16) return t->isSigned ? str.strView::fromCstr("i16") : str.strView::fromCstr("u16");
+        if (t->width == 32) return t->isSigned ? str.strView::fromCstr("i32") : str.strView::fromCstr("u32");
+        return t->isSigned ? str.strView::fromCstr("i64") : str.strView::fromCstr("u64");
+    }
+    return str.strView::fromCstr("?");
+}
+
+// Parse the numeric body of an integer literal (no suffix) into a u64.
+bool parseUIntBody(str.strView s, u64* out)
+{
+    if (s.len == 0) return false;
+    u64 v = 0;
+    bool hex = s.len > 2 && s.ptr[0] == '0' && (s.ptr[1] == 'x' || s.ptr[1] == 'X');
+    u32 i = hex ? 2 : 0;
+    while (i < s.len)
+    {
+        u8 c = (u8)s.ptr[i];
+        u32 d = 0;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (hex && c >= 'a' && c <= 'f') d = 10u + (c - 'a');
+        else if (hex && c >= 'A' && c <= 'F') d = 10u + (c - 'A');
+        else return false;
+        v = v * (hex ? 16u : 10u) + d;
+        i++;
+    }
+    *out = v;
+    return true;
+}
+
+// Parse an integer literal text into magnitude + literal-signedness.
+// Handles decimal/hex bodies and a trailing u/l/ul suffix.
+bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidth)
+{
+    *mag = 0;
+    *litSigned = true;
+    *forcedWidth = 0;
+    if (text.len == 0) return false;
+    u32 n = text.len;
+    u32 suf = 0; // 0 none, 1 u, 2 l, 3 ul
+    bool peeled = false;
+    u8 last = (u8)text.ptr[n - 1];
+    if ((last == 'u' || last == 'U') && n >= 2)
+    {
+        n--;
+        suf = 1;
+        peeled = true;
+        last = (u8)text.ptr[n - 1];
+        if ((last == 'l' || last == 'L') && n >= 2)
+        {
+            n--;
+            suf = 3;
+        }
+    }
+    else if ((last == 'l' || last == 'L') && n >= 2)
+    {
+        n--;
+        suf = 2;
+        peeled = true;
+    }
+    str.strView body = str.strView::fromParts(text.ptr, n);
+    if (!parseUIntBody(body, mag)) return false;
+    if (suf == 1) { *forcedWidth = 32; *litSigned = false; }
+    else if (suf == 2) { *forcedWidth = 64; *litSigned = true; }
+    else if (suf == 3) { *forcedWidth = 64; *litSigned = false; }
+    return true;
+}
+
+// Type of a bare integer literal in untyped context (no annotation).
+// Defaults to i32, widened by value fit; a suffix forces a width.
+CType* literalIntDefaultType(str.strView text)
+{
+    CType* t = mman.alloc<CType>(1);
+    t->kind = TY_INT;
+    t->width = 32;
+    t->isSigned = true;
+    u64 mag = 0;
+    bool ln = true;
+    u32 fw = 0;
+    if (literalIntInfo(text, &mag, &ln, &fw))
+    {
+        if (fw > 0)
+        {
+            t->width = fw;
+            t->isSigned = ln; // 'u' suffix tracked through ln
+        }
+        else if (intFits(true, mag, 32, ln)) { t->width = 32; t->isSigned = true; }
+        else if (intFits(false, mag, 32, false)) { t->width = 32; t->isSigned = false; }
+        else if (intFits(true, mag, 64, ln)) { t->width = 64; t->isSigned = true; }
+        else { t->width = 64; t->isSigned = false; }
+    }
+    return t;
+}
+
+// Can an integer literal TEXT be assigned to int/char/bool type T?
+bool intLitFits(CType* t, str.strView text)
+{
+    if (t->kind == TY_CHAR) return true; // char literals handled separately
+    if (t->kind == TY_BOOL) return false;
+    if (t->kind != TY_INT) return false;
+    u64 mag = 0;
+    bool ln = true;
+    u32 fw = 0;
+    if (!literalIntInfo(text, &mag, &ln, &fw)) return false;
+    return intFits(t->isSigned, mag, t->width, ln);
+}
+
+bool isIntLike(CType* t)
+{
+    if (t == null) return false;
+    return t->kind == TY_INT || t->kind == TY_CHAR;
+}
+
+bool isNumeric(CType* t)
+{
+    if (t == null) return false;
+    return t->kind == TY_INT || t->kind == TY_CHAR || t->kind == TY_FLOAT;
+}
+
+// Does an expression of type S assign- into a target of type T?
+// `litKind` is the AST kind of the source expression when it is a literal
+// (EX_INT / EX_FLOAT / EX_CHAR / EX_BOOL / EX_NULL), else 0xFFFFFFFF.
+// Coral has NO implicit conversions: only exact type matches are allowed.
+// The sole exceptions: the null literal -> any pointer/slice; integer
+// literal text that fits the target integer width; char literal to int;
+// float literal to float.
+bool assignable(CType* tar, CType* src, u32 litKind, str.strView litText)
+{
+    tar = effective(tar);
+    src = effective(src);
+    if (tar->kind == TY_UNKNOWN || src->kind == TY_UNKNOWN) return true; // poison
+    if (typesEqual(tar, src)) return true;
+    if (src->kind == TY_NULL)
+    {
+        return tar->kind == TY_PTR || tar->kind == TY_SLICE || tar->kind == TY_FUNC
+            || tar->kind == TY_NAMED; // fudge: named-pointer macro types accept null
+    }
+    if (litKind == ast.EX_NULL) return true;
+    if (litKind == ast.EX_CHAR) return tar->kind == TY_CHAR || tar->kind == TY_INT;
+    if (litKind == ast.EX_BOOL) return tar->kind == TY_BOOL;
+    if (litKind == ast.EX_INT) return intLitFits(tar, litText) || tar->kind == TY_FLOAT;
+    if (litKind == ast.EX_FLOAT) return tar->kind == TY_FLOAT;
+    return false;
+}

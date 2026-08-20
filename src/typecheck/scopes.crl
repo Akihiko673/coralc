@@ -1,0 +1,523 @@
+// Symbol tables, module-alias indexing, and type-name resolution.
+// Imports are opaque in this pass: a `mod x = import(...)` records the alias
+// and the path; any `x.Name` reference resolves to an opaque (TY_UNKNOWN)
+// type named "x.Name". Within-file structs/enums/typedefs/distincts/functions
+// get full symbol entries. Generic type parameters are opaque types named
+// after their parameter.
+mod ast = import("ast/ast.crl");
+mod str = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod libc = import("std/platform/libc.crl");
+mod types = import("typecheck/types.crl");
+
+// Symbol kinds
+pub const u32 SYM_MODULE = 0;     // module alias (opaque)
+pub const u32 SYM_NS = 1;         // namespace block
+pub const u32 SYM_FUNC = 2;       // plain function / extern function
+pub const u32 SYM_CONST = 3;      // compile-time constant
+pub const u32 SYM_VAR = 4;        // global var / local var
+pub const u32 SYM_PARAM = 5;      // function parameter (incl. self)
+pub const u32 SYM_LOCAL = 6;      // local variable
+pub const u32 SYM_STRUCT = 7;
+pub const u32 SYM_ENUM = 8;
+pub const u32 SYM_TRAIT = 9;
+pub const u32 SYM_TYPEDEF = 10;
+pub const u32 SYM_DISTINCT = 11;
+pub const u32 SYM_FIELD = 12;     // struct field (attached to struct type)
+
+pub struct Sym
+{
+    str.strView name;
+    u32 kind;
+    ast.Decl* decl;     // source decl (may be null for synthetic entries)
+    types.CType* type;  // resolved type (value symbols)
+    bool used;          // referenced anywhere
+    bool isStatic;      // static function/method
+    bool isMethod;      // method on a struct
+    str.strView structName; // owning struct for methods
+    u32 line;
+    u32 col;
+}
+
+pub struct Scope
+{
+    Sym** syms;
+    u32 nsyms;
+    u32 cap;
+    Scope* parent;
+    str.strView label;  // "file" / fn name / block depth tag
+    u32 depth;
+}
+
+// Module alias table: alias -> path (opaque module).
+pub struct ModuleTable
+{
+    str.strView* aliases;
+    str.strView* paths;
+    u32 n;
+}
+
+Scope* scopeNew(Scope* parent, str.strView label, u32 depth)
+{
+    Scope* s = mman.alloc<Scope>(1);
+    s->syms = null;
+    s->nsyms = 0;
+    s->cap = 0;
+    s->parent = parent;
+    s->label = label;
+    s->depth = depth;
+    return s;
+}
+
+void scopeFree(Scope* s)
+{
+    if (s == null) return;
+    if (s->syms) mman.dealloc<Sym*>(s->syms);
+    mman.dealloc<Scope>(s);
+}
+
+bool sEq(str.strView a, str.strView b)
+{
+    if (a.len != b.len) return false;
+    return libc.memcmp((const void*)a.ptr, (const void*)b.ptr, a.len) == 0;
+}
+
+// Declare a symbol; returns false on duplicate in the SAME scope.
+bool scopeDeclare(Scope* s, Sym* sym)
+{
+    for (u32 i = 0; i < s->nsyms; i++)
+    {
+        if (sEq(s->syms[i]->name, sym->name)) return false;
+    }
+    if (s->nsyms >= s->cap)
+    {
+        u32 nc = s->cap ? s->cap * 2 : 8;
+        Sym** na = mman.alloc<Sym*>(nc);
+        for (u32 i = 0; i < s->nsyms; i++) na[i] = s->syms[i];
+        if (s->syms && s->cap) mman.dealloc<Sym*>(s->syms);
+        s->syms = na;
+        s->cap = nc;
+    }
+    s->syms[s->nsyms++] = sym;
+    return true;
+}
+
+// Look up the first `name` walking from the innermost scope out.
+Sym* scopeLookup(Scope* s, str.strView name)
+{
+    Scope* cur = s;
+    while (cur != null)
+    {
+        for (u32 i = 0; i < cur->nsyms; i++)
+        {
+            if (sEq(cur->syms[i]->name, name)) return cur->syms[i];
+        }
+        cur = cur->parent;
+    }
+    return null;
+}
+
+Sym* findTopSym(Scope* top, str.strView name)
+{
+    return scopeLookup(top, name);
+}
+
+void symMarkUsed(Sym* s)
+{
+    if (s != null) s->used = true;
+}
+
+Sym* symNew(str.strView name, u32 kind, ast.Decl* decl, u32 line, u32 col)
+{
+    Sym* s = mman.alloc<Sym>(1);
+    s->name = name;
+    s->kind = kind;
+    s->decl = decl;
+    s->type = null;
+    s->used = false;
+    s->isStatic = false;
+    s->isMethod = false;
+    s->structName = str.strView::empty();
+    s->line = line;
+    s->col = col;
+    return s;
+}
+
+ModuleTable* modsNew()
+{
+    ModuleTable* m = mman.alloc<ModuleTable>(1);
+    m->aliases = null;
+    m->paths = null;
+    m->n = 0;
+    return m;
+}
+
+// Register a `mod alias = import("path")`.
+void modsAdd(ModuleTable* m, str.strView alias, str.strView path)
+{
+    u32 nc = m->n + 1;
+    str.strView* na = mman.alloc<str.strView>(nc);
+    str.strView* np = mman.alloc<str.strView>(nc);
+    for (u32 i = 0; i < m->n; i++)
+    {
+        na[i] = m->aliases[i];
+        np[i] = m->paths[i];
+    }
+    na[m->n] = alias;
+    np[m->n] = path;
+    if (m->aliases) mman.dealloc<str.strView>(m->aliases);
+    if (m->paths) mman.dealloc<str.strView>(m->paths);
+    m->aliases = na;
+    m->paths = np;
+    m->n = nc;
+}
+
+bool modsLookup(ModuleTable* m, str.strView alias)
+{
+    for (u32 i = 0; i < m->n; i++)
+    {
+        if (sEq(m->aliases[i], alias)) return true;
+    }
+    return false;
+}
+
+str.strView modsPath(ModuleTable* m, str.strView alias)
+{
+    for (u32 i = 0; i < m->n; i++)
+    {
+        if (sEq(m->aliases[i], alias)) return m->paths[i];
+    }
+    return str.strView::empty();
+}
+
+// Is `name` one of the active generic type-parameter names?
+bool isGenericParam(str.strView* gnames, u32 n, str.strView name)
+{
+    for (u32 i = 0; i < n; i++)
+    {
+        if (sEq(gnames[i], name)) return true;
+    }
+    return false;
+}
+
+// Build an opaque named type ("mod.Type" style) — module imports, traits.
+types.CType* opaqueType(str.strView name, u32 line, u32 col)
+{
+    types.CType* t = mman.alloc<types.CType>(1);
+    t->kind = types.TY_UNKNOWN;
+    t->name = name;
+    t->line = line;
+    t->col = col;
+    return t;
+}
+
+// Make sure the `name` slice outlives the tree (source slices are stable for
+// the file being checked; the resolver only uses them for display/equality).
+types.CType* namedType(ast.Decl* decl, str.strView name, u32 line, u32 col)
+{
+    types.CType* t = mman.alloc<types.CType>(1);
+    t->kind = types.TY_NAMED;
+    t->decl = decl;
+    t->name = name;
+    t->line = line;
+    t->col = col;
+    return t;
+}
+
+// Find a method (possibly generic) named `mname` on struct `structDecl`
+// searching the struct's own method list and any DT_METHODBLOCK decls in the
+// program whose structName matches. Returns the Decl or null.
+ast.Decl* findMethod(ast.Decl* structDecl, ast.Program* prog, str.strView mname)
+{
+    if (structDecl != null)
+    {
+        for (u32 i = 0; i < structDecl->ndecls; i++)
+        {
+            ast.Decl* m = structDecl->decls[i];
+            if (m != null && sEq(m->name, mname)) return m;
+        }
+    }
+    for (u32 i = 0; prog != null && i < prog->ndecls; i++)
+    {
+        ast.Decl* d = prog->decls[i];
+        if (d->kind == ast.DT_METHODBLOCK && d->structName.len > 0 && sEq(d->structName, structDecl->name))
+        {
+            for (u32 j = 0; j < d->ndecls; j++)
+            {
+                ast.Decl* m = d->decls[j];
+                if (m != null && sEq(m->name, mname)) return m;
+            }
+        }
+    }
+    return null;
+}
+
+// Find a field named `fname` on a struct decl.
+ast.StructField* findField(ast.Decl* structDecl, str.strView fname)
+{
+    if (structDecl == null) return null;
+    for (u32 i = 0; i < structDecl->nfields; i++)
+    {
+        if (sEq(structDecl->fields[i].name, fname)) return &structDecl->fields[i];
+    }
+    return null;
+}
+
+bool isStructLike(types.CType* t)
+{
+    if (t == null) return false;
+    if (t->kind != types.TY_NAMED) return false;
+    if (t->decl == null) return false;
+    return t->decl->kind == ast.DT_STRUCT;
+}
+
+bool isEnumLike(types.CType* t)
+{
+    if (t == null) return false;
+    if (t->kind != types.TY_NAMED) return false;
+    if (t->decl == null) return false;
+    return t->decl->kind == ast.DT_ENUM;
+}
+
+// Resolve a TypeExpr to a CType. `gnames`/`n` is the active generic-parameter
+// set (opaque). `top` is the file scope; `mods` the module alias table.
+types.CType* resolveTypeExpr(ast.TypeExpr* te, Scope* top, ModuleTable* mods,
+                             str.strView* gnames, u32 n)
+{
+    if (te == null) return null;
+    if (te->kind == ast.TYP_IDENT)
+    {
+        str.strView name = te->name;
+        // generic type parameter?
+        if (isGenericParam(gnames, n, name)) return opaqueType(name, te->line, te->col);
+        // primitive?
+        types.CType* pr = mman.alloc<types.CType>(1);
+        if (types.primType(name, pr)) return pr;
+        // qualified: mod.Type / mod.Type.Deep — split on '.'
+        bool dotted = false;
+        for (u32 i = 0; i < name.len; i++)
+        {
+            if (name.ptr[i] == '.')
+            {
+                dotted = true;
+                break;
+            }
+        }
+        if (dotted)
+        {
+            // first segment must be a module alias (or namespace)
+            u32 dotAt = 0;
+            while (dotAt < name.len && name.ptr[dotAt] != '.') dotAt++;
+            str.strView first = str.strView::fromParts(name.ptr, dotAt);
+            if (modsLookup(mods, first))
+            {
+                // imported module -> opaque; named "first.rest"
+                return opaqueType(name, te->line, te->col);
+            }
+            Sym* s = scopeLookup(top, first);
+            if (s != null && (s->kind == SYM_NS))
+            {
+                Sym* s2 = scopeLookup(top, name);
+                if (s2 != null) return symTypeFromName(s2, name, te->line, te->col);
+                return opaqueType(name, te->line, te->col);
+            }
+            return opaqueType(name, te->line, te->col);
+        }
+        // plain name in scope?
+        Sym* s = scopeLookup(top, name);
+        if (s != null) return symTypeFromName(s, name, te->line, te->col);
+        return opaqueType(name, te->line, te->col);
+    }
+    if (te->kind == ast.TYP_PTR)
+    {
+        types.CType* el = resolveTypeExpr(te->elem, top, mods, gnames, n);
+        if (el == null) return null;
+        types.CType* t = mman.alloc<types.CType>(1);
+        t->kind = types.TY_PTR;
+        t->elem = el;
+        t->isConstPtr = te->isConst;
+        t->line = te->line;
+        t->col = te->col;
+        return t;
+    }
+    if (te->kind == ast.TYP_ARRAY)
+    {
+        types.CType* el = resolveTypeExpr(te->elem, top, mods, gnames, n);
+        if (el == null) return null;
+        types.CType* t = mman.alloc<types.CType>(1);
+        if (te->count == null)
+        {
+            t->kind = types.TY_SLICE;
+        }
+        else
+        {
+            t->kind = types.TY_ARRAY;
+            u64 v = 0;
+            bool ok = countFold(te->count, &v);
+            t->count = ok ? v : 0;
+            t->countKnown = ok;
+        }
+        t->elem = el;
+        return t;
+    }
+    if (te->kind == ast.TYP_GENERIC)
+    {
+        // base + type args + const args
+        str.String disp = str.String::new();
+        disp.pushView(te->name);
+        disp.pushChar('<');
+        // resolve args by name for display + equality
+        for (u32 i = 0; i < te->nargs; i++)
+        {
+            if (i > 0) disp.pushChar(',');
+            ast.TypeExpr* a = te->args[i];
+            if (a->kind == ast.TYP_IDENT)
+            {
+                types.CType* pr = mman.alloc<types.CType>(1);
+                if (types.primType(a->name, pr)) disp.pushView(types.typeName(pr));
+                else disp.pushView(a->name);
+            }
+            else
+            {
+                types.CType* at = resolveTypeExpr(a, top, mods, gnames, n);
+                if (at != null) disp.pushView(types.typeName(at));
+            }
+        }
+        for (u32 i = 0; i < te->ncargs; i++)
+        {
+            if (te->nargs + i > 0) disp.pushChar(',');
+            ast.Expr* ce = te->cargs[i];
+            if (ce != null && ce->kind == ast.EX_INT) disp.pushView(ce->text);
+            else disp.pushChar('?');
+        }
+        disp.pushChar('>');
+        str.strView dname = str.strView::fromParts(disp.ptr, disp.len);
+        // base may be qualified (vec.vec<T>)
+        str.strView base = te->name;
+        bool dotted = false;
+        for (u32 i = 0; i < base.len; i++)
+        {
+            if (base.ptr[i] == '.')
+            {
+                dotted = true;
+                break;
+            }
+        }
+        if (dotted)
+        {
+            // imported-module generic -> opaque
+            str.strView first = str.strView::fromParts(base.ptr, 0);
+            u32 dotAt = 0;
+            while (dotAt < base.len && base.ptr[dotAt] != '.') dotAt++;
+            first = str.strView::fromParts(base.ptr, dotAt);
+            if (modsLookup(mods, first))
+            {
+                types.CType* t = mman.alloc<types.CType>(1);
+                t->kind = types.TY_UNKNOWN;
+                t->name = dname;
+                return t;
+            }
+        }
+        Sym* s = scopeLookup(top, base);
+        if (s != null && s->decl != null)
+        {
+            types.CType* t = mman.alloc<types.CType>(1);
+            t->kind = types.TY_NAMED;
+            t->decl = s->decl;
+            t->name = dname;
+            return t;
+        }
+        types.CType* t = mman.alloc<types.CType>(1);
+        t->kind = types.TY_UNKNOWN;
+        t->name = dname;
+        return t;
+    }
+    if (te->kind == ast.TYP_FUNC)
+    {
+        types.CType* ret = resolveTypeExpr(te->ret, top, mods, gnames, n);
+        types.CType* t = mman.alloc<types.CType>(1);
+        t->kind = types.TY_FUNC;
+        t->ret = ret;
+        t->nparams = te->nargs;
+        if (te->nargs > 0)
+        {
+            t->params = mman.alloc<types.CType*>(te->nargs);
+            for (u32 i = 0; i < te->nargs; i++)
+            {
+                t->params[i] = resolveTypeExpr(te->args[i], top, mods, gnames, n);
+            }
+        }
+        return t;
+    }
+    return null;
+}
+
+// Build the CType for a top-level symbol when it is used in type position.
+types.CType* symTypeFromName(Sym* s, str.strView name, u32 line, u32 col)
+{
+    if (s->kind == SYM_STRUCT || s->kind == SYM_ENUM || s->kind == SYM_TYPEDEF
+        || s->kind == SYM_DISTINCT || s->kind == SYM_TRAIT)
+    {
+        types.CType* t = mman.alloc<types.CType>(1);
+        t->kind = types.TY_NAMED;
+        t->decl = s->decl;
+        t->name = name;
+        t->line = line;
+        t->col = col;
+        return t;
+    }
+    return opaqueType(name, line, col);
+}
+
+// Fold an array-extent Expr (a compile-time constant) to a u64.
+// Supports integer literals, unary minus, and the binary int ops.
+bool countFold(ast.Expr* e, u64* out)
+{
+    if (e == null) return false;
+    switch (e->kind)
+    {
+    case ast.EX_INT:
+        {
+            u64 mag = 0;
+            bool ln = true;
+            u32 fw = 0;
+            if (!types.literalIntInfo(e->text, &mag, &ln, &fw)) return false;
+            if (ln)
+            {
+                // negative literal written as -N uses EX_UNARY; treat bare as positive
+            }
+            *out = mag;
+            return true;
+        }
+    case ast.EX_UNARY:
+        if (e->text == "+" || e->text == "-")
+        {
+            u64 v = 0;
+            if (!countFold(e->a, &v)) return false;
+            if (e->text == "-" && v != 0)
+            {
+                *out = 0; // negative size invalid; caller treats as unknown
+                return false;
+            }
+            *out = v;
+            return true;
+        }
+        return false;
+    case ast.EX_BINARY:
+        {
+            u64 l = 0, r = 0;
+            if (!countFold(e->a, &l) || !countFold(e->b, &r)) return false;
+            if (e->text == "+") { *out = l + r; return true; }
+            if (e->text == "-") { if (l < r) return false; *out = l - r; return true; }
+            if (e->text == "*") { *out = l * r; return true; }
+            if (e->text == "/") { if (r == 0) return false; *out = l / r; return true; }
+            if (e->text == "<<") { *out = l << r; return true; }
+            if (e->text == ">>") { *out = l >> r; return true; }
+            return false;
+        }
+    case ast.EX_PAREN:
+        return countFold(e->a, out);
+    default:
+        return false;
+    }
+}
