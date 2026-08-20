@@ -83,6 +83,21 @@ pub struct Check
         scopes.Scope* top = scopes.scopeNew(null, str.strView::fromCstr("file"), 0);
         scopes.ModuleTable* mods = scopes.modsNew();
 
+        // the file is itself a module named after its basename; register it so
+        // self-qualified references (mman.copy<...>) resolve to this file's own
+        // top-level declarations
+        {
+            u32 s = 0;
+            for (u32 i = 0; i < self.filename.len; i++)
+                if (self.filename.ptr[i] == '/') s = i + 1;
+            u32 en = self.filename.len;
+            for (u32 i = s; i < self.filename.len; i++)
+                if (self.filename.ptr[i] == '.') en = i;
+            str.strView modName = str.strView::fromParts(self.filename.ptr + s, en - s);
+            scopes.Sym* msym = scopes.symNew(modName, scopes.SYM_MODULE, null, 0, 0);
+            scopes.scopeDeclare(top, msym);
+        }
+
         // pass 1: declare all top-level symbols
         for (u32 i = 0; i < self.prog->ndecls; i++)
         {
@@ -92,6 +107,8 @@ pub struct Check
             {
             case ast.DT_IMPORT:
                 scopes.modsAdd(mods, d->name, d->text);
+                if (scopes.scopeLookup(top, d->name) == null)
+                    self.declareSym(top, d, scopes.SYM_MODULE, null);
                 break;
             case ast.DT_MODULE:
             case ast.DT_NAMESPACE:

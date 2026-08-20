@@ -278,6 +278,18 @@ class Codegen:
                     self._used_libc_funcs.add('memcmp')
                     eq = f'(memcmp(&{lc}, &{rc}, sizeof({lt})) == 0)'
                     return eq if expr.op == '==' else f'(!{eq})'
+                # strView/String vs string literal: wrap the literal side in
+                # the mangled type's fromCstr constructor (Zig: no implicit
+                # conversion, but this is the bootstrap convenience the rest
+                # of codegen relies on).
+                if isinstance(expr.right, ExprString) and self._needs_str_wrap(lt):
+                    lc = self.expr_to_c(expr.left)
+                    rc = self._str_wrap(lt, self.expr_to_c(expr.right))
+                    return f'({lc} {expr.op} {rc})'
+                if isinstance(expr.left, ExprString) and self._needs_str_wrap(rt):
+                    lc = self._str_wrap(rt, self.expr_to_c(expr.left))
+                    rc = self.expr_to_c(expr.right)
+                    return f'({lc} {expr.op} {rc})'
             return f'({self.expr_to_c(expr.left)} {expr.op} {self.expr_to_c(expr.right)})'
         if isinstance(expr, ExprTernary):
             return f'({self.expr_to_c(expr.condition)} ? {self.expr_to_c(expr.then_expr)} : {self.expr_to_c(expr.else_expr)})'
@@ -1308,14 +1320,28 @@ class Codegen:
 
     # Statement Generation
 
+    def _needs_str_wrap(self, ctype):
+        """True when a literal string argument must be wrapped in
+        strView_fromCstr to satisfy a strView/String parameter. The C type
+        carries the module prefix (`str_strView`), so match both the bare and
+        mangled forms."""
+        if not isinstance(ctype, str):
+            return False
+        return ctype in ('strView', 'String', 'str_strView', 'str_String')
+
+    def _str_wrap(self, ctype, a_str):
+        """Wrap a literal string expression for a strView/String parameter.
+        The wrapper is the mangled type's fromCstr constructor."""
+        return f'{ctype}_fromCstr({a_str})'
+
     def _call_args_list(self, fn_name, args):
         param_types = self._func_param_types.get(fn_name, [])
         arg_strs = []
         for i, a in enumerate(args):
             a_str = self.expr_to_c(a)
-            if i < len(param_types) and param_types[i] in ('strView', 'String'):
+            if i < len(param_types) and self._needs_str_wrap(param_types[i]):
                 if isinstance(a, ExprString):
-                    a_str = f'strView_fromCstr({a_str})'
+                    a_str = self._str_wrap(param_types[i], a_str)
             arg_strs.append(a_str)
         return ', '.join(arg_strs)
 
@@ -1423,19 +1449,19 @@ class Codegen:
                         if explicit_self:
                             wrapped_args = []
                             for i, a_str in enumerate(args):
-                                if i < len(param_types) and param_types[i] in ('strView', 'String'):
+                                if i < len(param_types) and self._needs_str_wrap(param_types[i]):
                                     ea = expr.args[i]
                                     if isinstance(ea, ExprString):
-                                        a_str = f'strView_fromCstr({a_str})'
+                                        a_str = self._str_wrap(param_types[i], a_str)
                                 wrapped_args.append(a_str)
                         else:
                             wrapped_args = [self_arg]
                             for i, a_str in enumerate(args):
                                 pi = i + 1
-                                if pi < len(param_types) and param_types[pi] in ('strView', 'String'):
+                                if pi < len(param_types) and self._needs_str_wrap(param_types[pi]):
                                     ea = expr.args[i]
                                     if isinstance(ea, ExprString):
-                                        a_str = f'strView_fromCstr({a_str})'
+                                        a_str = self._str_wrap(param_types[pi], a_str)
                                 wrapped_args.append(a_str)
                         arg_str = ', '.join(wrapped_args)
                         return f'{fn_name_m}({arg_str})'

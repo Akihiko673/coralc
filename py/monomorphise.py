@@ -912,6 +912,15 @@ def mangle_aliases(program):
         if isinstance(decl, DeclImport):
             for a in decl.names:
                 module_aliases.add(a)
+    # Methods belong to their struct's namespace (Zig model): a method name
+    # must never be captured by a module-level decl of the same name. Record
+    # every method name first, then only create qualified entries for module
+    # functions that do not shadow a method.
+    method_names = set()
+    for decl in program.decls:
+        if isinstance(decl, DeclStruct):
+            for meth in decl.methods:
+                method_names.add(meth.name)
     for decl in program.decls:
         if isinstance(decl, (DeclStruct, DeclEnum, DeclTrait, DeclTypedef,
                              DeclDistinct, DeclConst, DeclVar, DeclFunc)):
@@ -919,6 +928,14 @@ def mangle_aliases(program):
                 continue  # extern decls keep their original C names
             if decl.alias and decl.name.startswith(decl.alias + '_'):
                 continue  # already fully mangled (monomorphised name)
+            if isinstance(decl, DeclFunc) and decl.name in method_names:
+                # Module function shadowing a struct method: keep its qualified
+                # name only; the bare name stays bound to the method (Zig).
+                m = f'{decl.alias}_{decl.name}' if decl.alias else decl.name
+                if decl.alias:
+                    name_map[f'{decl.alias}.{decl.name}'] = m
+                    name_map[f'{decl.alias}::{decl.name}'] = m
+                continue
             m = f'{decl.alias}_{decl.name}' if decl.alias else decl.name
             name_map[decl.name] = m
             if decl.alias:

@@ -673,6 +673,7 @@ pub struct Parser
         s->cases = null;
         s->ncases = 0;
         s->defaultCase = null;
+        s->synthetic = false;
         s->line = line;
         s->col = col;
         return s;
@@ -1252,6 +1253,7 @@ pub struct Parser
         if (self.check(tok.T_LBRACE)) return self.parseBlock();
         ast.Stmt* s = self.parseStmt();
         ast.Stmt* b = self.stmtBase(ast.ST_BLOCK, s ? s->line : 0, s ? s->col : 0);
+        b->synthetic = true;
         if (s != null)
         {
             ast.Stmt** arr = mman.alloc<ast.Stmt*>(1);
@@ -1326,10 +1328,6 @@ pub struct Parser
             self.parseAttachedAttrs();
         if (self.isTypeTok(self.peekTok(0)) || self.check(tok.TOK_IDENT) || self.check(tok.T_CONST))
         {
-            Mark dsave = self.mark();
-            ast.Decl* d = self.parseTypeFirstDecl(false, false, false);
-            if (d != null) return self.stmtBase(ast.ST_EXPR, t->row, t->col);
-            self.rewind(dsave);
             return self.parseTypeOrExprStmt(t);
         }
         return self.parseExprStmt();
@@ -1392,6 +1390,7 @@ pub struct Parser
                 }
                 self.expect(tok.T_SEMI);
                 ast.Stmt* b = self.stmtBase(ast.ST_BLOCK, t->row, t->col);
+                b->synthetic = true;
                 b->stmts = vars;
                 b->nstmts = nv;
                 return b;

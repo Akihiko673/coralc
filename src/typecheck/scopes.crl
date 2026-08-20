@@ -82,12 +82,22 @@ bool sEq(str.strView a, str.strView b)
     return libc.memcmp((const void*)a.ptr, (const void*)b.ptr, a.len) == 0;
 }
 
-// Declare a symbol; returns false on duplicate in the SAME scope.
+// Declare a symbol; returns false on duplicate in the SAME scope. A
+// declaration may shadow the file's own module-name marker (a SYM_MODULE
+// with no decl), so `pub struct vec` inside vec.crl is legal.
 bool scopeDeclare(Scope* s, Sym* sym)
 {
     for (u32 i = 0; i < s->nsyms; i++)
     {
-        if (sEq(s->syms[i]->name, sym->name)) return false;
+        if (sEq(s->syms[i]->name, sym->name))
+        {
+            if (s->syms[i]->kind == SYM_MODULE && s->syms[i]->decl == null)
+            {
+                s->syms[i] = sym;
+                return true;
+            }
+            return false;
+        }
     }
     if (s->nsyms >= s->cap)
     {
@@ -490,11 +500,11 @@ bool countFold(ast.Expr* e, u64* out)
             return true;
         }
     case ast.EX_UNARY:
-        if (e->text == "+" || e->text == "-")
+        if (sEq(e->text, str.strView::fromCstr("+")) || sEq(e->text, str.strView::fromCstr("-")))
         {
             u64 v = 0;
             if (!countFold(e->a, &v)) return false;
-            if (e->text == "-" && v != 0)
+            if (sEq(e->text, str.strView::fromCstr("-")) && v != 0)
             {
                 *out = 0; // negative size invalid; caller treats as unknown
                 return false;
@@ -507,12 +517,12 @@ bool countFold(ast.Expr* e, u64* out)
         {
             u64 l = 0, r = 0;
             if (!countFold(e->a, &l) || !countFold(e->b, &r)) return false;
-            if (e->text == "+") { *out = l + r; return true; }
-            if (e->text == "-") { if (l < r) return false; *out = l - r; return true; }
-            if (e->text == "*") { *out = l * r; return true; }
-            if (e->text == "/") { if (r == 0) return false; *out = l / r; return true; }
-            if (e->text == "<<") { *out = l << r; return true; }
-            if (e->text == ">>") { *out = l >> r; return true; }
+            if (sEq(e->text, str.strView::fromCstr("+"))) { *out = l + r; return true; }
+            if (sEq(e->text, str.strView::fromCstr("-"))) { if (l < r) return false; *out = l - r; return true; }
+            if (sEq(e->text, str.strView::fromCstr("*"))) { *out = l * r; return true; }
+            if (sEq(e->text, str.strView::fromCstr("/"))) { if (r == 0) return false; *out = l / r; return true; }
+            if (sEq(e->text, str.strView::fromCstr("<<"))) { *out = l << r; return true; }
+            if (sEq(e->text, str.strView::fromCstr(">>"))) { *out = l >> r; return true; }
             return false;
         }
     case ast.EX_PAREN:

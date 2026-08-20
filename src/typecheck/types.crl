@@ -204,6 +204,73 @@ bool typesEqual(CType* a, CType* b)
     return false;
 }
 
+// Assignment/comparison compatibility: exact equality, or a pointer/slice pair
+// that is structurally equal except that the target only ADDS const qualifiers
+// (char* -> const char* is fine; removing const is not). Returns false for
+// everything else so the strict no-implicit-conversion rules still apply.
+bool typesCompatible(CType* a, CType* b)
+{
+    a = effective(a);
+    b = effective(b);
+    if (containsUnknown(a) || containsUnknown(b)) return true; // poison
+    if (typesEqual(a, b)) return true;
+    if (a->kind == TY_PTR && b->kind == TY_PTR)
+    {
+        if (b->isConstPtr && !a->isConstPtr) return false; // dropping const
+        // void* interops with any object pointer in both directions
+        types.CType* ae = a->elem != null ? effective(a->elem) : null;
+        types.CType* be = b->elem != null ? effective(b->elem) : null;
+        if (ae != null && ae->kind == TY_VOID) return true;
+        if (be != null && be->kind == TY_VOID) return true;
+        return typesEqual(a->elem, b->elem);
+    }
+    if (a->kind == TY_SLICE && b->kind == TY_SLICE)
+    {
+        if (b->isConstPtr && !a->isConstPtr) return false;
+        return typesEqual(a->elem, b->elem);
+    }
+    return false;
+}
+
+// Decay a fixed-array value to a pointer to its element (C-style array decay)
+// for assignment/arithmetic contexts. Non-arrays pass through.
+CType* decay(CType* t)
+{
+    t = effective(t);
+    if (t != null && t->kind == TY_ARRAY)
+    {
+        CType* p = mman.alloc<CType>(1);
+        p->kind = TY_PTR;
+        p->elem = t->elem;
+        p->isConstPtr = false;
+        return p;
+    }
+    return t;
+}
+
+// Comparison compatibility: equality, or pointer/slice/array forms over the
+// same element type. Const qualifiers are irrelevant on either side (comparing
+// char* with const char* is fine), void* interops, arrays compare as their
+// decayed pointers.
+bool comparable(CType* a, CType* b)
+{
+    a = effective(a);
+    b = effective(b);
+    if (containsUnknown(a) || containsUnknown(b)) return true;
+    if (typesEqual(a, b)) return true;
+    bool aPtrLike = a->kind == TY_PTR || a->kind == TY_SLICE || a->kind == TY_ARRAY;
+    bool bPtrLike = b->kind == TY_PTR || b->kind == TY_SLICE || b->kind == TY_ARRAY;
+    if (aPtrLike && bPtrLike)
+    {
+        CType* ae = a->elem != null ? effective(a->elem) : null;
+        CType* be = b->elem != null ? effective(b->elem) : null;
+        if (ae != null && ae->kind == TY_VOID) return true;
+        if (be != null && be->kind == TY_VOID) return true;
+        return typesEqual(a->elem, b->elem);
+    }
+    return false;
+}
+
 // Effective type for assignment/comparison: typedefs expand to their base;
 // distincts stay opaque (only identical distincts match).
 CType* effective(CType* t)
@@ -347,7 +414,40 @@ bool isNumeric(CType* t)
     return t->kind == TY_INT || t->kind == TY_CHAR || t->kind == TY_FLOAT;
 }
 
-// Does an expression of type S assign- into a target of type T?
+// Does the type tree contain an unresolved/opaque component anywhere?
+// Types referencing imported modules or unresolved names resolve to
+// TY_UNKNOWN; strict rules must degrade gracefully (no false errors) for
+// any type that transitively contains one.
+bool containsUnknown(CType* t)
+{
+    if (t == null) return true;
+    if (t->kind == TY_UNKNOWN) return true;
+    if (t->kind == TY_PTR || t->kind == TY_SLICE || t->kind == TY_ARRAY)
+    {
+        return t->elem == null || containsUnknown(t->elem);
+    }
+    if (t->kind == TY_FUNC)
+    {
+        if (t->ret != null && containsUnknown(t->ret)) return true;
+        for (u32 i = 0; i < t->nparams; i++)
+        {
+            if (t->params[i] == null || containsUnknown(t->params[i])) return true;
+        }
+    }
+    return false;
+}
+
+// Types usable as boolean conditions: bool, anything pointer-like (null-
+// checked in C style), function pointers, and unresolved poison. Numbers
+// and structs are not conditions.
+bool isTruthyType(CType* t)
+{
+    if (t == null) return false;
+    if (t->kind == TY_UNKNOWN || t->kind == TY_BOOL) return true;
+    return t->kind == TY_PTR || t->kind == TY_SLICE || t->kind == TY_FUNC;
+}
+
+// Can an expression of type S assign- into a target of type T?
 // `litKind` is the AST kind of the source expression when it is a literal
 // (EX_INT / EX_FLOAT / EX_CHAR / EX_BOOL / EX_NULL), else 0xFFFFFFFF.
 // Coral has NO implicit conversions: only exact type matches are allowed.
@@ -358,8 +458,10 @@ bool assignable(CType* tar, CType* src, u32 litKind, str.strView litText)
 {
     tar = effective(tar);
     src = effective(src);
-    if (tar->kind == TY_UNKNOWN || src->kind == TY_UNKNOWN) return true; // poison
-    if (typesEqual(tar, src)) return true;
+    if (tar->kind == TY_PTR || tar->kind == TY_SLICE) src = decay(src);
+    if (tar->kind == TY_FUNC || tar->kind == TY_NAMED) src = decay(src);
+    if (containsUnknown(tar) || containsUnknown(src)) return true; // poison
+    if (typesCompatible(tar, src)) return true;
     if (src->kind == TY_NULL)
     {
         return tar->kind == TY_PTR || tar->kind == TY_SLICE || tar->kind == TY_FUNC
@@ -368,6 +470,16 @@ bool assignable(CType* tar, CType* src, u32 litKind, str.strView litText)
     if (litKind == ast.EX_NULL) return true;
     if (litKind == ast.EX_CHAR) return tar->kind == TY_CHAR || tar->kind == TY_INT;
     if (litKind == ast.EX_BOOL) return tar->kind == TY_BOOL;
+    if (litKind == ast.EX_STR)
+    {
+        // string literal -> pointer to char/u8 (const-qualified or not)
+        if (tar->kind == TY_PTR && tar->elem != null)
+        {
+            CType* el = effective(tar->elem);
+            return el->kind == TY_CHAR || (el->kind == TY_INT && el->width == 8);
+        }
+        return false;
+    }
     if (litKind == ast.EX_INT) return intLitFits(tar, litText) || tar->kind == TY_FLOAT;
     if (litKind == ast.EX_FLOAT) return tar->kind == TY_FLOAT;
     return false;

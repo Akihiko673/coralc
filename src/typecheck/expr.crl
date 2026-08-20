@@ -34,29 +34,29 @@ pub struct Typer
     ast.Decl* curFn;
     str.strView* gnames;
     u32 ng;
-}
 
-static Typer new(ast.Program* prog, str.strView src, str.strView filename,
-                 Scope* top, ModuleTable* mods, u32* nerrors, u32* nwarnings,
-                 bool noWarnUnsafe, bool forcedSkip)
-{
-    Typer t;
-    t.prog = prog;
-    t.src = src;
-    t.filename = filename;
-    t.top = top;
-    t.mods = mods;
-    t.nerrors = nerrors;
-    t.nwarnings = nwarnings;
-    t.noWarnUnsafe = noWarnUnsafe;
-    t.forcedSkip = forcedSkip;
-    t.warnUnused = !noWarnUnsafe;
-    t.fnScope = null;
-    t.retType = null;
-    t.curFn = null;
-    t.gnames = null;
-    t.ng = 0;
-    return t;
+    static Typer new(ast.Program* prog, str.strView src, str.strView filename,
+                     Scope* top, ModuleTable* mods, u32* nerrors, u32* nwarnings,
+                     bool noWarnUnsafe, bool forcedSkip)
+    {
+        Typer t;
+        t.prog = prog;
+        t.src = src;
+        t.filename = filename;
+        t.top = top;
+        t.mods = mods;
+        t.nerrors = nerrors;
+        t.nwarnings = nwarnings;
+        t.noWarnUnsafe = noWarnUnsafe;
+        t.forcedSkip = forcedSkip;
+        t.warnUnused = !noWarnUnsafe;
+        t.fnScope = null;
+        t.retType = null;
+        t.curFn = null;
+        t.gnames = null;
+        t.ng = 0;
+        return t;
+    }
 }
 
 void errAt(Typer* t, u32 line, u32 col, str.strView msg)
@@ -308,6 +308,31 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
     if (callee->kind == ast.EX_GENERIC)
     {
         ast.Expr* base = callee->a;
+        if (base != null && base->kind == ast.EX_DOT)
+        {
+            // module-qualified generic call: mod.fn<T>(...) — resolves against
+            // this file's own top scope (the file's own module name or an
+            // in-scope module whose members live in this program)
+            ast.Expr* bobj = base->a;
+            while (bobj != null && bobj->kind == ast.EX_PAREN) bobj = bobj->a;
+            if (bobj != null && bobj->kind == ast.EX_IDENT)
+            {
+                Sym* bom = scopes.scopeLookup(t->top, bobj->text);
+                if (bom != null && (bom->kind == scopes.SYM_MODULE || bom->kind == scopes.SYM_NS))
+                {
+                    Sym* mf = scopes.scopeLookup(t->top, base->text);
+                    if (mf != null && mf->kind == scopes.SYM_FUNC)
+                    {
+                        scopes.symMarkUsed(mf);
+                        types.CType* msig = fnSig(t, mf->decl);
+                        checkArgs(t, call, msig, mf->decl->ngenerics > 0);
+                        return msig->ret;
+                    }
+                }
+            }
+            typeArgsOnce(t, call);
+            return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+        }
         if (base != null && base->kind == ast.EX_IDENT && strEq2(base->text, "cast"))
         {
             typeArgsOnce(t, call);
@@ -344,6 +369,45 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
     // plain identifier call
     if (callee->kind == ast.EX_IDENT)
     {
+        // qualified static call: Struct::method(...) / Enum::variant(...)
+        str.strView cname = callee->text;
+        for (u32 i = 0; i + 1 < cname.len; i++)
+        {
+            if (cname.ptr[i] == ':' && cname.ptr[i + 1] == ':')
+            {
+                str.strView head = str.strView::fromParts(cname.ptr, i);
+                str.strView rest = str.strView::fromParts(cname.ptr + i + 2, cname.len - i - 2);
+                Sym* hs = scopes.scopeLookup(t->top, head);
+                if (hs != null && hs->decl != null)
+                {
+                    scopes.symMarkUsed(hs);
+                    if (hs->kind == scopes.SYM_STRUCT || hs->kind == scopes.SYM_TRAIT)
+                    {
+                        ast.Decl* m = scopes.findMethod(hs->decl, t->prog, rest);
+                        if (m != null)
+                        {
+                            types.CType* msig = fnSig(t, m);
+                            checkArgs(t, call, msig, m->ngenerics > 0);
+                            return msig->ret;
+                        }
+                    }
+                    else if (hs->kind == scopes.SYM_ENUM)
+                    {
+                        for (u32 k = 0; k < hs->decl->nvariants; k++)
+                        {
+                            if (scopes.sEq(hs->decl->variants[k].name, rest))
+                            {
+                                typeArgsOnce(t, call);
+                                return scopes.symTypeFromName(hs, head, callee->line, callee->col);
+                            }
+                        }
+                    }
+                }
+                errTwoStr(t, callee->line, callee->col, "no such static member '", callee->text, "'", str.strView::empty(), "");
+                typeArgsOnce(t, call);
+                return scopes.opaqueType(str.strView::empty(), call->line, call->col);
+            }
+        }
         Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, callee->text);
         if (s == null) s = scopes.scopeLookup(t->top, callee->text);
         if (s != null)
@@ -363,6 +427,18 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
         }
         else
         {
+            // unqualified call to a sibling method of the current struct
+            if (t->curFn != null && t->curFn->structName.len > 0)
+            {
+                ast.Decl* sd = findNamedStruct(t, t->curFn->structName);
+                ast.Decl* sm = sd != null ? scopes.findMethod(sd, t->prog, callee->text) : null;
+                if (sm != null)
+                {
+                    types.CType* ssig = fnSig(t, sm);
+                    checkArgs(t, call, ssig, sm->ngenerics > 0);
+                    return ssig->ret;
+                }
+            }
             errTwoStr(t, callee->line, callee->col, "unresolved callee '", callee->text, "'", str.strView::empty(), "");
         }
         typeArgsOnce(t, call);
@@ -469,7 +545,7 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
             if (strEq2(e->text, "!"))
             {
                 types.CType* x = typeExpr(t, e->a);
-                if (x != null && x->kind != types.TY_BOOL && x->kind != types.TY_UNKNOWN)
+                if (x != null && !types.isTruthyType(x))
                 {
                     errAt(t, e->line, e->col, str.strView::fromCstr("logical '!' applied to non-bool value"));
                 }
@@ -521,7 +597,7 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
     case ast.EX_TERNARY:
         {
             types.CType* c = typeExpr(t, e->a);
-            if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+            if (c != null && !types.isTruthyType(c))
             {
                 errAt(t, e->a->line, e->a->col, str.strView::fromCstr("ternary condition is not boolean"));
             }
@@ -587,7 +663,7 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
     case ast.EX_GENERIC:
         {
             ast.Expr* base = e->a;
-            if (base != null && base->kind == ast.EX_IDENT)
+        if (base != null && base->kind == ast.EX_IDENT)
             {
                 Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
                 if (s == null) s = scopes.scopeLookup(t->top, base->text);
@@ -626,9 +702,9 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
 
     if (strEq2(op, "&&") || strEq2(op, "||"))
     {
-        if (l != null && l->kind != types.TY_BOOL && l->kind != types.TY_UNKNOWN)
+        if (l != null && !types.isTruthyType(l))
             errAt(t, e->a->line, e->a->col, str.strView::fromCstr("logical operand is not boolean"));
-        if (r != null && r->kind != types.TY_BOOL && r->kind != types.TY_UNKNOWN)
+        if (r != null && !types.isTruthyType(r))
             errAt(t, e->b->line, e->b->col, str.strView::fromCstr("logical operand is not boolean"));
         types.CType* b = mman.alloc<types.CType>(1);
         b->kind = types.TY_BOOL;
@@ -645,9 +721,12 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
             bool ok = false;
             if (litL) ok = types.isNumeric(re);
             else if (litR) ok = types.isNumeric(le);
-            else if (le->kind == types.TY_NULL) ok = re->kind == types.TY_PTR || re->kind == types.TY_SLICE;
-            else if (re->kind == types.TY_NULL) ok = le->kind == types.TY_PTR || le->kind == types.TY_SLICE;
-            else if (types.typesEqual(le, re)) ok = true;
+            else if (le->kind == types.TY_NULL) ok = re->kind == types.TY_PTR || re->kind == types.TY_SLICE
+                || re->kind == types.TY_ARRAY;
+            else if (re->kind == types.TY_NULL) ok = le->kind == types.TY_PTR || le->kind == types.TY_SLICE
+                || le->kind == types.TY_ARRAY;
+            else if (types.isIntLike(le) && types.isIntLike(re)) ok = true;
+            else if (types.comparable(le, re)) ok = true;
             if (!ok)
             {
                 errTwoStr(t, e->line, e->col, "cannot compare '", types.typeName(le),
@@ -665,6 +744,8 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
         types.CType* re = effective(r);
         if (le->kind == types.TY_UNKNOWN || re->kind == types.TY_UNKNOWN)
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+        le = types.decay(le);
+        re = types.decay(re);
         bool isShift = strEq2(op, "<<") || strEq2(op, ">>");
         bool isBit = strEq2(op, "&") || strEq2(op, "|") || strEq2(op, "^");
         bool isArith = strEq2(op, "+") || strEq2(op, "-") || strEq2(op, "*")
@@ -695,11 +776,25 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
             bool rInt = re->kind == types.TY_INT || re->kind == types.TY_CHAR;
             bool lFlt = le->kind == types.TY_FLOAT;
             bool rFlt = re->kind == types.TY_FLOAT;
+            bool lPtr = le->kind == types.TY_PTR;
+            bool rPtr = re->kind == types.TY_PTR;
             if (litL && litR) return le->kind == types.TY_FLOAT ? lf32Or64(le, re) : re;
             if (litL) return re;
             if (litR) return le;
             if (lInt && rInt) return le->kind == types.TY_CHAR ? re : le;
             if (lFlt && rFlt) return le->width >= re->width ? le : re;
+            // pointer +|- integer -> pointer; integer + pointer -> pointer;
+            // pointer - pointer -> ptrdiff
+            if (lPtr && rInt && (strEq2(op, "+") || strEq2(op, "-"))) return le;
+            if (lInt && rPtr && strEq2(op, "+")) return re;
+            if (lPtr && rPtr && strEq2(op, "-"))
+            {
+                types.CType* diff = mman.alloc<types.CType>(1);
+                diff->kind = types.TY_INT;
+                diff->width = 64;
+                diff->isSigned = true;
+                return diff;
+            }
             errTwoStr(t, e->line, e->col, "arithmetic on incompatible operands '", types.typeName(le),
                       "' and '", types.typeName(re), "'");
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
@@ -894,9 +989,12 @@ void typeStmt(Typer* t, ast.Stmt* s)
     switch (s->kind)
     {
     case ast.ST_BLOCK:
-        pushBlock(t, str.strView::fromCstr("block"));
-        for (u32 i = 0; i < s->nstmts; i++) typeStmt(t, s->stmts[i]);
-        popBlock(t, true);
+        {
+            bool scoped = !s->synthetic;
+            if (scoped) pushBlock(t, str.strView::fromCstr("block"));
+            for (u32 i = 0; i < s->nstmts; i++) typeStmt(t, s->stmts[i]);
+            if (scoped) popBlock(t, true);
+        }
         break;
 
     case ast.ST_VAR:
@@ -957,7 +1055,7 @@ void typeStmt(Typer* t, ast.Stmt* s)
             if (s->a != null)
             {
                 types.CType* c = typeExpr(t, s->a);
-                if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+                if (c != null && !types.isTruthyType(c))
                 {
                     errAt(t, s->a->line, s->a->col, str.strView::fromCstr("if condition is not boolean"));
                 }
@@ -973,7 +1071,7 @@ void typeStmt(Typer* t, ast.Stmt* s)
             if (s->kind == ast.ST_WHILE && s->a != null)
             {
                 types.CType* c = typeExpr(t, s->a);
-                if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+                if (c != null && !types.isTruthyType(c))
                 {
                     errAt(t, s->a->line, s->a->col, str.strView::fromCstr("while condition is not boolean"));
                 }
@@ -990,7 +1088,7 @@ void typeStmt(Typer* t, ast.Stmt* s)
             if (s->b != null)
             {
                 types.CType* c = typeExpr(t, s->b);
-                if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
+                if (c != null && !types.isTruthyType(c))
                 {
                     errAt(t, s->b->line, s->b->col, str.strView::fromCstr("for condition is not boolean"));
                 }

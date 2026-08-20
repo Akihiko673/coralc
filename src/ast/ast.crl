@@ -125,6 +125,8 @@ pub struct Stmt
     StmtCase** cases;   // ST_SWITCH / ST_FLAG
     u32 ncases;
     StmtCase* defaultCase;
+    bool synthetic;     // ST_BLOCK wrapper with no scope of its own
+                        // (multi-decl, brace-less bodies)
     u32 line;
     u32 col;
 }

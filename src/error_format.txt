@@ -1,0 +1,51 @@
+error[C0024]: stray token '@' detected in expression
+  ┌─► main.crl:14:16
+  │   Lexical error:
+  │   The character '@' (ASCII 0x40) is not a valid operator, identifier, 
+  │   or literal prefix in standard C syntax.
+  │
+  │   13 │   int max_limit = 100;
+  │   14 │   int margin = [ @ ]5;
+  |                       ▲
+  │                       ╰─ replace with: a valid digit (e.g. '0' for octal),
+  │                                              a variable name, or remove it
+
+
+
+
+* LEX-0001: Invalid Character Token
+* Represents: A character that does not exist in the language's token map (e.g., finding @, $, or # outside of a preprocessor directive).
+* LEX-0002: Homoglyph Smart Quote Confused
+* Represents: A Unicode or "smart" quotation mark (” or ‘) copied from a web browser that looks like a valid C string delimiter (") but is technically invalid. [2] 
+* LEX-0003: Unterminated String Literal
+* Represents: A string literal that reaches the end of a line (\n) or the end of the file without a closing quote character.
+* LEX-0004: Malformed Numerical Constant
+* Represents: A numeric constant containing invalid suffix characters or multiple radix points (e.g., 3.14.15 or 42z).
+* LEX-0005: Invalid Escape Sequence
+* Represents: An unknown escape sequence within a character or string literal (e.g., \q or an out-of-bounds hex escape \xZZ).
+* LEX-0006: Unterminated Block Comment
+* Represents: A multi-line block comment (/*) that runs all the way to the end of the file without its closing */ token.
+
+------------------------------
+## Syntactic & Structural Errors (SYN-1001 to SYN-1999)
+These errors occur during parsing when the tokens themselves are valid, but they are arranged in an illegal grammatical order.
+
+* SYN-1001: Missing Statement Terminator
+* Represents: A missing semicolon ; at the end of a statement, or a missing comma inside a structural argument block.
+* SYN-1002: Unmatched Scope Delimiter
+* Represents: A closing bracket, parenthesis, or curly brace (}, ], )) that has no matching opening counterpart earlier in the stream.
+* SYN-1003: Expected Identifier
+* Represents: A keyword or type declaration is placed where a variable name or function identifier is required (e.g., int default = 5;).
+* SYN-1004: Empty Conditional Body
+* Represents: An structural block like if, while, or for that expects an expression or block body but instead runs directly into an illegal terminator.
+* SYN-1005: Dangling Multi-declaration
+* Represents: Trying to declare multiple variables separated by commas but failing to provide a terminal name or value (e.g., int x, y, ;).
+
+If you want, I can provide:
+
+* The C enum structure mapping these codes to error messages
+* An expansion into Semantic/Type errors (SEM-2001+) like type mismatches or redeclared variables
+
+
+[1] [https://www.upgrad.com](https://www.upgrad.com/tutorials/software-engineering/c-tutorial/types-of-errors-in-c/)
+[2] [https://sites.psu.edu](https://sites.psu.edu/symbolcodes/glossary/)
