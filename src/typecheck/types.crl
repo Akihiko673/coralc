@@ -432,6 +432,139 @@ bool intLitFits(CType* t, str.strView text)
     return intFits(t->isSigned, mag, t->width, ln);
 }
 
+bool teq(str.strView a, const char* b)
+{
+    u64 n = 0;
+    while (b[n] != 0) n++;
+    if (a.len != n) return false;
+    for (u64 i = 0; i < n; i++)
+        if (a.ptr[i] != b[i]) return false;
+    return true;
+}
+
+// Constant-evaluation of pure int-literal expression trees: true when `e` is
+// literal-only arithmetic (+, -, *, /, %, <<, >>, &, |, ^, parens, unary
+// +/-). A bare integer literal has no fixed type until it reaches a context;
+// this lets `u64 cap = 1 << 16;` type by adopting the target type (when the
+// constant fits it) instead of pinning literals to i32/u32 first.
+bool constIntExpr(ast.Expr* e, u64* mag, bool* neg)
+{
+    if (e == null) return false;
+    if (e->kind == ast.EX_PAREN) return constIntExpr(e->a, mag, neg);
+    if (e->kind == ast.EX_INT)
+    {
+        bool ln = true;
+        u32 fw = 0;
+        bool uns = false;
+        if (!literalIntInfo(e->text, mag, &ln, &fw, &uns)) return false;
+        *neg = ln && !uns;
+        return true;
+    }
+    if (e->kind == ast.EX_UNARY && (teq(e->text, "-") || teq(e->text, "+")))
+    {
+        if (!constIntExpr(e->a, mag, neg)) return false;
+        if (teq(e->text, "-")) *neg = !*neg;
+        return true;
+    }
+    if (e->kind == ast.EX_BINARY)
+    {
+        str.strView op = e->text;
+        if (teq(op, "==") || teq(op, "!=") || teq(op, "<") || teq(op, "<=")
+            || teq(op, ">") || teq(op, ">=") || teq(op, "&&") || teq(op, "||"))
+            return false;
+        u64 lm = 0;
+        u64 rm = 0;
+        bool ln = false;
+        bool rn = false;
+        if (!constIntExpr(e->a, &lm, &ln)) return false;
+        if (!constIntExpr(e->b, &rm, &rn)) return false;
+        if (teq(op, "+"))
+        {
+            if (ln == rn)
+            {
+                if (lm > 0xFFFFFFFFFFFFFFFFu - rm) return false;
+                *mag = lm + rm;
+                *neg = ln;
+            }
+            else if (lm >= rm) { *mag = lm - rm; *neg = ln; }
+            else { *mag = rm - lm; *neg = rn; }
+            return true;
+        }
+        if (teq(op, "-"))
+        {
+            if (ln != rn)
+            {
+                if (lm > 0xFFFFFFFFFFFFFFFFu - rm) return false;
+                *mag = lm + rm;
+                *neg = ln;
+            }
+            else if (lm >= rm) { *mag = lm - rm; *neg = ln; }
+            else { *mag = rm - lm; *neg = !ln; }
+            return true;
+        }
+        if (teq(op, "*"))
+        {
+            if (lm != 0 && rm > 0xFFFFFFFFFFFFFFFFu / lm) return false;
+            *mag = lm * rm;
+            *neg = ln != rn;
+            return true;
+        }
+        if (teq(op, "/") || teq(op, "%"))
+        {
+            if (rm == 0) return false;
+            *mag = teq(op, "/") ? lm / rm : lm % rm;
+            *neg = teq(op, "/") ? ln != rn : ln;
+            return true;
+        }
+        if (teq(op, "<<") || teq(op, ">>"))
+        {
+            if (rm >= 64) return false;
+            if (teq(op, "<<"))
+            {
+                if (lm > 0xFFFFFFFFFFFFFFFFu >> rm) return false;
+                *mag = lm << rm;
+            }
+            else *mag = lm >> rm;
+            *neg = ln;
+            return true;
+        }
+        if (teq(op, "&")) { *mag = lm & rm; *neg = false; return true; }
+        if (teq(op, "|")) { *mag = lm | rm; *neg = false; return true; }
+        if (teq(op, "^")) { *mag = lm ^ rm; *neg = false; return true; }
+    }
+    return false;
+}
+
+// assignable(t, e): does the constant expression e adopt type t? Used where
+// a value flows into a typed context (var init, assign, return, params, ...)
+bool constFitsExpr(ast.Expr* e, CType* t)
+{
+    if (e == null || t == null) return false;
+    u64 mag = 0;
+    bool neg = false;
+    return constIntExpr(e, &mag, &neg) && constFits(t, mag, neg);
+}
+
+// Does a constant (mag, neg) fit target as if the constant were written
+// directly in that type? Int targets: range check. Float targets: always
+// (integer constants fit floating type ranges for all practical values).
+bool constFits(CType* t, u64 mag, bool neg)
+{
+    if (t == null) return false;
+    if (t->kind == TY_FLOAT) return true;
+    if (t->kind != TY_INT) return false;
+    if (t->width >= 64)
+    {
+        if (!neg) return true;
+        // minimum is -(2^63): mag == 2^63 fits
+        return mag <= 0x8000000000000000u;
+    }
+    u64 wmask = (1ull << t->width) - 1;
+    if (!t->isSigned) return !neg && mag <= wmask;
+    if (neg) return mag <= (1ull << (t->width - 1));
+    return mag <= (wmask >> 1);
+}
+
 bool isIntLike(CType* t)
 {
     if (t == null) return false;

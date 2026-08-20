@@ -492,18 +492,18 @@ pub f64 parseF64(string.strView sv, bool* ok)
 pub char readChar()
 {
     i32 b = libc.getchar();
-    return b < 0 ? 0 : (char)b;
+    return (char)(b < 0 ? 0 : b);
 }
 
 pub bool readLine(string.String* out)
 {
-    out->clear(out);
+    out->clear();
     for (;;)
     {
         i32 b = libc.getchar();
-        if (b < 0) return !out->isEmpty(out);
+        if (b < 0) return !out->isEmpty();
         if (b == '\n') return true;
-        if (b != '\r') out->pushChar(out, (char)b);
+        if (b != '\r') out->pushChar((char)b);
     }
 }
 

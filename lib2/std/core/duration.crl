@@ -1,5 +1,5 @@
-mod time = import("std/core/time.crl");
 @[[no_drop]]
+mod time = import("std/core/time.crl");
 
 pub struct Duration
 {

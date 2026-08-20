@@ -13,7 +13,7 @@ const u8* readFile(str.strView path, u32* outLen)
 {
     void* f = libc.fopen(path.ptr, "rb");
     if (f == null) return null;
-    u64 cap = 1 << 16;
+    u64 cap = (u64)(1u << 16);
     u8* buf = mman.alloc<u8>(cap);
     u64 used = 0;
     for (;;)
@@ -40,6 +40,26 @@ i32 main(u32 argc, char** argv)
         libc.write(2, (const u8*)"usage: coral <file.crl>\n", 22);
         return 1;
     }
+    // compiler directory: dir of the running binary (imports resolve against
+    // <compilerDir>/lib2, the reference corpus)
+    char exeBuf[512];
+    i64 exeN = libc.readlink("/proc/self/exe", exeBuf, 512);
+    char* exeDir = null;
+    if (exeN > 0)
+    {
+        for (i64 i = exeN - 1; i >= 0; i--)
+        {
+            if (exeBuf[i] == '/')
+            {
+                char* d = mman.alloc<char>((u32)i + 1);
+                for (u32 k = 0; k < (u32)i; k++) d[k] = exeBuf[k];
+                d[i] = 0;
+                exeDir = d;
+                break;
+            }
+        }
+    }
+
     str.strView path = str.strView::fromCstr(argv[1]);
     u32 len = 0;
     const u8* src = readFile(path, &len);
@@ -65,7 +85,7 @@ i32 main(u32 argc, char** argv)
     ast.Program* prog = p.parseProgram();
     if (prog != null)
     {
-        check.Check ck = check.Check::new(prog, str.strView::fromParts((const char*)src, len), path);
+        check.Check ck = check.Check::new(prog, str.strView::fromParts((const char*)src, len), path, exeDir);
         ck.run();
         if (ck.nerrors > 0) return 1;
         u8 buf[64];

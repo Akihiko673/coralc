@@ -68,7 +68,7 @@ pub bool fileReadAll(string.strView path, string.String* out)
     {
         u64 n = fileRead(fh, (u8*)chunk, 4086u);
         if (n == 0u) break;
-        out->pushView(out, string.strView::fromParts(chunk, n));
+        out->pushView(string.strView::fromParts(chunk, n));
     }
     bool ok = !fileError(fh);
     fileClose(fh);

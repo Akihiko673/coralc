@@ -342,8 +342,6 @@ void* _mmap(void* addr, u64 length, i32 prot, i32 flags, i32 fd, i64 offset)
             }
             if ((i32)ret_ppc < 0 && (i32)ret_ppc >= -4095) return null;
             return (void*)(size_t)ret_ppc;
-        default:
-            return null;
         }
     MACOS:
         flag (ARCH) {
@@ -389,8 +387,7 @@ void* _mmap(void* addr, u64 length, i32 prot, i32 flags, i32 fd, i64 offset)
             }
             if (carry) return null;
             return (void*)ret;
-        default:
-            return null;
+
         }
     WINDOWS:
         (void)prot;
@@ -398,8 +395,6 @@ void* _mmap(void* addr, u64 length, i32 prot, i32 flags, i32 fd, i64 offset)
         (void)fd;
         (void)offset;
         return (void*)VirtualAlloc(addr, length, 0x3000u, 0x04u);
-    default:
-        return null;
     }
     return null;
 }
@@ -506,8 +501,6 @@ void _munmap(void* addr, u64 length)
                 : "r"((u32)(size_t)addr), "r"((u32)length)
                 : "r3", "r4", "r0", "memory"
             }
-        default:
-            return;
         }
     MACOS:
         flag (ARCH) {
@@ -531,14 +524,10 @@ void _munmap(void* addr, u64 length)
                 : "r"((u64)addr), "r"(length), "r"(0x2000049u)
                 : "x0", "x1", "x16", "memory"
             }
-        default:
-            return;
         }
     WINDOWS:
         (void)length;
         if (addr) VirtualFree(addr, 0, 0x8000u);
-        return;
-    default:
         return;
     }
 }

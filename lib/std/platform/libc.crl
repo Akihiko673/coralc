@@ -101,6 +101,7 @@ pub extern i32 raise(i32 sig);
 pub extern u8* getenv(const u8* name);
 pub extern i32 setenv(const u8* name, const u8* value, i32 overwrite);
 pub extern i32 unsetenv(const u8* name);
+pub extern i64 readlink(const char* path, char* buf, u64 bufsize);
 
 // Time
 pub extern i32 gettimeofday(void* tv, void* tz);

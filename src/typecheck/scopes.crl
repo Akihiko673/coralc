@@ -82,6 +82,16 @@ bool sEq(str.strView a, str.strView b)
     return libc.memcmp((const void*)a.ptr, (const void*)b.ptr, a.len) == 0;
 }
 
+// Is a type-expr the `self`/`self*` pseudo type (legacy explicit self slot)?
+bool isSelfTypeNode(ast.TypeExpr* te)
+{
+    if (te == null) return false;
+    if (te->kind == ast.TYP_IDENT && sEq(te->name, str.strView::fromCstr("self"))) return true;
+    if (te->kind == ast.TYP_PTR && te->elem != null && te->elem->kind == ast.TYP_IDENT
+        && sEq(te->elem->name, str.strView::fromCstr("self"))) return true;
+    return false;
+}
+
 // Declare a symbol; returns false on duplicate in the SAME scope. A
 // declaration may shadow the file's own module-name marker (a SYM_MODULE
 // with no decl), so `pub struct vec` inside vec.crl is legal.

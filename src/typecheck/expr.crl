@@ -14,6 +14,7 @@ mod libc = import("std/platform/libc.crl");
 mod error = import("error");
 mod types = import("typecheck/types.crl");
 mod scopes = import("typecheck/scopes.crl");
+mod loader = import("typecheck/loader.crl");
 
 pub struct Typer
 {
@@ -22,6 +23,7 @@ pub struct Typer
     str.strView filename;
     Scope* top;
     ModuleTable* mods;
+    loader.Loader* ld;
     u32* nerrors;
     u32* nwarnings;
     bool noWarnUnsafe;  // file attr @[[no_warn_unsafe]]: demote unsafe warnings
@@ -36,7 +38,8 @@ pub struct Typer
     u32 ng;
 
     static Typer new(ast.Program* prog, str.strView src, str.strView filename,
-                     Scope* top, ModuleTable* mods, u32* nerrors, u32* nwarnings,
+                     Scope* top, ModuleTable* mods, loader.Loader* ld,
+                     u32* nerrors, u32* nwarnings,
                      bool noWarnUnsafe, bool forcedSkip)
     {
         Typer t;
@@ -45,6 +48,7 @@ pub struct Typer
         t.filename = filename;
         t.top = top;
         t.mods = mods;
+        t.ld = ld;
         t.nerrors = nerrors;
         t.nwarnings = nwarnings;
         t.noWarnUnsafe = noWarnUnsafe;
@@ -227,15 +231,27 @@ types.CType* fnSig(Typer* t, ast.Decl* d)
 
 void checkArgs(Typer* t, ast.Expr* call, types.CType* sig, bool hasGeneric)
 {
+    checkArgsFrom(t, call, sig, false, false, hasGeneric);
+}
+
+// checkArgsFrom: verify `call` against `sig` for member calls.
+// `slotPresent`: the callee declares an explicit self slot (self*/self/unnamed
+// first param) supplied by the receiver - one param is never written.
+// `selfDropped`: caller wrote a redundant leading `self` (receiver is self,
+// no slot to absorb it) - it is dropped from the counted args.
+void checkArgsFrom(Typer* t, ast.Expr* call, types.CType* sig, bool slotPresent, bool selfDropped, bool hasGeneric)
+{
     u32 np = sig != null ? sig->nparams : 0;
     bool variadic = sig != null && sig->variadic;
-    if (!variadic && call->nargs != np)
+    u32 written = call->nargs - (selfDropped ? 1u : 0u);
+    u32 expected = np - (slotPresent ? 1u : 0u);
+    if (!variadic && written != expected)
     {
         str.String msg = str.String::new();
         msg.pushView(str.strView::fromCstr("expected "));
-        pushUInt(&msg, np);
-        msg.pushView(str.strView::fromCstr(np == 1 ? " argument, found " : " arguments, found "));
-        pushUInt(&msg, call->nargs);
+        pushUInt(&msg, expected);
+        msg.pushView(str.strView::fromCstr(expected == 1 ? " argument, found " : " arguments, found "));
+        pushUInt(&msg, written);
         errAt(t, call->line, call->col, str.strView::fromParts(msg.ptr, msg.len));
         msg.free();
         return;
@@ -243,28 +259,25 @@ void checkArgs(Typer* t, ast.Expr* call, types.CType* sig, bool hasGeneric)
     if (hasGeneric) return; // generic callee: arity checked above
     for (u32 i = 0; i < call->nargs; i++)
     {
-        if (!variadic || i < np)
+        if (selfDropped && i == 0) continue;
+        u32 pi = i + (slotPresent ? 1u : 0u) - (selfDropped ? 1u : 0u);
+        if (pi >= np) continue; // variadic tail
+        types.CType* pt = sig->params[pi];
+        types.CType* at = typeExpr(t, call->args[i]);
+        if (at == null || pt == null) continue;
+        if (!types.assignable(pt, at, call->args[i]->kind, call->args[i]->text)
+            && !types.constFitsExpr(call->args[i], pt))
         {
-            types.CType* pt = sig != null ? sig->params[i] : null;
-            types.CType* at = typeExpr(t, call->args[i]);
-            if (at == null || pt == null) continue;
-            if (!types.assignable(pt, at, call->args[i]->kind, call->args[i]->text))
-            {
-                str.String msg = str.String::new();
-                msg.pushView(str.strView::fromCstr("argument "));
-                pushUInt(&msg, i + 1);
-                msg.pushView(str.strView::fromCstr(" has type '"));
-                msg.pushView(types.typeName(at));
-                msg.pushView(str.strView::fromCstr("', expected '"));
-                msg.pushView(types.typeName(pt));
-                msg.pushView(str.strView::fromCstr("' (no implicit conversion)"));
-                errAt(t, call->args[i]->line, call->args[i]->col, str.strView::fromParts(msg.ptr, msg.len));
-                msg.free();
-            }
-        }
-        else
-        {
-            typeExpr(t, call->args[i]);
+            str.String msg = str.String::new();
+            msg.pushView(str.strView::fromCstr("argument "));
+            pushUInt(&msg, i + 1);
+            msg.pushView(str.strView::fromCstr(" has type '"));
+            msg.pushView(types.typeName(at));
+            msg.pushView(str.strView::fromCstr("', expected '"));
+            msg.pushView(types.typeName(pt));
+            msg.pushView(str.strView::fromCstr("' (no implicit conversion)"));
+            errAt(t, call->args[i]->line, call->args[i]->col, str.strView::fromParts(msg.ptr, msg.len));
+            msg.free();
         }
     }
 }
@@ -272,6 +285,37 @@ void checkArgs(Typer* t, ast.Expr* call, types.CType* sig, bool hasGeneric)
 void typeArgsOnce(Typer* t, ast.Expr* call)
 {
     for (u32 i = 0; i < call->nargs; i++) typeExpr(t, call->args[i]);
+}
+
+// C intrinsic functions (handled by codegen): poison params, C return types.
+types.CType* cBuiltin(str.strView name)
+{
+    u32 np = 0xFFFFFFFFu;
+    u32 rk = types.TY_UNKNOWN;
+    u32 wd = 0;
+    bool sg = false;
+    if (strEq2(name, "memcpy") || strEq2(name, "memmove") || strEq2(name, "memset")) np = 3;
+    else if (strEq2(name, "memcmp")) { np = 3; rk = types.TY_INT; wd = 32; sg = true; }
+    else if (strEq2(name, "strlen")) { np = 1; rk = types.TY_INT; wd = 64; sg = false; }
+    else if (strEq2(name, "bswap16") || strEq2(name, "bswapU16")) { np = 1; rk = types.TY_INT; wd = 16; sg = false; }
+    else if (strEq2(name, "bswap32") || strEq2(name, "bswapU32")) { np = 1; rk = types.TY_INT; wd = 32; sg = false; }
+    else if (strEq2(name, "bswap64") || strEq2(name, "bswapU64") || strEq2(name, "bswap")) { np = 1; rk = types.TY_INT; wd = 64; sg = false; }
+    else if (strEq2(name, "sqrt") || strEq2(name, "sin") || strEq2(name, "cos") || strEq2(name, "tan")
+             || strEq2(name, "__builtin_sqrt")) { np = 1; rk = types.TY_FLOAT; wd = 64; }
+    else if (strEq2(name, "__builtin_ctzll") || strEq2(name, "__builtin_clzll")) { np = 1; rk = types.TY_INT; wd = 32; sg = true; }
+    if (np == 0xFFFFFFFFu) return null;
+    types.CType* sig = mman.alloc<types.CType>(1);
+    sig->kind = types.TY_FUNC;
+    sig->nparams = np;
+    sig->variadic = false;
+    sig->params = mman.alloc<types.CType*>(np > 0 ? np : 1);
+    for (u32 i = 0; i < np; i++) sig->params[i] = scopes.opaqueType(str.strView::empty(), 0, 0);
+    types.CType* ret = mman.alloc<types.CType>(1);
+    ret->kind = rk;
+    ret->width = wd;
+    ret->isSigned = sg;
+    sig->ret = ret;
+    return sig;
 }
 
 types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
@@ -307,7 +351,40 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
         if (m != null)
         {
             types.CType* sig = fnSig(t, m);
-            checkArgs(t, call, sig, m->ngenerics > 0);
+            bool slot = !m->isStatic && m->nparams > 0;
+            if (slot) {
+                ast.Param p0 = m->params[0];
+                slot = p0.type != null
+                    && (p0.name.len == 0
+                        || strEq2(p0.name, "self")
+                        || scopes.isSelfTypeNode(p0.type));
+            }
+            if (!slot)
+            {
+                // a redundant leading `self` is dropped when the receiver is
+                // self itself (sibling mere call); no slot to absorb it
+                ast.Expr* obj = callee->a;
+                while (obj != null && obj->kind == ast.EX_PAREN) obj = obj->a;
+                bool receiverIsSelf = obj != null && obj->kind == ast.EX_IDENT
+                    && strEq2(obj->text, "self");
+                bool selfDropped = receiverIsSelf && call->nargs > 0
+                    && call->args[0]->kind == ast.EX_IDENT
+                    && strEq2(call->args[0]->text, "self");
+                checkArgsFrom(t, call, sig, false, selfDropped, m->ngenerics > 0);
+            }
+            else
+            {
+                // the slot is always supplied by the receiver: either written
+                // as a leading `self` (fills it) or injected
+                ast.Expr* obj = callee->a;
+                while (obj != null && obj->kind == ast.EX_PAREN) obj = obj->a;
+                bool receiverIsSelf = obj != null && obj->kind == ast.EX_IDENT
+                    && strEq2(obj->text, "self");
+                bool selfWritten = receiverIsSelf && call->nargs > 0
+                    && call->args[0]->kind == ast.EX_IDENT
+                    && strEq2(call->args[0]->text, "self");
+                checkArgsFrom(t, call, sig, true, selfWritten, m->ngenerics > 0);
+            }
             return sig->ret;
         }
         typeArgsOnce(t, call);
@@ -413,6 +490,20 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                         }
                     }
                 }
+                // the head struct may live in another file of this program:
+                // search the program's loaded modules, no hardcoded tables
+                ast.Program* powner = t->prog;
+                ast.Decl* psd = findStructInProgram(t, head, &powner);
+                if (psd != null)
+                {
+                    ast.Decl* pm = scopes.findMethod(psd, powner, rest);
+                    if (pm != null)
+                    {
+                        types.CType* pmsig = fnSig(t, pm);
+                        checkArgs(t, call, pmsig, pm->ngenerics > 0);
+                        return pmsig->ret;
+                    }
+                }
                 errTwoStr(t, callee->line, callee->col, "no such static member '", callee->text, "'", str.strView::empty(), "");
                 typeArgsOnce(t, call);
                 return scopes.opaqueType(str.strView::empty(), call->line, call->col);
@@ -458,6 +549,12 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                     checkArgs(t, call, ssig, sm->ngenerics > 0);
                     return ssig->ret;
                 }
+            }
+            types.CType* bsig = cBuiltin(callee->text);
+            if (bsig != null)
+            {
+                checkArgs(t, call, bsig, false);
+                return bsig->ret;
             }
             errTwoStr(t, callee->line, callee->col, "unresolved callee '", callee->text, "'", str.strView::empty(), "");
         }
@@ -964,7 +1061,7 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
                 }
                 types.CType* vt = typeExpr(t, val);
                 types.CType* ft = scopes.resolveTypeExpr(f->type, t->top, t->mods, t->gnames, t->ng);
-                if (ft != null && !types.assignable(ft, vt, val->kind, val->text))
+                if (ft != null && !types.assignable(ft, vt, val->kind, val->text) && !types.constFitsExpr(val, ft))
                 {
                     errTwoStr(t, val->line, val->col, "field '", fname,
                               "' expects '", types.typeName(ft), "' but got '");
@@ -991,7 +1088,7 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
                 ast.StructField f = target->decl->fields[i];
                 types.CType* vt = typeExpr(t, val);
                 types.CType* ft = scopes.resolveTypeExpr(f.type, t->top, t->mods, t->gnames, t->ng);
-                if (ft != null && !types.assignable(ft, vt, val->kind, val->text))
+                if (ft != null && !types.assignable(ft, vt, val->kind, val->text) && !types.constFitsExpr(val, ft))
                 {
                     errTwoStr(t, val->line, val->col, "field '", f.name,
                               "' expects '", types.typeName(ft), "' but got '");
@@ -1070,7 +1167,7 @@ case ast.ST_VAR:
             if (s->a != null)
             {
                 it = typeExpr(t, s->a);
-                if (at != null && it != null && !types.assignable(at, it, s->a->kind, s->a->text))
+                if (at != null && it != null && !types.assignable(at, it, s->a->kind, s->a->text) && !types.constFitsExpr(s->a, at))
                 {
                     errTwoStr(t, s->line, s->col, "cannot assign '", types.typeName(it),
                               "' to variable of type '", types.typeName(at), "' (no implicit conversion)");
@@ -1090,7 +1187,7 @@ case ast.ST_VAR:
                 if (t->retType != null && t->retType->kind != types.TY_VOID
                     && t->retType->kind != types.TY_UNKNOWN)
                 {
-                    if (!types.assignable(t->retType, v, s->a->kind, s->a->text))
+                    if (!types.assignable(t->retType, v, s->a->kind, s->a->text) && !types.constFitsExpr(s->a, t->retType))
                     {
                         errTwoStr(t, s->line, s->col, "cannot return '", types.typeName(v),
                                   "' from function returning '", types.typeName(t->retType), "'");
@@ -1263,6 +1360,39 @@ ast.Decl* findNamedStruct(Typer* t, str.strView name)
     return null;
 }
 
+// Program-wide struct lookup: the struct may be declared in another file
+// (e.g. String lives in std/text/string.crl, called from any file). `owner`
+// receives the Program that declares it (for method-block searches).
+ast.Decl* findStructInProgram(Typer* t, str.strView name, ast.Program** owner)
+{
+    for (u32 i = 0; i < t->prog->ndecls; i++)
+    {
+        ast.Decl* d = t->prog->decls[i];
+        if (d != null && d->kind == ast.DT_STRUCT && scopes.sEq(d->name, name))
+        {
+            *owner = t->prog;
+            return d;
+        }
+    }
+    if (t->ld != null)
+    {
+        for (u32 i = 0; i < t->ld->n; i++)
+        {
+            ast.Program* p = t->ld->progs[i];
+            for (u32 j = 0; p != null && j < p->ndecls; j++)
+            {
+                ast.Decl* d = p->decls[j];
+                if (d != null && d->kind == ast.DT_STRUCT && scopes.sEq(d->name, name))
+                {
+                    *owner = p;
+                    return d;
+                }
+            }
+        }
+    }
+    return null;
+}
+
 // Entry for a function/method body.
 void typeFunction(Typer* t, ast.Decl* d)
 {
@@ -1276,7 +1406,14 @@ void typeFunction(Typer* t, ast.Decl* d)
     t->ng = d->ngenerics;
 
     bool isMethod = d->structName.len > 0;
-    if (isMethod && !d->isStatic)
+    // explicit self slot: an unnamed/self-named first parameter (or a self*
+    // / owning-struct* typed one) on an INSTANCE method is THE self; no
+    // implicit self then. Statics never have self (static bodies must not
+    // reference self).
+    bool selfSlot = d->nparams > 0 && !d->isStatic && d->params[0].type != null
+        && (d->params[0].name.len == 0 || strEq2(d->params[0].name, "self")
+            || scopes.isSelfTypeNode(d->params[0].type));
+    if (isMethod && !d->isStatic && !selfSlot)
     {
         // implicit self: pointer to the owning struct
         Sym* self = scopes.symNew(str.strView::fromCstr("self"), scopes.SYM_PARAM, d, d->line, d->col);
@@ -1295,13 +1432,37 @@ void typeFunction(Typer* t, ast.Decl* d)
     for (u32 i = 0; i < d->nparams; i++)
     {
         ast.Param p = d->params[i];
-        Sym* s = scopes.symNew(p.name, scopes.SYM_PARAM, d, d->line, d->col);
+        // py legacy: an unnamed first param (or a param named self, or any
+        // self* typed first param) is the explicit self slot; bind it under
+        // the name 'self'.
+        bool paramIsSelf = i == 0 && p.type != null
+            && (!d->isStatic
+                && (p.name.len == 0 || strEq2(p.name, "self"))
+                || scopes.isSelfTypeNode(p.type));
+        Sym* s = scopes.symNew(paramIsSelf ? str.strView::fromCstr("self") : p.name,
+                               scopes.SYM_PARAM, d, d->line, d->col);
         s->type = p.type != null
             ? scopes.resolveTypeExpr(p.type, t->top, t->mods, d->generics, d->ngenerics)
             : scopes.opaqueType(str.strView::empty(), d->line, d->col);
+        if (paramIsSelf && s->type != null && s->type->kind == types.TY_PTR
+            && s->type->elem != null && s->type->elem->kind == types.TY_UNKNOWN)
+        {
+            // `self*`/`self` typed slot: resolve to the owning struct
+            ast.Decl* sd = findNamedStruct(t, d->structName);
+            s->type->elem = sd != null
+                ? scopes.namedType(sd, d->structName, d->line, d->col)
+                : scopes.opaqueType(d->structName, d->line, d->col);
+        }
+        else if (paramIsSelf && s->type != null && s->type->kind == types.TY_NAMED
+                 && s->type->decl == null && strEq2(s->type->name, "self"))
+        {
+            ast.Decl* sd = findNamedStruct(t, d->structName);
+            s->type = sd != null ? scopes.namedType(sd, d->structName, d->line, d->col)
+                                 : scopes.opaqueType(d->structName, d->line, d->col);
+        }
         if (!scopes.scopeDeclare(t->fnScope, s))
         {
-            errTwoStr(t, d->line, d->col, "duplicate parameter '", p.name, "'", str.strView::empty(), "");
+            errTwoStr(t, d->line, d->col, "duplicate parameter '", s->name, "'", str.strView::empty(), "");
         }
     }
 

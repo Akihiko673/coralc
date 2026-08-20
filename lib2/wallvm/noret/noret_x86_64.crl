@@ -121,7 +121,7 @@ pub struct NoretX86_64
             self.emitBareMetalHalt();
     }
     
-    static void emitMovRegImm64(self*, const char* reg, u64 imm)
+    void emitMovRegImm64(self*, const char* reg, u64 imm)
     {
         self->s(self, "mov ");
         self->s(self, "$");
@@ -135,7 +135,7 @@ pub struct NoretX86_64
         self->s(self, reg);
     }
     
-    static void emitMovRegImm32(NoretX86_64*, const char* reg, u32 imm)
+    void emitMovRegImm32(self*, const char* reg, u32 imm)
     {
         self->s(self, "mov $");
         u32 val = imm;
@@ -148,34 +148,34 @@ pub struct NoretX86_64
         self->s(self, reg);
     }
     
-    static void emitSyscall(NoretX86_64*)
+    void emitSyscall(self*)
     {
         self->s(self, "\tsyscall");
     }
     
-    static void emitCall(NoretX86_64*, const char* target)
+    void emitCall(self*, const char* target)
     {
         self->s(self, "\tcall ");
         self->s(self, target);
     }
     
-    static void emitCli(NoretX86_64*)
+    void emitCli(self*)
     {
         self->s(self, "\tcli");
     }
     
-    static void emitHlt(NoretX86_64*)
+    void emitHlt(self*)
     {
         self->s(self, "\thlt");
     }
     
-    static void emitLabel(NoretX86_64*, const char* label)
+    void emitLabel(self*, const char* label)
     {
         self->s(self, label);
         self->c(self, ':');
     }
     
-    static void emitJmp(NoretX86_64*, const char* target)
+    void emitJmp(self*, const char* target)
     {
         self->s(self, "\tjmp ");
         self->s(self, target);

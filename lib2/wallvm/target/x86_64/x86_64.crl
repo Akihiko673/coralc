@@ -472,11 +472,20 @@ pub struct X86_64Codegen
         if (self.att)
         {
             bool big = (w > 32) && (v > 0x7FFFFFFF);
-            self.pad(); self.s(big ? "movabs" : "mov"); self.c(' ');
-            self.opImmU(v); self.s(", "); self.c('%'); self.s(r); self.c('\n');
+            self.pad();
+            self.s(big ? "movabs" : "mov");
+            self.c(' ');
+            self.opImmU(v);
+            self.s(", ");
+            self.c('%');
+            self.s(r);
+            self.c('\n');
             return;
         }
-        self.pad(); self.s("mov "); self.s(r); self.s(", ");
+        self.pad();
+        self.s("mov ");
+        self.s(r);
+        self.s(", ");
         if (v <= 0x7FFFFFFF) self.u(v);
         else
         {

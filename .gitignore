@@ -7,3 +7,6 @@
 *.sh
 *.git/
 *.gitignore
+build
+build_out/
+coralc

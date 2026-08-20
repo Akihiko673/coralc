@@ -13,24 +13,27 @@ mod ast = import("ast/ast.crl");
 mod types = import("typecheck/types.crl");
 mod scopes = import("typecheck/scopes.crl");
 mod expr = import("typecheck/expr.crl");
+mod loader = import("typecheck/loader.crl");
 
 pub struct Check
 {
     ast.Program* prog;
     str.strView src;
     str.strView filename;
+    char* exeDir;
     bool noDrop;            // @[[no_drop]]: skip variable tracking
     bool noWarnUnsafe;      // @[[no_warn_unsafe]]: demote unsafe diagnostics
     bool forcedSkip;        // any @[[forced_*]]: borrow checker skips file
     u32 nerrors;
     u32 nwarnings;
 
-    static Check new(ast.Program* prog, str.strView src, str.strView filename)
+    static Check new(ast.Program* prog, str.strView src, str.strView filename, char* exeDir)
     {
         Check c;
         c.prog = prog;
         c.src = src;
         c.filename = filename;
+        c.exeDir = exeDir;
         c.noDrop = false;
         c.noWarnUnsafe = false;
         c.forcedSkip = false;
@@ -61,9 +64,9 @@ pub struct Check
         }
     }
 
-    expr.Typer typer(scopes.Scope* top, scopes.ModuleTable* mods)
+    expr.Typer typer(scopes.Scope* top, scopes.ModuleTable* mods, loader.Loader* ld)
     {
-        return expr.Typer::new(self.prog, self.src, self.filename, top, mods,
+        return expr.Typer::new(self.prog, self.src, self.filename, top, mods, ld,
                                &self.nerrors, &self.nwarnings,
                                self.noWarnUnsafe, self.forcedSkip);
     }
@@ -77,6 +80,15 @@ pub struct Check
             if (vEq(a, "no_drop")) self.noDrop = true;
             if (vEq(a, "no_warn_unsafe")) self.noWarnUnsafe = true;
             if (veqPrefix(a, "forced")) self.forcedSkip = true;
+        }
+
+        // load imported modules so cross-file symbols (String::new,
+        // strView::fromParts, ...) resolve against real declarations
+        loader.Loader* ld = loader.loaderNew(self.exeDir);
+        for (u32 i = 0; i < self.prog->ndecls && i < 256; i++)
+        {
+            ast.Decl* d = self.prog->decls[i];
+            if (d != null && d->kind == ast.DT_IMPORT) loader.loaderLoad(ld, d->text, self.filename);
         }
 
         // top-level scope + module table
@@ -153,7 +165,7 @@ pub struct Check
                     if (!d->isVar)
                     {
                         types.CType* sig = null;
-                        expr.Typer t4 = self.typer(top, mods);
+                        expr.Typer t4 = self.typer(top, mods, ld);
                         sig = expr.fnSig(&t4, d);
                         self.declareSym(top, d, scopes.SYM_FUNC, sig);
                     }
@@ -178,7 +190,7 @@ pub struct Check
         {
             ast.Decl* d = self.prog->decls[i];
             if (d == null) continue;
-            expr.Typer t2 = self.typer(top, mods);
+            expr.Typer t2 = self.typer(top, mods, ld);
             if (d->value != null && (d->kind == ast.DT_CONST || d->kind == ast.DT_VAR))
             {
                 types.CType* vt = expr.typeExpr(&t2, d->value);
@@ -215,7 +227,7 @@ pub struct Check
         }
 
         // pass 3: type function/method bodies
-        expr.Typer t3 = self.typer(top, mods);
+        expr.Typer t3 = self.typer(top, mods, ld);
         for (u32 i = 0; i < self.prog->ndecls; i++)
         {
             ast.Decl* d = self.prog->decls[i];

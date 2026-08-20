@@ -119,9 +119,9 @@ pub struct BumpAllocator
         self.ptr = self.base;
     }
 
-    u64 currentUsed(const self*)
+    u64 currentUsed(const BumpAllocator* alloc)
     {
-        return (u64)(self->ptr - self->base);
+        return (u64)(alloc->ptr - alloc->base);
     }
 }
 
@@ -201,9 +201,9 @@ pub struct StackAllocator
         self.ptr = self.base;
     }
 
-    u64 currentUsed(const self*)
+    u64 currentUsed(const StackAllocator* alloc)
     {
-        return (u64)(self->ptr - self->base);
+        return (u64)(alloc->ptr - alloc->base);
     }
 }
 
