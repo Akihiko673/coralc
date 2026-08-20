@@ -172,6 +172,10 @@ pub struct Parser
     u32 errCol;
     str.String errMsg;
     str.String errCtx;
+    str.strView* fattrs;
+    u32 nfattrs;
+    u32 fattrsCap;
+    bool recordAttrs;
     str.strView attrs[8];
     u32 nattrs;
     bool gtgtConsumed;
@@ -198,6 +202,10 @@ pub struct Parser
         p.declCap = 0;
         p.lastStallPos = 0;
         p.stallCount = 0;
+        p.fattrs = null;
+        p.nfattrs = 0;
+        p.fattrsCap = 0;
+        p.recordAttrs = false;
         return p;
     }
 
@@ -436,6 +444,21 @@ pub struct Parser
         if (self.check(tok.T_RBRACKET)) self.advance();
     }
 
+    void captureFileAttr()
+    {
+        if (!self.recordAttrs) return;
+        if (self.nfattrs >= self.fattrsCap)
+        {
+            u32 nc = self.fattrsCap ? self.fattrsCap * 2 : 8;
+            str.strView* na = mman.alloc<str.strView>(nc);
+            for (u32 i = 0; i < self.nfattrs; i++) na[i] = self.fattrs[i];
+            if (self.fattrs != null && self.fattrsCap > 0) mman.dealloc<str.strView>(self.fattrs);
+            self.fattrs = na;
+            self.fattrsCap = nc;
+        }
+        self.fattrs[self.nfattrs++] = self.text(self.peekTok(0));
+    }
+
     void skipFileAttrs()
     {
         while (true)
@@ -447,13 +470,20 @@ pub struct Parser
                 {
                     self.advance();
                     self.advance();
+                    if (self.isNameTok(self.peekTok(0))) self.captureFileAttr();
                     self.skipAttrBrackets();
                 }
                 else if (self.check(tok.T_LBRACKET))
                 {
                     self.advance();
+                    if (self.isNameTok(self.peekTok(0))) self.captureFileAttr();
                     while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
                     if (self.check(tok.T_RBRACKET)) self.advance();
+                }
+                else if (self.isNameTok(self.peekTok(0)))
+                {
+                    self.captureFileAttr();
+                    self.advance();
                 }
                 continue;
             }
@@ -2808,7 +2838,9 @@ pub struct Parser
         *o2 = null;
         self.nattrs = 0;
         self.skipSemicolons();
+        self.recordAttrs = true;
         self.skipFileAttrs();
+        self.recordAttrs = false;
         if (self.check(tok.TOK_EOF)) return 0;
         if (self.check(tok.T_RBRACE)) return 0;
         if (self.check(tok.T_PUB))
@@ -3496,6 +3528,8 @@ ast.TypeExpr* rt = self.parseType();
         p->decls = self.decls;
         p->ndecls = self.ndecls;
         p->filename = self.filename;
+        p->fattrs = self.fattrs;
+        p->nfattrs = self.nfattrs;
         return p;
     }
 }

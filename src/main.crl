@@ -7,6 +7,7 @@ mod lex = import("lexer");
 mod ast = import("ast/ast.crl");
 mod error = import("error");
 mod parse = import("parser");
+mod check = import("typecheck/check.crl");
 
 const u8* readFile(str.strView path, u32* outLen)
 {
@@ -64,6 +65,9 @@ i32 main(u32 argc, char** argv)
     ast.Program* prog = p.parseProgram();
     if (prog != null)
     {
+        check.Check ck = check.Check::new(prog, str.strView::fromParts((const char*)src, len), path);
+        ck.run();
+        if (ck.nerrors > 0) return 1;
         u8 buf[64];
         i32 n = libc.snprintf(buf, 64, "ok: %u top-level decls\n", prog->ndecls);
         if (n > 0) libc.write(1, (const u8*)buf, (u64)n);

@@ -1,0 +1,112 @@
+// Typecheck entry: file attributes, top-level bindings and duplicate names.
+// Later passes (implicit conversions, drop tracking, monomorphization) build
+// on the same Check context.
+mod str = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod libc = import("std/platform/libc.crl");
+mod error = import("error");
+mod ast = import("ast/ast.crl");
+
+pub struct Check
+{
+    ast.Program* prog;
+    str.strView src;
+    str.strView filename;
+    bool noDrop;            // file has @[[no_drop]]: skip variable tracking
+    u32 nerrors;
+    u32 nwarnings;
+    str.strView* names;     // top-level binding names (duplicate detection)
+    u32 nnames;
+    u32 namesCap;
+
+    static Check new(ast.Program* prog, str.strView src, str.strView filename)
+    {
+        Check c;
+        c.prog = prog;
+        c.src = src;
+        c.filename = filename;
+        c.noDrop = false;
+        c.nerrors = 0;
+        c.nwarnings = 0;
+        c.names = null;
+        c.nnames = 0;
+        c.namesCap = 0;
+        return c;
+    }
+
+    void growNames()
+    {
+        if (self.nnames < self.namesCap) return;
+        u32 nc = self.namesCap ? self.namesCap * 2 : 16;
+        str.strView* na = mman.alloc<str.strView>(nc);
+        for (u32 i = 0; i < self.nnames; i++) na[i] = self.names[i];
+        if (self.names != null && self.namesCap > 0) mman.dealloc<str.strView>(self.names);
+        self.names = na;
+        self.namesCap = nc;
+    }
+
+    bool vEq(str.strView a, const char* b)
+    {
+        u64 n = 0;
+        while (b[n] != 0) n++;
+        if (a.len != n) return false;
+        return libc.memcmp((const void*)a.ptr, (const void*)b, n) == 0;
+    }
+
+    bool hasName(str.strView name)
+    {
+        for (u32 i = 0; i < self.nnames; i++)
+        {
+            if (self.names[i].len == name.len)
+            {
+                if (libc.memcmp((const void*)self.names[i].ptr, (const void*)name.ptr, name.len) == 0)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    void err(u32 line, u32 col, str.strView msg)
+    {
+        error.reportLevel(self.filename, self.src, line, col, error.LVL_ERROR, msg, str.strView::empty());
+        self.nerrors++;
+    }
+
+    void warn(u32 line, u32 col, str.strView msg)
+    {
+        error.reportLevel(self.filename, self.src, line, col, error.LVL_WARN, msg, str.strView::empty());
+        self.nwarnings++;
+    }
+
+    void bindDecl(ast.Decl* d)
+    {
+        if (d->kind == ast.DT_IMPORT) return;       // alias indexed with its module
+        if (d->kind == ast.DT_METHODBLOCK) return;  // struct/trait already bound
+        if (self.hasName(d->name))
+        {
+            str.String s = str.String::new();
+            s.pushView(str.strView::fromCstr("redeclaration of '"));
+            s.pushView(d->name);
+            s.pushChar('\'');
+            self.err(d->line, d->col, str.strView::fromParts(s.ptr, s.len));
+            s.free();
+        }
+        else
+        {
+            self.growNames();
+            self.names[self.nnames++] = d->name;
+        }
+    }
+
+    void run()
+    {
+        for (u32 i = 0; i < self.prog->nfattrs; i++)
+        {
+            if (self.vEq(self.prog->fattrs[i], "no_drop")) self.noDrop = true;
+        }
+        for (u32 i = 0; i < self.prog->ndecls; i++)
+        {
+            self.bindDecl(self.prog->decls[i]);
+        }
+    }
+}

@@ -27,12 +27,17 @@ void pushUint(str.String* s, u32 v)
     s->pushView(strView::fromParts((const char*)tmp, (u64)n));
 }
 
+pub const u8 LVL_ERROR = 0;
+pub const u8 LVL_WARN = 1;
+pub const u8 LVL_INFO = 2;
+pub const u8 LVL_NOTE = 3;
+
 // Emit a clang-style diagnostic:
-//   file:line:col: error: message [in ctx]
+//   file:line:col: <level>: message [in ctx]
 //   <source line>
 //       ^
-pub void report(strView filename, strView src, u32 line, u32 col,
-                strView msg, strView ctx)
+pub void reportLevel(strView filename, strView src, u32 line, u32 col, u8 level,
+                     strView msg, strView ctx)
 {
     str.String s = str.String::new();
 
@@ -41,7 +46,10 @@ pub void report(strView filename, strView src, u32 line, u32 col,
     pushUint(&s, line);
     s.pushChar(':');
     pushUint(&s, col);
-    s.pushView(strView::fromCstr(": error: "));
+    if (level == LVL_ERROR) s.pushView(strView::fromCstr(": error: "));
+    else if (level == LVL_WARN) s.pushView(strView::fromCstr(": warning: "));
+    else if (level == LVL_INFO) s.pushView(strView::fromCstr(": info: "));
+    else s.pushView(strView::fromCstr(": note: "));
     s.pushView(msg);
     if (ctx.len > 0)
     {
@@ -64,4 +72,10 @@ pub void report(strView filename, strView src, u32 line, u32 col,
 
     libc.write(2, s.asU8(), s.len);
     s.free();
+}
+
+pub void report(strView filename, strView src, u32 line, u32 col,
+                strView msg, strView ctx)
+{
+    reportLevel(filename, src, line, col, LVL_ERROR, msg, ctx);
 }

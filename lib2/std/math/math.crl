@@ -2,8 +2,7 @@ mod libc = import("std/platform/libc.crl");
 @[[no_drop]]
 mod mman = import("std/memory/mman.crl");
 
-pub const f64 pi = 3.14159265358979323846;
-pub const f64 e = 2.71828182845904523536;
+pub const f64 tau = 6.28318530717958647692;
 pub const f64 srt2 = 1.41421356237309504880;
 
 pub f64 pi() { return 3.14159265358979323846; }

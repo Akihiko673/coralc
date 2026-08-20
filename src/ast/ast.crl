@@ -200,6 +200,8 @@ pub struct Program
     Decl** decls;
     u32 ndecls;
     str.strView filename;
+    str.strView* fattrs;
+    u32 nfattrs;
 }
 
 // Recursive destructors used by the parsers when backtracking abandons a
