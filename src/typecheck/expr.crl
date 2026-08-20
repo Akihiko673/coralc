@@ -20,8 +20,8 @@ pub struct Typer
     ast.Program* prog;
     str.strView src;
     str.strView filename;
-    scopes.Scope* top;
-    scopes.ModuleTable* mods;
+    Scope* top;
+    ModuleTable* mods;
     u32* nerrors;
     u32* nwarnings;
     bool noWarnUnsafe;  // file attr @[[no_warn_unsafe]]: demote unsafe warnings
@@ -29,7 +29,7 @@ pub struct Typer
     bool warnUnused;    // unused-local warnings on unless no_warn_unsafe
 
     // per-function state
-    scopes.Scope* fnScope;
+    Scope* fnScope;
     types.CType* retType;
     ast.Decl* curFn;
     str.strView* gnames;
@@ -37,7 +37,7 @@ pub struct Typer
 }
 
 static Typer new(ast.Program* prog, str.strView src, str.strView filename,
-                 scopes.Scope* top, scopes.ModuleTable* mods, u32* nerrors, u32* nwarnings,
+                 Scope* top, ModuleTable* mods, u32* nerrors, u32* nwarnings,
                  bool noWarnUnsafe, bool forcedSkip)
 {
     Typer t;
@@ -141,7 +141,7 @@ types.CType* typeIdent(Typer* t, str.strView name, u32 line, u32 col)
         {
             str.strView head = str.strView::fromParts(name.ptr, i);
             str.strView rest = str.strView::fromParts(name.ptr + i + 2, name.len - i - 2);
-            scopes.Sym* s = scopes.scopeLookup(t->top, head);
+            Sym* s = scopes.scopeLookup(t->top, head);
             if (scopes.modsLookup(t->mods, head))
             {
                 return scopes.opaqueType(name, line, col);
@@ -164,7 +164,7 @@ types.CType* typeIdent(Typer* t, str.strView name, u32 line, u32 col)
         }
     }
 
-    scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, name);
+    Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, name);
     if (s == null) s = scopes.scopeLookup(t->top, name);
     if (s == null)
     {
@@ -273,7 +273,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
         while (obj != null && obj->kind == ast.EX_PAREN) obj = obj->a;
         if (obj != null && obj->kind == ast.EX_IDENT)
         {
-            scopes.Sym* so = scopes.scopeLookup(t->top, obj->text);
+            Sym* so = scopes.scopeLookup(t->top, obj->text);
             if (so != null && so->kind == scopes.SYM_MODULE)
             {
                 typeArgsOnce(t, call);
@@ -320,7 +320,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
         }
         if (base != null && base->kind == ast.EX_IDENT)
         {
-            scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
+            Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
             if (s == null) s = scopes.scopeLookup(t->top, base->text);
             if (s != null && s->kind == scopes.SYM_FUNC)
             {
@@ -344,7 +344,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
     // plain identifier call
     if (callee->kind == ast.EX_IDENT)
     {
-        scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, callee->text);
+        Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, callee->text);
         if (s == null) s = scopes.scopeLookup(t->top, callee->text);
         if (s != null)
         {
@@ -589,7 +589,7 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
             ast.Expr* base = e->a;
             if (base != null && base->kind == ast.EX_IDENT)
             {
-                scopes.Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
+                Sym* s = scopes.scopeLookup(t->fnScope != null ? t->fnScope : t->top, base->text);
                 if (s == null) s = scopes.scopeLookup(t->top, base->text);
                 if (s != null && s->kind == scopes.SYM_FUNC)
                 {
@@ -722,7 +722,7 @@ types.CType* typeMember(Typer* t, ast.Expr* e)
     // module member access: mod.fn / mod.Value
     if (obj != null && obj->kind == ast.EX_IDENT)
     {
-        scopes.Sym* so = scopes.scopeLookup(t->top, obj->text);
+        Sym* so = scopes.scopeLookup(t->top, obj->text);
         if (so != null && so->kind == scopes.SYM_MODULE)
         {
             return scopes.opaqueType(str.strView::fromCstr("module"), e->line, e->col);
@@ -731,7 +731,7 @@ types.CType* typeMember(Typer* t, ast.Expr* e)
     // enum variant: Enum.Variant
     if (obj != null && obj->kind == ast.EX_IDENT)
     {
-        scopes.Sym* so = scopes.scopeLookup(t->top, obj->text);
+        Sym* so = scopes.scopeLookup(t->top, obj->text);
         if (so != null && so->kind == scopes.SYM_ENUM)
         {
             for (u32 i = 0; i < so->decl->nvariants; i++)
@@ -861,13 +861,13 @@ void pushBlock(Typer* t, str.strView label)
 
 void popBlock(Typer* t, bool reportUnused)
 {
-    scopes.Scope* s = t->fnScope;
+    Scope* s = t->fnScope;
     if (s == null) return;
     if (reportUnused && t->warnUnused)
     {
         for (u32 i = 0; i < s->nsyms; i++)
         {
-            scopes.Sym* sm = s->syms[i];
+            Sym* sm = s->syms[i];
             if (sm->kind == scopes.SYM_LOCAL && !sm->used)
             {
                 errTwoStr(t, sm->line, sm->col, "unused variable '", sm->name, "'", str.strView::empty(), "");
@@ -880,7 +880,7 @@ void popBlock(Typer* t, bool reportUnused)
 
 void declareLocal(Typer* t, str.strView name, types.CType* type, u32 line, u32 col)
 {
-    scopes.Sym* s = scopes.symNew(name, scopes.SYM_LOCAL, null, line, col);
+    Sym* s = scopes.symNew(name, scopes.SYM_LOCAL, null, line, col);
     s->type = type;
     if (!scopes.scopeDeclare(t->fnScope, s))
     {
@@ -1096,7 +1096,7 @@ void typeBody(Typer* t, ast.Stmt* body)
 
 ast.Decl* findNamedStruct(Typer* t, str.strView name)
 {
-    scopes.Sym* s = scopes.scopeLookup(t->top, name);
+    Sym* s = scopes.scopeLookup(t->top, name);
     if (s != null && s->decl != null && s->decl->kind == ast.DT_STRUCT) return s->decl;
     return null;
 }
@@ -1117,7 +1117,7 @@ void typeFunction(Typer* t, ast.Decl* d)
     if (isMethod && !d->isStatic)
     {
         // implicit self: pointer to the owning struct
-        scopes.Sym* self = scopes.symNew(str.strView::fromCstr("self"), scopes.SYM_PARAM, d, d->line, d->col);
+        Sym* self = scopes.symNew(str.strView::fromCstr("self"), scopes.SYM_PARAM, d, d->line, d->col);
         ast.Decl* sd = findNamedStruct(t, d->structName);
         types.CType* stp = mman.alloc<types.CType>(1);
         stp->kind = types.TY_PTR;
@@ -1133,7 +1133,7 @@ void typeFunction(Typer* t, ast.Decl* d)
     for (u32 i = 0; i < d->nparams; i++)
     {
         ast.Param p = d->params[i];
-        scopes.Sym* s = scopes.symNew(p.name, scopes.SYM_PARAM, d, d->line, d->col);
+        Sym* s = scopes.symNew(p.name, scopes.SYM_PARAM, d, d->line, d->col);
         s->type = p.type != null
             ? scopes.resolveTypeExpr(p.type, t->top, t->mods, d->generics, d->ngenerics)
             : scopes.opaqueType(str.strView::empty(), d->line, d->col);
@@ -1144,12 +1144,12 @@ void typeFunction(Typer* t, ast.Decl* d)
     }
 
     typeStmt(t, d->body);
-    scopes.Scope* fs = t->fnScope;
+    Scope* fs = t->fnScope;
     if (fs != null && t->warnUnused)
     {
         for (u32 i = 0; i < fs->nsyms; i++)
         {
-            scopes.Sym* sm = fs->syms[i];
+            Sym* sm = fs->syms[i];
             if (sm->kind == scopes.SYM_LOCAL && !sm->used)
             {
                 errTwoStr(t, sm->line, sm->col, "unused variable '", sm->name, "'", str.strView::empty(), "");

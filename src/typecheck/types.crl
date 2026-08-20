@@ -1,8 +1,9 @@
 // Type representation and resolution for the semantic passes.
-// CType trees are never freed by the checker (the compiler process is
-// short-lived). Module-qualified names that cannot be resolved in this file
-// (imported modules are opaque until the import pass) resolve to TY_UNKNOWN
-// so the strict typing rules degrade gracefully and never crash.
+// Types are small refcount-free trees (the checker never frees them; the
+// compiler process is short-lived). `resolveTypeExpr` turns a parsed
+// AST TypeExpr into a CType. Module-qualified names that cannot be resolved
+// in this file (imported modules are opaque here until the import pass) come
+// back as TY_UNKNOWN so the strict typing rules degrade gracefully.
 mod ast = import("ast/ast.crl");
 mod str = import("std/text/string.crl");
 mod mman = import("std/memory/mman.crl");
@@ -26,7 +27,7 @@ pub struct CType
     u32 kind;
     u32 width;          // INT/FLOAT bits: 8/16/32/64
     bool isSigned;      // INT
-    CType* elem;        // PTR/SLICE/ARRAY element; TYPEDEF expands to base
+    CType* elem;        // PTR/SLICE/ARRAY element
     u64 count;          // ARRAY extent (0 when unknown)
     bool countKnown;
     CType* ret;         // FUNC return
@@ -59,36 +60,19 @@ bool primType(str.strView n, CType* out)
     out->isConstPtr = false;
     out->line = 0;
     out->col = 0;
-
-    if (n.len == 2 && 0 == 0)
+    if (n.len == 2)
     {
         bool i = n.ptr[0] == 'i';
         bool u = n.ptr[0] == 'u';
-        if ((i || u) && (n.ptr[1] == '8'))
+        u64 w = 0;
+        if (n.ptr[1] == '8') w = 8;
+        else if (n.ptr[1] == '1' && n.len == 3) w = 16;
+        else if (n.ptr[1] == '3' && n.len == 3) w = 32;
+        else if (n.ptr[1] == '6' && n.len == 3) w = 64;
+        if (w > 0 && (i || u))
         {
             out->kind = TY_INT;
-            out->width = 8;
-            out->isSigned = i;
-            return true;
-        }
-        if ((i || u) && (n.ptr[1] == '1') && n.len >= 3)
-        {
-            out->kind = TY_INT;
-            out->width = 16;
-            out->isSigned = i;
-            return true;
-        }
-        if ((i || u) && (n.ptr[1] == '3') && n.len >= 3)
-        {
-            out->kind = TY_INT;
-            out->width = 32;
-            out->isSigned = i;
-            return true;
-        }
-        if ((i || u) && (n.ptr[1] == '6') && n.len >= 3)
-        {
-            out->kind = TY_INT;
-            out->width = 64;
+            out->width = w;
             out->isSigned = i;
             return true;
         }
@@ -137,6 +121,12 @@ bool primType(str.strView n, CType* out)
     return false;
 }
 
+// hoisted: does a CType carry a name (NAMED/UNKNOWN)?
+bool isNamedKind(u32 k)
+{
+    return k == TY_NAMED || k == TY_UNKNOWN;
+}
+
 u64 intFitsMax(u32 width)
 {
     if (width >= 64) return 0xFFFFFFFFFFFFFFFFu;
@@ -145,21 +135,33 @@ u64 intFitsMax(u32 width)
     return 0xFFu;
 }
 
-// Does an integer literal VALUE fit an int/char type? `litSigned` marks
-// literals written with a minus sign (negative magnitude is implicit).
+// Does an integer literal VALUE (as unsigned magnitude + signedness of the
+// literal) fit into an int/bool/char type? `neg` marks signed literals.
 bool intFits(bool isSigned, u64 mag, u32 width, bool litSigned)
 {
     if (width >= 64)
     {
-        if (!litSigned) return true;
-        return mag <= 0x8000000000000000u;
+        if (isSigned)
+        {
+            // -9223372036854775808 .. 9223372036854775807
+            if (litSigned && mag > 0x8000000000000000u) return false;
+            return true;
+        }
+        return true;
     }
     u64 m = intFitsMax(width);
     if (isSigned)
     {
-        u64 half = ((u64)1) << (width - 1u);
-        if (litSigned) return mag <= half;
-        return mag <= half;
+        i64 half = ((i64)1 << (i64)(width - 1u));
+        if (litSigned)
+        {
+            if ((i64)mag > (i64)half) return false;
+        }
+        else
+        {
+            if (mag > (u64)half) return false;
+        }
+        return true;
     }
     return mag <= m;
 }
@@ -209,23 +211,17 @@ bool typesEqual(CType* a, CType* b)
 CType* effective(CType* t)
 {
     if (t == null) return null;
-    while (t->kind == TY_NAMED && t->decl != null && t->decl->kind == ast.DT_TYPEDEF && t->elem != null)
-    {
-        t = t->elem;
-    }
+    if (t->kind == TY_NAMED && t->decl != null && t->decl->kind == ast.DT_TYPEDEF)
+        return effective(t->elem);
     return t;
 }
 
+// Reverse typedef expansion for display purposes.
 str.strView typeName(CType* t)
 {
     if (t == null) return str.strView::fromCstr("?");
     if (t->kind == TY_UNKNOWN) return str.strView::fromCstr("?");
     if (t->kind == TY_NAMED && t->name.len > 0) return t->name;
-    if (t->kind == TY_VOID) return str.strView::fromCstr("void");
-    if (t->kind == TY_BOOL) return str.strView::fromCstr("bool");
-    if (t->kind == TY_CHAR) return str.strView::fromCstr("char");
-    if (t->kind == TY_NULL) return str.strView::fromCstr("null");
-    if (t->kind == TY_FLOAT) return t->width == 32 ? str.strView::fromCstr("f32") : str.strView::fromCstr("f64");
     if (t->kind == TY_INT)
     {
         if (t->width == 8) return t->isSigned ? str.strView::fromCstr("i8") : str.strView::fromCstr("u8");
@@ -236,20 +232,23 @@ str.strView typeName(CType* t)
     return str.strView::fromCstr("?");
 }
 
-// Parse the numeric body of an integer literal (no suffix) into a u64.
+// Parse the numeric body of an integer literal (no suffix) into u64,
+// marking whether the value is negative (leading minus handled by EX_UNARY).
+// Returns true on success; `neg` means the value was written as `-x`.
 bool parseUIntBody(str.strView s, u64* out)
 {
     if (s.len == 0) return false;
     u64 v = 0;
-    bool hex = s.len > 2 && s.ptr[0] == '0' && (s.ptr[1] == 'x' || s.ptr[1] == 'X');
+    bool hex = false;
+    if (s.len > 2 && s.ptr[0] == '0' && (s.ptr[1] == 'x' || s.ptr[1] == 'X')) hex = true;
     u32 i = hex ? 2 : 0;
     while (i < s.len)
     {
         u8 c = (u8)s.ptr[i];
         u32 d = 0;
         if (c >= '0' && c <= '9') d = c - '0';
-        else if (hex && c >= 'a' && c <= 'f') d = 10u + (c - 'a');
-        else if (hex && c >= 'A' && c <= 'F') d = 10u + (c - 'A');
+        else if (hex && c >= 'a' && c <= 'f') d = 10 + (c - 'a');
+        else if (hex && c >= 'A' && c <= 'F') d = 10 + (c - 'A');
         else return false;
         v = v * (hex ? 16u : 10u) + d;
         i++;
@@ -258,7 +257,8 @@ bool parseUIntBody(str.strView s, u64* out)
     return true;
 }
 
-// Parse an integer literal text into magnitude + literal-signedness.
+// Parse an integer literal Expr into a magnitude + literal-signedness.
+// Returns false if it cannot be treated as a plain integer literal.
 // Handles decimal/hex bodies and a trailing u/l/ul suffix.
 bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidth)
 {
@@ -266,38 +266,45 @@ bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidt
     *litSigned = true;
     *forcedWidth = 0;
     if (text.len == 0) return false;
+    // peel suffix
     u32 n = text.len;
     u32 suf = 0; // 0 none, 1 u, 2 l, 3 ul
-    bool peeled = false;
-    u8 last = (u8)text.ptr[n - 1];
-    if ((last == 'u' || last == 'U') && n >= 2)
+    bool singleLit = false;
+    if (n >= 1)
     {
-        n--;
-        suf = 1;
-        peeled = true;
-        last = (u8)text.ptr[n - 1];
-        if ((last == 'l' || last == 'L') && n >= 2)
+        u8 last = (u8)text.ptr[n - 1];
+        if (last == 'u' || last == 'U')
         {
             n--;
-            suf = 3;
+            suf = 1;
+            singleLit = true;
+        }
+        else if (last == 'l' || last == 'L')
+        {
+            n--;
+            suf = 2;
+            singleLit = true;
         }
     }
-    else if ((last == 'l' || last == 'L') && n >= 2)
+    if (n >= 1 && singleLit)
     {
-        n--;
-        suf = 2;
-        peeled = true;
+        u8 last = (u8)text.ptr[n - 1];
+        if (last == 'l' || last == 'L')
+        {
+            n--;
+            if (suf == 1) suf = 3;
+        }
     }
     str.strView body = str.strView::fromParts(text.ptr, n);
     if (!parseUIntBody(body, mag)) return false;
-    if (suf == 1) { *forcedWidth = 32; *litSigned = false; }
-    else if (suf == 2) { *forcedWidth = 64; *litSigned = true; }
+    if (suf == 1) *forcedWidth = 32;
+    else if (suf == 2) *forcedWidth = 64;
     else if (suf == 3) { *forcedWidth = 64; *litSigned = false; }
     return true;
 }
 
-// Type of a bare integer literal in untyped context (no annotation).
-// Defaults to i32, widened by value fit; a suffix forces a width.
+// Type of a bare integer literal in untyped context (no annotation):
+// default i32, widen by value fit; suffix forces a concrete width.
 CType* literalIntDefaultType(str.strView text)
 {
     CType* t = mman.alloc<CType>(1);
@@ -305,70 +312,38 @@ CType* literalIntDefaultType(str.strView text)
     t->width = 32;
     t->isSigned = true;
     u64 mag = 0;
-    bool ln = true;
+    bool neg = false;
     u32 fw = 0;
-    if (literalIntInfo(text, &mag, &ln, &fw))
+    if (literalIntInfo(text, &mag, &neg, &fw))
     {
-        if (fw > 0)
+        if (fw == 0)
+        {
+            if (intFits(true, mag, 32, neg)) { t->width = 32; t->isSigned = true; }
+            else if (intFits(false, mag, 32, false)) { t->width = 32; t->isSigned = false; }
+            else if (intFits(true, mag, 64, neg)) { t->width = 64; t->isSigned = true; }
+            else { t->width = 64; t->isSigned = false; }
+        }
+        else
         {
             t->width = fw;
-            t->isSigned = ln; // 'u' suffix tracked through ln
+            t->isSigned = !neg; // u suffix => unsigned
         }
-        else if (intFits(true, mag, 32, ln)) { t->width = 32; t->isSigned = true; }
-        else if (intFits(false, mag, 32, false)) { t->width = 32; t->isSigned = false; }
-        else if (intFits(true, mag, 64, ln)) { t->width = 64; t->isSigned = true; }
-        else { t->width = 64; t->isSigned = false; }
     }
     return t;
 }
 
-// Can an integer literal TEXT be assigned to int/char/bool type T?
-bool intLitFits(CType* t, str.strView text)
+bool fitsType(TY_INT, u32 width, bool isSigned, str.strView text, u64* magOut, bool* litSignedOut)
 {
-    if (t->kind == TY_CHAR) return true; // char literals handled separately
-    if (t->kind == TY_BOOL) return false;
-    if (t->kind != TY_INT) return false;
     u64 mag = 0;
-    bool ln = true;
+    bool neg = true;
     u32 fw = 0;
-    if (!literalIntInfo(text, &mag, &ln, &fw)) return false;
-    return intFits(t->isSigned, mag, t->width, ln);
+    if (!literalIntInfo(text, &mag, &neg, &fw)) return false;
+    if (magOut != null) *magOut = mag;
+    if (litSignedOut != null) *litSignedOut = neg;
+    if (!intFits(isSigned, mag, width, neg)) return false;
+    return true;
 }
 
-bool isIntLike(CType* t)
-{
-    if (t == null) return false;
-    return t->kind == TY_INT || t->kind == TY_CHAR;
-}
-
-bool isNumeric(CType* t)
-{
-    if (t == null) return false;
-    return t->kind == TY_INT || t->kind == TY_CHAR || t->kind == TY_FLOAT;
-}
-
-// Does an expression of type S assign- into a target of type T?
-// `litKind` is the AST kind of the source expression when it is a literal
-// (EX_INT / EX_FLOAT / EX_CHAR / EX_BOOL / EX_NULL), else 0xFFFFFFFF.
-// Coral has NO implicit conversions: only exact type matches are allowed.
-// The sole exceptions: the null literal -> any pointer/slice; integer
-// literal text that fits the target integer width; char literal to int;
-// float literal to float.
-bool assignable(CType* tar, CType* src, u32 litKind, str.strView litText)
-{
-    tar = effective(tar);
-    src = effective(src);
-    if (tar->kind == TY_UNKNOWN || src->kind == TY_UNKNOWN) return true; // poison
-    if (typesEqual(tar, src)) return true;
-    if (src->kind == TY_NULL)
-    {
-        return tar->kind == TY_PTR || tar->kind == TY_SLICE || tar->kind == TY_FUNC
-            || tar->kind == TY_NAMED; // fudge: named-pointer macro types accept null
-    }
-    if (litKind == ast.EX_NULL) return true;
-    if (litKind == ast.EX_CHAR) return tar->kind == TY_CHAR || tar->kind == TY_INT;
-    if (litKind == ast.EX_BOOL) return tar->kind == TY_BOOL;
-    if (litKind == ast.EX_INT) return intLitFits(tar, litText) || tar->kind == TY_FLOAT;
-    if (litKind == ast.EX_FLOAT) return tar->kind == TY_FLOAT;
-    return false;
-}
+str.strView TEXT_NULL = str.strView::fromCstr("null");
+str.strView TEXT_TRUE = str.strView::fromCstr("true");
+str.strView TEXT_FALSE = str.strView::fromCstr("false");

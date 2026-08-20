@@ -1,23 +1,29 @@
-// Typecheck entry: file attributes, top-level bindings and duplicate names.
-// Later passes (implicit conversions, drop tracking, monomorphization) build
-// on the same Check context.
+// Typecheck entry: file attributes, top-level symbol tables, then full
+// per-file typing of every function/method/const body via the expr module.
+//
+// Passes wired up here: attr contract (no_drop / no_warn_unsafe / forced_*),
+// top-level declaration of functions/structs/enums/traits/typedefs/distincts/
+// consts/externs/namespaces/module aliases, and body typing with strict
+// (no-implicit-conversion) rules. Imported modules stay opaque at this stage.
 mod str = import("std/text/string.crl");
 mod mman = import("std/memory/mman.crl");
 mod libc = import("std/platform/libc.crl");
 mod error = import("error");
 mod ast = import("ast/ast.crl");
+mod types = import("typecheck/types.crl");
+mod scopes = import("typecheck/scopes.crl");
+mod expr = import("typecheck/expr.crl");
 
 pub struct Check
 {
     ast.Program* prog;
     str.strView src;
     str.strView filename;
-    bool noDrop;            // file has @[[no_drop]]: skip variable tracking
+    bool noDrop;            // @[[no_drop]]: skip variable tracking
+    bool noWarnUnsafe;      // @[[no_warn_unsafe]]: demote unsafe diagnostics
+    bool forcedSkip;        // any @[[forced_*]]: borrow checker skips file
     u32 nerrors;
     u32 nwarnings;
-    str.strView* names;     // top-level binding names (duplicate detection)
-    u32 nnames;
-    u32 namesCap;
 
     static Check new(ast.Program* prog, str.strView src, str.strView filename)
     {
@@ -26,87 +32,215 @@ pub struct Check
         c.src = src;
         c.filename = filename;
         c.noDrop = false;
+        c.noWarnUnsafe = false;
+        c.forcedSkip = false;
         c.nerrors = 0;
         c.nwarnings = 0;
-        c.names = null;
-        c.nnames = 0;
-        c.namesCap = 0;
         return c;
     }
 
-    void growNames()
+    void errDecl(ast.Decl* d, str.strView msg)
     {
-        if (self.nnames < self.namesCap) return;
-        u32 nc = self.namesCap ? self.namesCap * 2 : 16;
-        str.strView* na = mman.alloc<str.strView>(nc);
-        for (u32 i = 0; i < self.nnames; i++) na[i] = self.names[i];
-        if (self.names != null && self.namesCap > 0) mman.dealloc<str.strView>(self.names);
-        self.names = na;
-        self.namesCap = nc;
-    }
-
-    bool vEq(str.strView a, const char* b)
-    {
-        u64 n = 0;
-        while (b[n] != 0) n++;
-        if (a.len != n) return false;
-        return libc.memcmp((const void*)a.ptr, (const void*)b, n) == 0;
-    }
-
-    bool hasName(str.strView name)
-    {
-        for (u32 i = 0; i < self.nnames; i++)
-        {
-            if (self.names[i].len == name.len)
-            {
-                if (libc.memcmp((const void*)self.names[i].ptr, (const void*)name.ptr, name.len) == 0)
-                    return true;
-            }
-        }
-        return false;
-    }
-
-    void err(u32 line, u32 col, str.strView msg)
-    {
-        error.reportLevel(self.filename, self.src, line, col, error.LVL_ERROR, msg, str.strView::empty());
+        error.reportLevel(self.filename, self.src, d->line, d->col,
+                          error.LVL_ERROR, msg, str.strView::empty());
         self.nerrors++;
     }
 
-    void warn(u32 line, u32 col, str.strView msg)
+    void declareSym(scopes.Scope* top, ast.Decl* d, u32 kind, types.CType* ct)
     {
-        error.reportLevel(self.filename, self.src, line, col, error.LVL_WARN, msg, str.strView::empty());
-        self.nwarnings++;
+        scopes.Sym* s = scopes.symNew(d->name, kind, d, d->line, d->col);
+        s->type = ct;
+        if (!scopes.scopeDeclare(top, s))
+        {
+            self.errDecl(d, "redeclaration of '");
+            str.String msg = str.String::new();
+            msg.pushView(d->name);
+            msg.pushChar('\'');
+            self.errDecl(d, str.strView::fromParts(msg.ptr, msg.len));
+            msg.free();
+        }
     }
 
-    void bindDecl(ast.Decl* d)
+    expr.Typer typer(scopes.Scope* top, scopes.ModuleTable* mods)
     {
-        if (d->kind == ast.DT_IMPORT) return;       // alias indexed with its module
-        if (d->kind == ast.DT_METHODBLOCK) return;  // struct/trait already bound
-        if (self.hasName(d->name))
-        {
-            str.String s = str.String::new();
-            s.pushView(str.strView::fromCstr("redeclaration of '"));
-            s.pushView(d->name);
-            s.pushChar('\'');
-            self.err(d->line, d->col, str.strView::fromParts(s.ptr, s.len));
-            s.free();
-        }
-        else
-        {
-            self.growNames();
-            self.names[self.nnames++] = d->name;
-        }
+        return expr.Typer::new(self.prog, self.src, self.filename, top, mods,
+                               &self.nerrors, &self.nwarnings,
+                               self.noWarnUnsafe, self.forcedSkip);
     }
 
     void run()
     {
+        // file attribute contract
         for (u32 i = 0; i < self.prog->nfattrs; i++)
         {
-            if (self.vEq(self.prog->fattrs[i], "no_drop")) self.noDrop = true;
+            str.strView a = self.prog->fattrs[i];
+            if (vEq(a, "no_drop")) self.noDrop = true;
+            if (vEq(a, "no_warn_unsafe")) self.noWarnUnsafe = true;
+            if (veqPrefix(a, "forced")) self.forcedSkip = true;
         }
+
+        // top-level scope + module table
+        scopes.Scope* top = scopes.scopeNew(null, str.strView::fromCstr("file"), 0);
+        scopes.ModuleTable* mods = scopes.modsNew();
+
+        // pass 1: declare all top-level symbols
         for (u32 i = 0; i < self.prog->ndecls; i++)
         {
-            self.bindDecl(self.prog->decls[i]);
+            ast.Decl* d = self.prog->decls[i];
+            if (d == null) continue;
+            switch (d->kind)
+            {
+            case ast.DT_IMPORT:
+                scopes.modsAdd(mods, d->name, d->text);
+                break;
+            case ast.DT_MODULE:
+            case ast.DT_NAMESPACE:
+                self.declareSym(top, d, scopes.SYM_NS, null);
+                break;
+            case ast.DT_CONST:
+                {
+                    types.CType* ct = null;
+                    if (d->type != null)
+                        ct = scopes.resolveTypeExpr(d->type, top, mods, d->generics, d->ngenerics);
+                    self.declareSym(top, d, scopes.SYM_CONST, ct);
+                    break;
+                }
+            case ast.DT_VAR:
+                {
+                    types.CType* ct = null;
+                    if (d->type != null)
+                        ct = scopes.resolveTypeExpr(d->type, top, mods, d->generics, d->ngenerics);
+                    self.declareSym(top, d, scopes.SYM_VAR, ct);
+                    break;
+                }
+            case ast.DT_STRUCT:
+                self.declareSym(top, d, scopes.SYM_STRUCT, null);
+                break;
+            case ast.DT_ENUM:
+                self.declareSym(top, d, scopes.SYM_ENUM, null);
+                break;
+            case ast.DT_TRAIT:
+                self.declareSym(top, d, scopes.SYM_TRAIT, null);
+                break;
+            case ast.DT_TYPEDEF:
+                self.declareSym(top, d, scopes.SYM_TYPEDEF, null);
+                break;
+            case ast.DT_DISTINCT:
+                self.declareSym(top, d, scopes.SYM_DISTINCT, null);
+                break;
+            case ast.DT_FUNC:
+                self.declareSym(top, d, scopes.SYM_FUNC, null);
+                break;
+            case ast.DT_EXTERN:
+                {
+                    if (!d->isVar)
+                    {
+                        types.CType* sig = null;
+                        expr.Typer t4 = self.typer(top, mods);
+                        sig = expr.fnSig(&t4, d);
+                        self.declareSym(top, d, scopes.SYM_FUNC, sig);
+                    }
+                    else
+                    {
+                        types.CType* ct = null;
+                        if (d->type != null)
+                            ct = scopes.resolveTypeExpr(d->type, top, mods, null, 0);
+                        self.declareSym(top, d, scopes.SYM_VAR, ct);
+                    }
+                    break;
+                }
+            case ast.DT_METHODBLOCK:
+                break;
+            case ast.DT_FLAG:
+                break;
+            }
         }
+
+        // pass 2: type-check const/var initializers and enum variant values
+        for (u32 i = 0; i < self.prog->ndecls; i++)
+        {
+            ast.Decl* d = self.prog->decls[i];
+            if (d == null) continue;
+            expr.Typer t2 = self.typer(top, mods);
+            if (d->value != null && (d->kind == ast.DT_CONST || d->kind == ast.DT_VAR))
+            {
+                types.CType* vt = expr.typeExpr(&t2, d->value);
+                if (vt != null)
+                {
+                    types.CType* ct = null;
+                    if (d->type != null)
+                        ct = scopes.resolveTypeExpr(d->type, top, mods, d->generics, d->ngenerics);
+                    if (ct != null && !types.assignable(ct, vt, d->value->kind, d->value->text))
+                    {
+                        self.errDecl(d, "initializer for '");
+                        str.String msg = str.String::new();
+                        msg.pushView(d->name);
+                        msg.pushView(str.strView::fromCstr("' has type '"));
+                        msg.pushView(types.typeName(vt));
+                        msg.pushView(str.strView::fromCstr("', expected '"));
+                        msg.pushView(types.typeName(ct));
+                        msg.pushView(str.strView::fromCstr("' (no implicit conversion)"));
+                        self.errDecl(d, str.strView::fromParts(msg.ptr, msg.len));
+                        msg.free();
+                    }
+                }
+            }
+            else if (d->kind == ast.DT_ENUM)
+            {
+                for (u32 k = 0; k < d->nvariants; k++)
+                {
+                    if (d->variants[k].value != null)
+                    {
+                        expr.typeExpr(&t2, d->variants[k].value);
+                    }
+                }
+            }
+        }
+
+        // pass 3: type function/method bodies
+        expr.Typer t3 = self.typer(top, mods);
+        for (u32 i = 0; i < self.prog->ndecls; i++)
+        {
+            ast.Decl* d = self.prog->decls[i];
+            if (d == null) continue;
+            if (d->kind == ast.DT_FUNC)
+            {
+                expr.typeFunction(&t3, d);
+            }
+            else if (d->kind == ast.DT_STRUCT)
+            {
+                for (u32 k = 0; k < d->ndecls; k++)
+                {
+                    ast.Decl* m = d->decls[k];
+                    if (m != null && m->kind == ast.DT_FUNC) expr.typeFunction(&t3, m);
+                }
+            }
+            else if (d->kind == ast.DT_METHODBLOCK)
+            {
+                for (u32 k = 0; k < d->ndecls; k++)
+                {
+                    ast.Decl* m = d->decls[k];
+                    if (m != null && m->kind == ast.DT_FUNC) expr.typeFunction(&t3, m);
+                }
+            }
+        }
+
+        scopes.scopeFree(top);
     }
+}
+
+bool vEq(str.strView a, const char* b)
+{
+    u64 n = 0;
+    while (b[n] != 0) n++;
+    if (a.len != n) return false;
+    return libc.memcmp((const void*)a.ptr, (const void*)b, n) == 0;
+}
+
+bool veqPrefix(str.strView a, const char* b)
+{
+    u64 n = 0;
+    while (b[n] != 0) n++;
+    if (a.len < n) return false;
+    return libc.memcmp((const void*)a.ptr, (const void*)b, n) == 0;
 }
