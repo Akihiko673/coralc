@@ -75,14 +75,16 @@ pub struct Lexer
         t->col = self.col;
     }
 
-    void errAt(u32 start, str.strView msg)
+    void errAt(u32 start, str.strView code, str.strView msg, str.strView help)
     {
         self.growErrs();
         tok.LexErr* e = &self.errs[self.nerrs++];
         e->start = start;
         e->row = self.row;
         e->col = self.col;
+        e->code = code;
         e->msg = msg;
+        e->help = help;
     }
 
     void advance(u32 n)
@@ -159,7 +161,7 @@ pub struct Lexer
                     self.advance(1);
                 }
                 if (!closed)
-                    self.errAt(start, str.strView::fromCstr("unterminated block comment"));
+                    self.errAt(start, str.strView::fromCstr("LEX-0006"), str.strView::fromCstr("unterminated block comment"), str.strView::fromCstr("add a closing '*/' before end of file"));
                 moved = true;
                 continue;
             }
@@ -276,7 +278,7 @@ pub struct Lexer
         if (e > best && e > d && e > h && e > o && e > b) { best = e; bestId = tok.TOK_FLOAT; }
         if (best == 0)
         {
-            self.errAt(p, str.strView::fromCstr("malformed number literal"));
+            self.errAt(p, str.strView::fromCstr("LEX-0004"), str.strView::fromCstr("malformed numeric constant"), str.strView::fromCstr("a numeric constant may have at most one radix point and a valid integer/float suffix"));
             self.advance(1);
             return;
         }
@@ -340,7 +342,7 @@ pub struct Lexer
                 consume = self.scanStringSingle(p);
                 if (consume == 0)
                 {
-                    self.errAt(p, str.strView::fromCstr("unterminated multi-line string"));
+                    self.errAt(p, str.strView::fromCstr("LEX-0003"), str.strView::fromCstr("unterminated string literal"), str.strView::fromCstr("multi-line strings end with '\"\"\"'; single-line strings end with '\"'"));
                     consume = self.len - self.pos;
                 }
             }
@@ -350,7 +352,7 @@ pub struct Lexer
             consume = self.scanStringSingle(p);
             if (consume == 0)
             {
-                self.errAt(p, str.strView::fromCstr("unterminated string literal"));
+                self.errAt(p, str.strView::fromCstr("LEX-0003"), str.strView::fromCstr("unterminated string literal"), str.strView::fromCstr("close the string with a matching '\"' before end of line"));
                 self.advance(1);
                 return;
             }
@@ -388,7 +390,7 @@ pub struct Lexer
         }
         if (!valid)
         {
-            self.errAt(p, str.strView::fromCstr("malformed char literal"));
+            self.errAt(p, str.strView::fromCstr("LEX-0005"), str.strView::fromCstr("malformed character literal"), str.strView::fromCstr("a character literal is 'x' or '\\x' (one content char/escape) followed by a closing '''"));
             self.advance(1);
             return;
         }
@@ -443,7 +445,9 @@ pub struct Lexer
                     return;
                 }
             }
-        self.errAt(p, str.strView::fromCstr("unexpected character"));
+        self.errAt(p, str.strView::fromCstr("LEX-0001"),
+                   str.strView::fromCstr("stray token detected in expression"),
+                   str.strView::fromCstr("the character is not a valid operator, identifier, or literal prefix in standard C syntax; remove it or replace it with a valid token"));
         self.advance(1);
     }
 

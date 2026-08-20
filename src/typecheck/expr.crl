@@ -1311,7 +1311,8 @@ case ast.ST_VAR:
                     if (subj != null && subj->kind != types.TY_UNKNOWN
                         && cv != null && cv->kind != types.TY_UNKNOWN
                         && !types.typesEqual(subj, cv)
-                        && !types.assignable(subj, cv, sc->value->kind, sc->value->text))
+                        && !types.assignable(subj, cv, sc->value->kind, sc->value->text)
+                        && !types.constFitsExpr(sc->value, subj))
                     {
                         errAt(t, sc->value->line, sc->value->col, str.strView::fromCstr("case value type does not match switch subject"));
                     }

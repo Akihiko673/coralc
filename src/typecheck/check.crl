@@ -199,7 +199,8 @@ pub struct Check
                     types.CType* ct = null;
                     if (d->type != null)
                         ct = scopes.resolveTypeExpr(d->type, top, mods, d->generics, d->ngenerics);
-                    if (ct != null && !types.assignable(ct, vt, d->value->kind, d->value->text))
+                    if (ct != null && !types.assignable(ct, vt, d->value->kind, d->value->text)
+                        && !types.constFitsExpr(d->value, ct))
                     {
                         self.errDecl(d, "initializer for '");
                         str.String msg = str.String::new();

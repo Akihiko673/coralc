@@ -127,7 +127,9 @@ pub struct LexErr
     u32 start;
     u32 row;
     u32 col;
+    str.strView code;
     str.strView msg;
+    str.strView help;
 }
 
 // Keywords are matched by full word; the keyword must also appear in

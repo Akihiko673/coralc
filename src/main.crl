@@ -75,8 +75,8 @@ i32 main(u32 argc, char** argv)
     for (u32 i = 0; i < lr.nerrs; i++)
     {
         tok.LexErr* e = &lr.errs[i];
-        error.report(path, str.strView::fromParts((const char*)src, len),
-                     e->row, e->col, e->msg, str.strView::empty());
+        error.reportCode(e->code, path, str.strView::fromParts((const char*)src, len),
+                         e->row, e->col, error.LVL_ERROR, e->msg, e->help);
         failed = true;
     }
     if (failed) return 1;

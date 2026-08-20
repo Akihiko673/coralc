@@ -1,6 +1,22 @@
-// Clang-style diagnostic reporting.
+// Output shape:
+//   error[C0024]: <concise summary>
+//     ┌─► <file>:<line>:<col>
+//     │
+//     │   <lineno> │ <source line>
+//     │   <lineno> │ <source line>      (error line)
+//     |                       ▲
+//     │                       ╰─ <help / suggestion>
+//
+// Every diagnostic funnels through `diag`, which owns the formatting. Call
+// sites report a stable CODE (e.g. "LEX-0001", "TC-0213") plus a location and
+// an optional help line; error.crl renders everything.
 mod str = import("std/text/string.crl");
 mod libc = import("std/platform/libc.crl");
+
+pub const u8 LVL_ERROR = 0;
+pub const u8 LVL_WARN = 1;
+pub const u8 LVL_INFO = 2;
+pub const u8 LVL_NOTE = 3;
 
 // Return the 1-based source line `line` as a view (without the newline).
 strView extractLine(strView src, u32 line)
@@ -27,51 +43,109 @@ void pushUint(str.String* s, u32 v)
     s->pushView(strView::fromParts((const char*)tmp, (u64)n));
 }
 
-pub const u8 LVL_ERROR = 0;
-pub const u8 LVL_WARN = 1;
-pub const u8 LVL_INFO = 2;
-pub const u8 LVL_NOTE = 3;
+// Number of decimal digits needed to render `v`.
+u32 digits(u32 v)
+{
+    u32 d = 1;
+    while (v >= 10) { v /= 10; d++; }
+    return d;
+}
 
-// Emit a clang-style diagnostic:
-//   file:line:col: <level>: message [in ctx]
-//   <source line>
-//       ^
-pub void reportLevel(strView filename, strView src, u32 line, u32 col, u8 level,
-                     strView msg, strView ctx)
+// Right-align `v` in a field of width `w` using spaces.
+void pushPadUint(str.String* s, u32 v, u32 w)
+{
+    u32 d = digits(v);
+    if (w > d) for (u32 i = 0; i < w - d; i++) s->pushChar(' ');
+    pushUint(s, v);
+}
+
+// The primary diagnostic sink. `code` may be empty (then no `[CODE]` is
+// shown). `help` may be empty (then no suggestion line is rendered).
+pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
+              u8 level, strView msg, strView help)
 {
     str.String s = str.String::new();
 
+    // header: error[CODE]: msg  (or error: msg)
+    if (level == LVL_ERROR) s.pushView(strView::fromCstr("error"));
+    else if (level == LVL_WARN) s.pushView(strView::fromCstr("warning"));
+    else if (level == LVL_INFO) s.pushView(strView::fromCstr("info"));
+    else s.pushView(strView::fromCstr("note"));
+    if (code.len > 0)
+    {
+        s.pushChar('[');
+        s.pushView(code);
+        s.pushChar(']');
+    }
+    s.pushView(strView::fromCstr(": "));
+    s.pushView(msg);
+    s.pushChar('\n');
+
+    // location line
+    s.pushView(strView::fromCstr("  ┌─► "));
     s.pushView(filename);
     s.pushChar(':');
     pushUint(&s, line);
     s.pushChar(':');
     pushUint(&s, col);
-    if (level == LVL_ERROR) s.pushView(strView::fromCstr(": error: "));
-    else if (level == LVL_WARN) s.pushView(strView::fromCstr(": warning: "));
-    else if (level == LVL_INFO) s.pushView(strView::fromCstr(": info: "));
-    else s.pushView(strView::fromCstr(": note: "));
-    s.pushView(msg);
-    if (ctx.len > 0)
+    s.pushChar('\n');
+
+    // blank gutter
+    s.pushView(strView::fromCstr("  │\n"));
+
+    // context window: one line above, the error line, one line below
+    u32 numW = digits(line + 1);
+    if (numW < 2) numW = 2;
+
+    for (i32 off = -1; off <= 1; off++)
     {
-        s.pushView(strView::fromCstr(" [in "));
-        s.pushView(ctx);
-        s.pushChar(']');
+        i32 ln = (i32)line + off;
+        if (ln < 1) continue;
+        strView lt = extractLine(src, (u32)ln);
+        if (lt.len == 0 && off != 0) continue;
+
+        s.pushView(strView::fromCstr("  │ "));
+        pushPadUint(&s, (u32)ln, numW);
+        s.pushView(strView::fromCstr(" │ "));
+        s.pushView(lt);
+        s.pushChar('\n');
     }
-    s.pushChar('\n');
 
-    strView lineText = extractLine(src, line);
-    s.pushView(lineText);
-    s.pushChar('\n');
+    // caret line: prefix "  |" then spaces to the offending column, then ▲
+    u32 prefixLen = 3 + numW + 3; // "  │ " + numW + " │ "  (3 + numW + 3)
+    i32 caretSpaces = (i32)prefixLen + (i32)col - 4;
+    if (caretSpaces < 0) caretSpaces = 0;
+    s.pushView(strView::fromCstr("  |"));
+    for (i32 i = 0; i < caretSpaces; i++) s.pushChar(' ');
+    s.pushView(strView::fromCstr("▲\n"));
 
-    u64 caret = col;
-    if (caret > lineText.len) caret = lineText.len;
-    if (caret < 1) caret = 1;
-    for (u64 i = 1; i < caret; i++) s.pushChar(' ');
-    s.pushChar('^');
-    s.pushChar('\n');
+    // help / suggestion line
+    if (help.len > 0)
+    {
+        s.pushView(strView::fromCstr("  │"));
+        for (i32 i = 0; i < caretSpaces; i++) s.pushChar(' ');
+        s.pushView(strView::fromCstr("╰─ "));
+        s.pushView(help);
+        s.pushChar('\n');
+    }
 
     libc.write(2, s.asU8(), s.len);
     s.free();
+}
+
+// Backward-compatible clang-style entry point. Renders the rich format with no
+// code and `ctx` used as the help/suggestion line.
+pub void reportLevel(strView filename, strView src, u32 line, u32 col, u8 level,
+                     strView msg, strView ctx)
+{
+    diag(strView::empty(), filename, src, line, col, level, msg, ctx);
+}
+
+// Coded diagnostic entry point (preferred for new call sites).
+pub void reportCode(strView code, strView filename, strView src, u32 line, u32 col,
+                    u8 level, strView msg, strView help)
+{
+    diag(code, filename, src, line, col, level, msg, help);
 }
 
 pub void report(strView filename, strView src, u32 line, u32 col,
