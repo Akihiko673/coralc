@@ -41,11 +41,4 @@ These errors occur during parsing when the tokens themselves are valid, but they
 * SYN-1005: Dangling Multi-declaration
 * Represents: Trying to declare multiple variables separated by commas but failing to provide a terminal name or value (e.g., int x, y, ;).
 
-If you want, I can provide:
-
-* The C enum structure mapping these codes to error messages
-* An expansion into Semantic/Type errors (SEM-2001+) like type mismatches or redeclared variables
-
-
-[1] [https://www.upgrad.com](https://www.upgrad.com/tutorials/software-engineering/c-tutorial/types-of-errors-in-c/)
-[2] [https://sites.psu.edu](https://sites.psu.edu/symbolcodes/glossary/)
+the way things are going, you might as well, just drop all errors into the error.crl, and files needing to report error, just reort the code, nd forward the place it happens. or something lke that. 

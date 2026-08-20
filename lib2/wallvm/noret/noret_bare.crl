@@ -22,7 +22,7 @@ pub struct NoretBare
         return n;
     }
 
-    void ensureCap(NoretBare*, u32 needed)
+    void ensureCap(u32 needed)
     {
         if (self.outLen + needed <= self.outCap) return;
         u32 newCap = self.outCap ? self.outCap * 2 : 64;
@@ -37,13 +37,13 @@ pub struct NoretBare
         self.outCap = newCap;
     }
 
-    void c(NoretBare*, char ch)
+    void c(char ch)
     {
         self.ensureCap(1);
         self.out[self.outLen++] = ch;
     }
 
-    void s(NoretBare*, const char* str)
+    void s(const char* str)
     {
         u32 len = 0;
         while (str[len]) len++;
@@ -52,24 +52,24 @@ pub struct NoretBare
             self.out[self.outLen++] = str[i];
     }
 
-    const char* getString(NoretBare*)
+    const char* getString()
     {
         self.ensureCap(1);
         self.out[self.outLen] = 0;
         return self.out;
     }
 
-    void clear(NoretBare*)
+    void clear()
     {
         self.outLen = 0;
     }
 
-    void destroy(NoretBare*)
+    void destroy()
     {
         if (self.out) mman.dealloc<char>(self.out);
     }
 
-    void emitHalt(NoretBare*, const char* arch)
+    void emitHalt(const char* arch)
     {
         if (bareArchMatch(arch, "x86_64") || bareArchMatch(arch, "x86") || bareArchMatch(arch, "x86_32"))
         {

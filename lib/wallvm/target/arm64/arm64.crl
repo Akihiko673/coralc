@@ -121,7 +121,7 @@ pub struct Arm64Codegen
 
     void emitMovImm(const char* reg, u64 val, bool is64)
     {
-        u32 maxShift = is64 ? 64 : 32;
+        u32 maxShift = is64 ? 64u : 32u;
         bool first = true;
         for (u32 shift = 0; shift < maxShift; shift += 16)
         {
@@ -129,15 +129,15 @@ pub struct Arm64Codegen
             if (part == 0 && !first) continue;
             if (first)
             {
-                self.pad(); self.s("movz "); self.s(reg); self.s(", #"); self.u(part);
-                if (shift > 0) { self.s(", lsl #"); self.u(shift); }
+                self.pad(); self.s("movz "); self.s(reg); self.s(", #"); self.u((u64)part);
+                if (shift > 0) { self.s(", lsl #"); self.u((u64)shift); }
                 self.c('\n');
                 first = false;
             }
             else
             {
-                self.pad(); self.s("movk "); self.s(reg); self.s(", #"); self.u(part);
-                if (shift > 0) { self.s(", lsl #"); self.u(shift); }
+                self.pad(); self.s("movk "); self.s(reg); self.s(", #"); self.u((u64)part);
+                if (shift > 0) { self.s(", lsl #"); self.u((u64)shift); }
                 self.c('\n');
             }
         }
@@ -180,7 +180,7 @@ pub struct Arm64Codegen
 
     void emitSlot(ir_types.IrValue* v)
     {
-        self.c('['); self.s("x29, #-"); self.u(self.slot(v)); self.c(']');
+        self.c('['); self.s("x29, #-"); self.u((u64)self.slot(v)); self.c(']');
     }
 
     void emitImm(ir_types.IrValue* v)
@@ -247,7 +247,7 @@ pub struct Arm64Codegen
 
     void emitBlockRef(u32 bi)
     {
-        self.s(".LBB"); self.u(bi);
+        self.s(".LBB"); self.u((u64)bi);
     }
 
     void emitBinary(ir_types.IrInst* inst, const char* mne)
@@ -294,7 +294,7 @@ pub struct Arm64Codegen
         ir_types.IrValue* res = &inst->base;
         u32 w = res->type ? res->type->width : 64;
         if (w == 0) w = 64;
-        const char* divOp = sig ? "sdiv" : "udiv";
+        const char* divOp = (const char*)(sig ? "sdiv" : "udiv");
         self.load(lhs, "x9");
         self.load(rhs, "x10");
         self.pad(); self.s(divOp); self.c(' ');
@@ -448,7 +448,7 @@ pub struct Arm64Codegen
         }
         if (extra > 0)
         {
-            self.pad(); self.s("add sp, sp, #"); self.u(extra * 16); self.c('\n');
+            self.pad(); self.s("add sp, sp, #"); self.u((u64)(extra * 16)); self.c('\n');
         }
     }
 
@@ -486,7 +486,7 @@ pub struct Arm64Codegen
             if (ew <= 8) sz = 8;
             else sz = ((ew + 7) / 8) * 8;
         }
-        self.pad(); self.s("sub sp, sp, #"); self.u(sz); self.c('\n');
+        self.pad(); self.s("sub sp, sp, #"); self.u((u64)sz); self.c('\n');
         self.inst2("add", "x9", "sp, #0");
         self.store(res, "x9");
     }
@@ -742,7 +742,7 @@ pub struct Arm64Codegen
             self.pad(); self.s("extr "); self.emitReg("x9", w);
             self.s(", "); self.emitReg("x9", w);
             self.s(", "); self.emitReg("x9", w);
-            self.s(", #"); self.u(rot); self.c('\n');
+            self.s(", #"); self.u((u64)rot); self.c('\n');
         }
         else
         {
@@ -909,7 +909,7 @@ pub struct Arm64Codegen
         self.inst0("mov x29, sp");
         if (self.frameSize > 0)
         {
-            self.pad(); self.s("sub sp, sp, #"); self.u(self.frameSize); self.c('\n');
+            self.pad(); self.s("sub sp, sp, #"); self.u((u64)self.frameSize); self.c('\n');
         }
 
         if (func->nblocks > self.blockLabelsCap)
@@ -932,7 +932,7 @@ pub struct Arm64Codegen
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+            self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
@@ -948,7 +948,7 @@ pub struct Arm64Codegen
                         self.emitPhiEdges(blk, tgt);
                         u32 tbi = self.resolveBlock(tgt);
                         if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                        { self.s("    b .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                        { self.s("    b .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     }
                     break;
                 }
@@ -964,9 +964,9 @@ pub struct Arm64Codegen
                     self.load(cond, "x9");
                     self.inst2("cmp", "x9", "#0");
                     if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                    { self.s("    b.ne .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                    { self.s("    b.ne .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     if (ebi != ~0u && self.blockLabels[ebi] != ~0u)
-                    { self.s("    b .LBB"); self.u(self.blockLabels[ebi]); self.c('\n'); }
+                    { self.s("    b .LBB"); self.u((u64)self.blockLabels[ebi]); self.c('\n'); }
                     break;
                 }
                 case ir_opcodes.IrOpcode::Ret:

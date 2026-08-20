@@ -143,12 +143,12 @@ pub struct Sparc64Codegen
     void emitSlot(ir_types.IrValue* v)
     {
         // Uses %fp - slot_offset
-        self.c('['); self.s("%fp-"); self.u(self.slot(v)); self.c(']');
+        self.c('['); self.s("%fp-"); self.u((u64)self.slot(v)); self.c(']');
     }
 
     void emitFpSlot(ir_types.IrValue* v)
     {
-        self.c('['); self.s("%fp-"); self.u(self.slot(v)); self.c(']');
+        self.c('['); self.s("%fp-"); self.u((u64)self.slot(v)); self.c(']');
     }
 
     void emitImm(ir_types.IrValue* v)
@@ -192,11 +192,11 @@ pub struct Sparc64Codegen
         u32 w = v->type ? v->type->width : 64;
         if (w <= 32)
         {
-            self.pad(); self.s("ld [%fp-"); self.u(self.slot(v)); self.s("], "); self.s(r); self.c('\n');
+            self.pad(); self.s("ld [%fp-"); self.u((u64)self.slot(v)); self.s("], "); self.s(r); self.c('\n');
         }
         else
         {
-            self.pad(); self.s("ldd [%fp-"); self.u(self.slot(v)); self.s("], "); self.s(r); self.c('\n');
+            self.pad(); self.s("ldd [%fp-"); self.u((u64)self.slot(v)); self.s("], "); self.s(r); self.c('\n');
         }
     }
 
@@ -214,11 +214,11 @@ pub struct Sparc64Codegen
         u32 w = v->type ? v->type->width : 64;
         if (w <= 32)
         {
-            self.pad(); self.s("st "); self.s(r); self.s(", [%fp-"); self.u(self.slot(v)); self.c(']'); self.c('\n');
+            self.pad(); self.s("st "); self.s(r); self.s(", [%fp-"); self.u((u64)self.slot(v)); self.c(']'); self.c('\n');
         }
         else
         {
-            self.pad(); self.s("std.core "); self.s(r); self.s(", [%fp-"); self.u(self.slot(v)); self.c(']'); self.c('\n');
+            self.pad(); self.s("std.core "); self.s(r); self.s(", [%fp-"); self.u((u64)self.slot(v)); self.c(']'); self.c('\n');
         }
     }
 
@@ -231,7 +231,7 @@ pub struct Sparc64Codegen
 
     void emitBlockRef(u32 bi)
     {
-        self.s(".LBB"); self.u(bi);
+        self.s(".LBB"); self.u((u64)bi);
     }
 
     // Arithmetic helpers
@@ -434,12 +434,12 @@ pub struct Sparc64Codegen
                 if (isFloat)
                 {
                     self.loadFp(arg, "%f0");
-                    self.pad(); self.s("std.core %f0, [%sp+"); self.u(stackOff); self.c(']'); self.c('\n');
+                    self.pad(); self.s("std.core %f0, [%sp+"); self.u((u64)stackOff); self.c(']'); self.c('\n');
                 }
                 else
                 {
                     self.load(arg, "%l0");
-                    self.pad(); self.s("stx %l0, [%sp+"); self.u(stackOff); self.c(']'); self.c('\n');
+                    self.pad(); self.s("stx %l0, [%sp+"); self.u((u64)stackOff); self.c(']'); self.c('\n');
                 }
             }
         }
@@ -514,7 +514,7 @@ pub struct Sparc64Codegen
             if (ew == 0) ew = 8;
             sz = ((ew + 7) / 8) * 8;
         }
-        self.pad(); self.s("sub %sp, "); self.u(sz); self.s(", %sp\n");
+        self.pad(); self.s("sub %sp, "); self.u((u64)sz); self.s(", %sp\n");
         self.pad(); self.s("and %sp, -16, %sp\n");
         self.inst2("mov", "%sp", "%l0");
         self.store(res, "%l0");
@@ -574,8 +574,8 @@ pub struct Sparc64Codegen
             if (dw > sw)
             {
                 u32 shiftAmt = 64 - sw;
-                self.pad(); self.s("sllx %l0, "); self.u(shiftAmt); self.s(", %l0\n");
-                self.pad(); self.s("srax %l0, "); self.u(shiftAmt); self.s(", %l0\n");
+                self.pad(); self.s("sllx %l0, "); self.u((u64)shiftAmt); self.s(", %l0\n");
+                self.pad(); self.s("srax %l0, "); self.u((u64)shiftAmt); self.s(", %l0\n");
             }
             self.store(res, "%l0"); break;
         case ir_opcodes.IrOpcode::FpTrunc:
@@ -658,15 +658,15 @@ pub struct Sparc64Codegen
         u32 lid = self.labelId++;
         self.load(src, "%l0");
         self.inst2("mov", "%g0", "%l1");
-        self.pad(); self.s(".Lctpop_"); self.u(lid); self.s(":\n");
+        self.pad(); self.s(".Lctpop_"); self.u((u64)lid); self.s(":\n");
         self.inst2("brz", "%l0", ".Lctpop_d");
         self.inst0("nop");
         self.pad(); self.s("sub %l0, 1, %l2\n");
         self.inst3("and", "%l0", "%l2", "%l0");
         self.pad(); self.s("add %l1, 1, %l1\n");
-        self.pad(); self.s("ba .Lctpop_"); self.u(lid); self.c('\n');
+        self.pad(); self.s("ba .Lctpop_"); self.u((u64)lid); self.c('\n');
         self.inst0("nop");
-        self.pad(); self.s(".Lctpop_d"); self.u(lid); self.s(":\n");
+        self.pad(); self.s(".Lctpop_d"); self.u((u64)lid); self.s(":\n");
         self.store(res, "%l1");
     }
 
@@ -677,16 +677,16 @@ pub struct Sparc64Codegen
         u32 lid = self.labelId++;
         self.load(src, "%l0");
         self.inst2("mov", "%g0", "%l1");
-        self.pad(); self.s(".Lctlz_"); self.u(lid); self.s(":\n");
+        self.pad(); self.s(".Lctlz_"); self.u((u64)lid); self.s(":\n");
         self.pad(); self.s("srlx %l0, 63, %l2\n");
         self.inst2("brnz", "%l2", ".Lctlz_d");
         self.inst0("nop");
         self.pad(); self.s("sllx %l0, 1, %l0\n");
         self.pad(); self.s("add %l1, 1, %l1\n");
         self.pad(); self.s("cmp %l1, 64\n");
-        self.pad(); self.s("bne .Lctlz_"); self.u(lid); self.c('\n');
+        self.pad(); self.s("bne .Lctlz_"); self.u((u64)lid); self.c('\n');
         self.inst0("nop");
-        self.pad(); self.s(".Lctlz_d"); self.u(lid); self.s(":\n");
+        self.pad(); self.s(".Lctlz_d"); self.u((u64)lid); self.s(":\n");
         self.store(res, "%l1");
     }
 
@@ -697,16 +697,16 @@ pub struct Sparc64Codegen
         u32 lid = self.labelId++;
         self.load(src, "%l0");
         self.inst2("mov", "%g0", "%l1");
-        self.pad(); self.s(".Lcttz_"); self.u(lid); self.s(":\n");
+        self.pad(); self.s(".Lcttz_"); self.u((u64)lid); self.s(":\n");
         self.pad(); self.s("and %l0, 1, %l2\n");
         self.inst2("brnz", "%l2", ".Lcttz_d");
         self.inst0("nop");
         self.pad(); self.s("srlx %l0, 1, %l0\n");
         self.pad(); self.s("add %l1, 1, %l1\n");
         self.pad(); self.s("cmp %l1, 64\n");
-        self.pad(); self.s("bne .Lcttz_"); self.u(lid); self.c('\n');
+        self.pad(); self.s("bne .Lcttz_"); self.u((u64)lid); self.c('\n');
         self.inst0("nop");
-        self.pad(); self.s(".Lcttz_d"); self.u(lid); self.s(":\n");
+        self.pad(); self.s(".Lcttz_d"); self.u((u64)lid); self.s(":\n");
         self.store(res, "%l1");
     }
 
@@ -876,10 +876,10 @@ pub struct Sparc64Codegen
             self.loadFp(fval, "%f2");
             self.load(cond, "%l0");
             self.inst2("cmp", "%l0", "%g0");
-            self.pad(); self.s("be .Lsel_f_"); self.u(lid); self.c('\n');
+            self.pad(); self.s("be .Lsel_f_"); self.u((u64)lid); self.c('\n');
             self.inst0("nop");
             self.loadFp(tval, "%f2");
-            self.pad(); self.s(".Lsel_f_"); self.u(lid); self.s(":\n");
+            self.pad(); self.s(".Lsel_f_"); self.u((u64)lid); self.s(":\n");
             self.storeFp(res, "%f2");
         }
         else
@@ -965,7 +965,7 @@ pub struct Sparc64Codegen
             self.emitLabel(".Lanon");
 
         // Prologue, save %sp, -framesize, %sp
-        self.pad(); self.s("save %sp, -"); self.u(self.frameSize); self.s(", %sp\n");
+        self.pad(); self.s("save %sp, -"); self.u((u64)self.frameSize); self.s(", %sp\n");
 
         // Ensure block label array
         if (func->nblocks > self.blockLabelsCap)
@@ -990,7 +990,7 @@ pub struct Sparc64Codegen
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+            self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
@@ -1007,7 +1007,7 @@ pub struct Sparc64Codegen
                         u32 tbi = self.resolveBlock(tgt);
                         if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
                         {
-                            self.s("    ba .LBB"); self.u(self.blockLabels[tbi]); self.c('\n');
+                            self.s("    ba .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n');
                             self.inst0("nop");
                         }
                     }
@@ -1026,12 +1026,12 @@ pub struct Sparc64Codegen
                     self.inst2("cmp", "%l0", "%g0");
                     if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
                     {
-                        self.s("    bne .LBB"); self.u(self.blockLabels[tbi]); self.c('\n');
+                        self.s("    bne .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n');
                         self.inst0("nop");
                     }
                     if (ebi != ~0u && self.blockLabels[ebi] != ~0u)
                     {
-                        self.s("    ba .LBB"); self.u(self.blockLabels[ebi]); self.c('\n');
+                        self.s("    ba .LBB"); self.u((u64)self.blockLabels[ebi]); self.c('\n');
                         self.inst0("nop");
                     }
                     break;

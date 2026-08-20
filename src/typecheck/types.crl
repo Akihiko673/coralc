@@ -60,32 +60,32 @@ bool primType(str.strView n, CType* out)
     out->line = 0;
     out->col = 0;
 
-    if (n.len == 2 && 0 == 0)
+    if ((n.ptr[0] == 'i' || n.ptr[0] == 'u') && n.len >= 2)
     {
         bool i = n.ptr[0] == 'i';
         bool u = n.ptr[0] == 'u';
-        if ((i || u) && (n.ptr[1] == '8'))
+        if (n.len == 2 && n.ptr[1] == '8')
         {
             out->kind = TY_INT;
             out->width = 8;
             out->isSigned = i;
             return true;
         }
-        if ((i || u) && (n.ptr[1] == '1') && n.len >= 3)
+        if (n.len == 3 && n.ptr[1] == '1')
         {
             out->kind = TY_INT;
             out->width = 16;
             out->isSigned = i;
             return true;
         }
-        if ((i || u) && (n.ptr[1] == '3') && n.len >= 3)
+        if (n.len == 3 && n.ptr[1] == '3')
         {
             out->kind = TY_INT;
             out->width = 32;
             out->isSigned = i;
             return true;
         }
-        if ((i || u) && (n.ptr[1] == '6') && n.len >= 3)
+        if (n.len == 3 && n.ptr[1] == '6')
         {
             out->kind = TY_INT;
             out->width = 64;
@@ -300,6 +300,24 @@ str.strView typeName(CType* t)
         if (t->width == 32) return t->isSigned ? str.strView::fromCstr("i32") : str.strView::fromCstr("u32");
         return t->isSigned ? str.strView::fromCstr("i64") : str.strView::fromCstr("u64");
     }
+    if (t->kind == TY_PTR || t->kind == TY_SLICE || t->kind == TY_ARRAY)
+    {
+        bool cnst = t->kind == TY_PTR && t->isConstPtr;
+        str.strView inner = t->elem != null ? typeName(t->elem) : str.strView::fromCstr("?");
+        if (inner.len == 1 && inner.ptr[0] == '?')
+        {
+            return cnst ? str.strView::fromCstr("const ?*") : str.strView::fromCstr("?*");
+        }
+        u32 need = (cnst ? 6u : 0u) + inner.len + 2u;
+        u8* tmp = mman.alloc<u8>(need + 1u);
+        u32 k = 0;
+        if (cnst) { tmp[k++] = 'c'; tmp[k++] = 'o'; tmp[k++] = 'n'; tmp[k++] = 's'; tmp[k++] = 't'; tmp[k++] = ' '; }
+        for (u32 i = 0; i < inner.len; i++) tmp[k++] = inner.ptr[i];
+        tmp[k++] = '*';
+        if (t->kind == TY_ARRAY) { tmp[k++] = '['; tmp[k++] = ']'; }
+        tmp[k] = 0;
+        return str.strView::fromParts((const char*)tmp, (u64)k);
+    }
     return str.strView::fromCstr("?");
 }
 
@@ -327,11 +345,12 @@ bool parseUIntBody(str.strView s, u64* out)
 
 // Parse an integer literal text into magnitude + literal-signedness.
 // Handles decimal/hex bodies and a trailing u/l/ul suffix.
-bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidth)
+bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidth, bool* unsignedLit)
 {
     *mag = 0;
     *litSigned = true;
     *forcedWidth = 0;
+    *unsignedLit = false;
     if (text.len == 0) return false;
     u32 n = text.len;
     u32 suf = 0; // 0 none, 1 u, 2 l, 3 ul
@@ -357,9 +376,11 @@ bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidt
     }
     str.strView body = str.strView::fromParts(text.ptr, n);
     if (!parseUIntBody(body, mag)) return false;
-    if (suf == 1) { *forcedWidth = 32; *litSigned = false; }
+    // 'u' marks the literal unsigned; the width still follows the value
+    // magnitude (smallest of 32/64 that fits). 'l' is forced 64.
+    if (suf == 1) { *forcedWidth = 0; *litSigned = false; *unsignedLit = true; }
     else if (suf == 2) { *forcedWidth = 64; *litSigned = true; }
-    else if (suf == 3) { *forcedWidth = 64; *litSigned = false; }
+    else if (suf == 3) { *forcedWidth = 64; *litSigned = false; *unsignedLit = true; }
     return true;
 }
 
@@ -374,12 +395,20 @@ CType* literalIntDefaultType(str.strView text)
     u64 mag = 0;
     bool ln = true;
     u32 fw = 0;
-    if (literalIntInfo(text, &mag, &ln, &fw))
+    bool uns = false;
+    if (literalIntInfo(text, &mag, &ln, &fw, &uns))
     {
-        if (fw > 0)
+        if (uns)
+        {
+            t->isSigned = false;
+            if (fw > 0) t->width = fw;
+            else if (intFits(false, mag, 32, false)) t->width = 32;
+            else t->width = 64;
+        }
+        else if (fw > 0)
         {
             t->width = fw;
-            t->isSigned = ln; // 'u' suffix tracked through ln
+            t->isSigned = ln; // 'l' suffix tracked through ln
         }
         else if (intFits(true, mag, 32, ln)) { t->width = 32; t->isSigned = true; }
         else if (intFits(false, mag, 32, false)) { t->width = 32; t->isSigned = false; }
@@ -398,7 +427,8 @@ bool intLitFits(CType* t, str.strView text)
     u64 mag = 0;
     bool ln = true;
     u32 fw = 0;
-    if (!literalIntInfo(text, &mag, &ln, &fw)) return false;
+    bool uns = false;
+    if (!literalIntInfo(text, &mag, &ln, &fw, &uns)) return false;
     return intFits(t->isSigned, mag, t->width, ln);
 }
 
@@ -437,14 +467,16 @@ bool containsUnknown(CType* t)
     return false;
 }
 
-// Types usable as boolean conditions: bool, anything pointer-like (null-
-// checked in C style), function pointers, and unresolved poison. Numbers
-// and structs are not conditions.
+// Types usable as boolean conditions: bool, integers/chars (C-style
+// truthiness, e.g. `if (x & 0x80)`), anything pointer-like (null-checked
+// in C style), function pointers, and unresolved poison. Structs are not
+// conditions.
 bool isTruthyType(CType* t)
 {
     if (t == null) return false;
     if (t->kind == TY_UNKNOWN || t->kind == TY_BOOL) return true;
-    return t->kind == TY_PTR || t->kind == TY_SLICE || t->kind == TY_FUNC;
+    return t->kind == TY_PTR || t->kind == TY_SLICE || t->kind == TY_FUNC
+        || t->kind == TY_INT || t->kind == TY_CHAR;
 }
 
 // Can an expression of type S assign- into a target of type T?
@@ -470,9 +502,11 @@ bool assignable(CType* tar, CType* src, u32 litKind, str.strView litText)
     if (litKind == ast.EX_NULL) return true;
     if (litKind == ast.EX_CHAR) return tar->kind == TY_CHAR || tar->kind == TY_INT;
     if (litKind == ast.EX_BOOL) return tar->kind == TY_BOOL;
-    if (litKind == ast.EX_STR)
+    if (src->kind == TY_NAMED && src->name.len == 14
+        && libc.memcmp((const void*)src->name.ptr, (const void*)"string literal", 14) == 0)
     {
-        // string literal -> pointer to char/u8 (const-qualified or not)
+        // string literal (possibly produced by a ternary of literals) ->
+        // pointer to char/u8 (const-qualified or not)
         if (tar->kind == TY_PTR && tar->elem != null)
         {
             CType* el = effective(tar->elem);
@@ -480,7 +514,16 @@ bool assignable(CType* tar, CType* src, u32 litKind, str.strView litText)
         }
         return false;
     }
-    if (litKind == ast.EX_INT) return intLitFits(tar, litText) || tar->kind == TY_FLOAT;
+    if (litKind == ast.EX_INT)
+    {
+        // integer literal 0 is the null pointer / null func pointer
+        if ((tar->kind == TY_PTR || tar->kind == TY_SLICE || tar->kind == TY_FUNC
+             || tar->kind == TY_NAMED) && litText.len == 1 && litText.ptr[0] == '0')
+        {
+            return true;
+        }
+        return intLitFits(tar, litText) || tar->kind == TY_FLOAT;
+    }
     if (litKind == ast.EX_FLOAT) return tar->kind == TY_FLOAT;
     return false;
 }

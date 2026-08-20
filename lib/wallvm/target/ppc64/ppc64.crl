@@ -131,7 +131,7 @@ pub struct Ppc64Codegen
         i64 s = (i64)n;
         if (s >= -32768 && s <= 32767)
         {
-            self.pad(); self.s("li "); self.s(r); self.s(", "); self.s((s < 0) ? "-" : ""); self.u(s < 0 ? -s : s); self.c('\n');
+            self.pad(); self.s("li "); self.s(r); self.s(", "); self.s((s < 0) ? "-" : ""); self.u((u64)(s < 0 ? -s : s)); self.c('\n');
             return;
         }
         u16 hw0 = (u16)(n & 0xFFFF);
@@ -140,18 +140,18 @@ pub struct Ppc64Codegen
         u16 hw3 = (u16)((n >> 48) & 0xFFFF);
         if (hw3 || hw2)
         {
-            if (hw3) { self.pad(); self.s("lis "); self.s(r); self.s(", "); self.u(hw3); self.c('\n'); }
+            if (hw3) { self.pad(); self.s("lis "); self.s(r); self.s(", "); self.u((u64)hw3); self.c('\n'); }
             else { self.pad(); self.s("li "); self.s(r); self.s(", 0\n"); }
-            if (hw2) { self.pad(); self.s("ori "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u(hw2); self.c('\n'); }
+            if (hw2) { self.pad(); self.s("ori "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u((u64)hw2); self.c('\n'); }
             self.pad(); self.s("sldi "); self.s(r); self.s(", "); self.s(r); self.s(", 32\n");
-            if (hw1) { self.pad(); self.s("oris "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u(hw1); self.c('\n'); }
-            if (hw0) { self.pad(); self.s("ori "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u(hw0); self.c('\n'); }
+            if (hw1) { self.pad(); self.s("oris "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u((u64)hw1); self.c('\n'); }
+            if (hw0) { self.pad(); self.s("ori "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u((u64)hw0); self.c('\n'); }
         }
         else
         {
-            if (hw1) { self.pad(); self.s("lis "); self.s(r); self.s(", "); self.u(hw1); self.c('\n'); }
+            if (hw1) { self.pad(); self.s("lis "); self.s(r); self.s(", "); self.u((u64)hw1); self.c('\n'); }
             else { self.pad(); self.s("li "); self.s(r); self.s(", 0\n"); }
-            if (hw0) { self.pad(); self.s("ori "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u(hw0); self.c('\n'); }
+            if (hw0) { self.pad(); self.s("ori "); self.s(r); self.s(", "); self.s(r); self.s(", "); self.u((u64)hw0); self.c('\n'); }
         }
     }
 
@@ -164,8 +164,8 @@ pub struct Ppc64Codegen
             {
                 u64 raw = v->valData;
                 self.emitLoadImm("r11", raw);
-                self.pad(); self.s("std.core r11, "); self.u(self.slot(v)); self.s("(r1)\n");
-                self.pad(); self.s("lfd "); self.s(r); self.s(", "); self.u(self.slot(v)); self.s("(r1)\n");
+                self.pad(); self.s("std.core r11, "); self.u((u64)self.slot(v)); self.s("(r1)\n");
+                self.pad(); self.s("lfd "); self.s(r); self.s(", "); self.u((u64)self.slot(v)); self.s("(r1)\n");
             }
             else
             {
@@ -173,8 +173,8 @@ pub struct Ppc64Codegen
                 // Load via stack to not worry about temp register reuse
                 u32 off = self.slot(v);
                 self.emitLoadImm("r11", n);
-                self.pad(); self.s("std.core r11, "); self.u(off); self.s("(r1)\n");
-                self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u(off); self.s("(r1)\n");
+                self.pad(); self.s("std.core r11, "); self.u((u64)off); self.s("(r1)\n");
+                self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
             }
             return;
         }
@@ -182,11 +182,11 @@ pub struct Ppc64Codegen
         if (ty && ty->kind == ir_types.IrTypeKind::Float)
         {
             u32 off = self.slot(v);
-            self.pad(); self.s("lfd "); self.s(r); self.s(", "); self.u(off); self.s("(r1)\n");
+            self.pad(); self.s("lfd "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
             return;
         }
         u32 off = self.slot(v);
-        self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u(off); self.s("(r1)\n");
+        self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
     }
 
     void loadArith(ir_types.IrValue* v, const char* r)
@@ -208,10 +208,10 @@ pub struct Ppc64Codegen
         u32 off = self.slot(v);
         if (ty && ty->kind == ir_types.IrTypeKind::Float)
         {
-            self.pad(); self.s("stfd "); self.s(r); self.s(", "); self.u(off); self.s("(r1)\n");
+            self.pad(); self.s("stfd "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
             return;
         }
-        self.pad(); self.s("std.core "); self.s(r); self.s(", "); self.u(off); self.s("(r1)\n");
+        self.pad(); self.s("std.core "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
     }
 
     // Block labels
@@ -573,7 +573,7 @@ pub struct Ppc64Codegen
             if (ew == 0) ew = 8;
             sz = ((ew + 7) / 8) * 8;
         }
-        self.pad(); self.s("addi r1, r1, -"); self.u(sz); self.c('\n');
+        self.pad(); self.s("addi r1, r1, -"); self.u((u64)sz); self.c('\n');
         self.inst2("mr", "r12", "r1");
         self.store(res, "r12");
     }
@@ -960,7 +960,7 @@ pub struct Ppc64Codegen
         // Prologue
         self.inst0("mflr r0");
         self.pad(); self.s("std.core r0, 16(r1)\n");
-        self.pad(); self.s("stdu r1, -"); self.u(allocSize); self.s("(r1)\n");
+        self.pad(); self.s("stdu r1, -"); self.u((u64)allocSize); self.s("(r1)\n");
 
         // Ensure block label array
         if (func->nblocks > self.blockLabelsCap)
@@ -984,7 +984,7 @@ pub struct Ppc64Codegen
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+            self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
@@ -1001,7 +1001,7 @@ pub struct Ppc64Codegen
                         self.emitPhiEdges(blk, tgt);
                         u32 tbi = self.resolveBlock(tgt);
                         if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                        { self.s("    b .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                        { self.s("    b .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     }
                     break;
                 }
@@ -1017,9 +1017,9 @@ pub struct Ppc64Codegen
                     self.loadArith(cond, "r12");
                     self.inst2("cmpdi", "r12", "0");
                     if (ebi != ~0u && self.blockLabels[ebi] != ~0u)
-                    { self.s("    beq cr0, .LBB"); self.u(self.blockLabels[ebi]); self.c('\n'); }
+                    { self.s("    beq cr0, .LBB"); self.u((u64)self.blockLabels[ebi]); self.c('\n'); }
                     if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                    { self.s("    b .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                    { self.s("    b .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     break;
                 }
                 case ir_opcodes.IrOpcode::Ret:
@@ -1033,7 +1033,7 @@ pub struct Ppc64Codegen
                         else
                             self.load(rv, "r3");
                     }
-                    self.pad(); self.s("addi r1, r1, "); self.u(allocSize); self.c('\n');
+                    self.pad(); self.s("addi r1, r1, "); self.u((u64)allocSize); self.c('\n');
                     self.pad(); self.s("ld r0, 16(r1)\n");
                     self.inst0("mtlr r0");
                     self.inst0("blr");
@@ -1134,7 +1134,7 @@ pub struct Ppc64Codegen
         }
 
         // Fallback epilogue
-        self.pad(); self.s("addi r1, r1, "); self.u(allocSize); self.c('\n');
+        self.pad(); self.s("addi r1, r1, "); self.u((u64)allocSize); self.c('\n');
         self.pad(); self.s("ld r0, 16(r1)\n");
         self.inst0("mtlr r0");
         self.inst0("blr");

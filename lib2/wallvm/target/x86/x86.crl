@@ -182,7 +182,7 @@ pub struct X86Codegen
 
     void emitSlot(ir_types.IrValue* v)
     {
-        self.c('['); self.s("ebp-"); self.u(self.slot(v)); self.c(']');
+        self.c('['); self.s("ebp-"); self.u((u64)self.slot(v)); self.c(']');
     }
 
     void emitImm(ir_types.IrValue* v)
@@ -245,7 +245,7 @@ pub struct X86Codegen
 
     void emitBlockRef(u32 bi)
     {
-        self.s(".LBB"); self.u(bi);
+        self.s(".LBB"); self.u((u64)bi);
     }
 
     void emitArith(ir_types.IrInst* inst, const char* mne)
@@ -368,7 +368,7 @@ pub struct X86Codegen
         ir_types.IrValue* res = &inst->base;
         ir_opcodes.IrFCmpPred p = inst->fcmpPred;
         bool isDouble = lhs && lhs->type && lhs->type->width == 64;
-        const char* cmpOp = isDouble ? "comisd" : "comiss";
+        const char* cmpOp = (const char*)(isDouble ? "comisd" : "comiss");
         if (lhs && self.isConst(lhs)) { self.load(lhs, "eax"); self.inst2("mov", "[esp]", "eax"); self.inst1(isDouble ? "movq" : "movd", "xmm0, [esp]"); }
         else if (lhs) { self.pad(); self.s(isDouble ? "movq" : "movd"); self.s(" xmm0, "); self.emitSlot(lhs); self.c('\n'); }
         else self.inst0("xorpd xmm0, xmm0");
@@ -428,7 +428,7 @@ pub struct X86Codegen
 
         if (nArgs > 0)
         {
-            self.pad(); self.s("add esp, "); self.u(nArgs * 4); self.c('\n');
+            self.pad(); self.s("add esp, "); self.u((u64)(nArgs * 4)); self.c('\n');
         }
 
         if (res->type && res->type->kind != ir_types.IrTypeKind::Void)
@@ -474,7 +474,7 @@ pub struct X86Codegen
             if (ew == 0) ew = 8;
             sz = ((ew + 31) / 32) * 4;
         }
-        self.pad(); self.s("sub esp, "); self.u(sz); self.c('\n');
+        self.pad(); self.s("sub esp, "); self.u((u64)sz); self.c('\n');
         self.inst2("lea", "eax", "[esp]");
         self.store(res, "eax");
     }
@@ -768,7 +768,7 @@ pub struct X86Codegen
         self.inst2("mov", "ebp", "esp");
         if (self.frameSize > 0)
         {
-            self.pad(); self.s("sub esp, "); self.u(self.frameSize); self.c('\n');
+            self.pad(); self.s("sub esp, "); self.u((u64)self.frameSize); self.c('\n');
         }
 
         if (func->nblocks > self.blockLabelsCap)
@@ -791,7 +791,7 @@ pub struct X86Codegen
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+            self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
@@ -807,7 +807,7 @@ pub struct X86Codegen
                         self.emitPhiEdges(blk, tgt);
                         u32 tbi = self.resolveBlock(tgt);
                         if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                        { self.s("    jmp .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                        { self.s("    jmp .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     }
                     break;
                 }
@@ -823,9 +823,9 @@ pub struct X86Codegen
                     self.loadArith(cond, "eax");
                     self.inst2("test", "eax", "eax");
                     if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                    { self.s("    jnz .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                    { self.s("    jnz .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     if (ebi != ~0u && self.blockLabels[ebi] != ~0u)
-                    { self.s("    jmp .LBB"); self.u(self.blockLabels[ebi]); self.c('\n'); }
+                    { self.s("    jmp .LBB"); self.u((u64)self.blockLabels[ebi]); self.c('\n'); }
                     break;
                 }
                 case ir_opcodes.IrOpcode::Ret:

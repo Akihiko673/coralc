@@ -232,7 +232,7 @@ pub struct Wasm32Codegen
         u32 li = self.ensureLocal(v);
         if (li == 0xFFFFFFFF) { self.s("i32.const 0"); return; }
         self.s("local.get $l");
-        self.u(li);
+        self.u((u64)li);
     }
 
     void setLocal(ir_types.IrValue* v)
@@ -240,7 +240,7 @@ pub struct Wasm32Codegen
         u32 li = self.ensureLocal(v);
         if (li == 0xFFFFFFFF) return;
         self.s("local.set $l");
-        self.u(li);
+        self.u((u64)li);
     }
 
     void getLocal(ir_types.IrValue* v)
@@ -248,13 +248,13 @@ pub struct Wasm32Codegen
         u32 li = self.ensureLocal(v);
         if (li == 0xFFFFFFFF) { self.pushValue(v); return; }
         self.s("local.get $l");
-        self.u(li);
+        self.u((u64)li);
     }
 
     void emitFuncDecl(ir_types.IrFunc* f)
     {
         self.s("  (func $f");
-        self.u(self.funcIdx);
+        self.u((u64)self.funcIdx);
         self.funcIdx++;
 
         // Function name
@@ -277,7 +277,7 @@ pub struct Wasm32Codegen
         for (u32 i = 0; i < f->nparams; i++)
         {
             self.s(" (param $p");
-            self.u(i);
+            self.u((u64)i);
             self.c(' ');
             self.wasmType(f->paramTypes[i]);
         }
@@ -298,7 +298,7 @@ pub struct Wasm32Codegen
         for (u32 i = 0; i < self.nlocals; i++)
         {
             self.s("    (local $l");
-            self.u(i);
+            self.u((u64)i);
             self.c(' ');
             self.s(self.locals[i].wasmType ? self.locals[i].wasmType : "i32");
             self.c(')');
@@ -310,7 +310,7 @@ pub struct Wasm32Codegen
     {
         u32 label = bi;
         self.s("    block $blk");
-        self.u(label);
+        self.u((u64)label);
         self.c('\n');
         self.curBlockIdx = bi;
 
@@ -810,7 +810,7 @@ pub struct Wasm32Codegen
                 self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
                 self.indent(); self.getLocal(inst->ops[1]); self.c('\n');
                 bool is64 = inst->ops[0]->type && inst->ops[0]->type->width == 64;
-                const char* p = is64 ? "i64." : "i32.";
+                const char* p = (const char*)(is64 ? "i64." : "i32.");
                 self.indent(); self.s(p);
                 switch (inst->icmpPred)
                 {
@@ -837,7 +837,7 @@ pub struct Wasm32Codegen
                 self.indent(); self.getLocal(inst->ops[0]); self.c('\n');
                 self.indent(); self.getLocal(inst->ops[1]); self.c('\n');
                 bool is64 = inst->ops[0]->type && inst->ops[0]->type->width == 64;
-                const char* p = is64 ? "f64." : "f32.";
+                const char* p = (const char*)(is64 ? "f64." : "f32.");
                 self.indent(); self.s(p);
                 switch (inst->fcmpPred)
                 {

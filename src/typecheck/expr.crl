@@ -168,6 +168,16 @@ types.CType* typeIdent(Typer* t, str.strView name, u32 line, u32 col)
     if (s == null) s = scopes.scopeLookup(t->top, name);
     if (s == null)
     {
+        // generic type parameter of the enclosing struct, used as a value
+        // (e.g. `N` in `u64 capacity() { return N; }`, or `T` in a cast)
+        if (t->curFn != null && t->curFn->structName.len > 0)
+        {
+            ast.Decl* sd = findNamedStruct(t, t->curFn->structName);
+            if (sd != null && scopes.isGenericParam(sd->generics, sd->ngenerics, name))
+            {
+                return scopes.opaqueType(name, line, col);
+            }
+        }
         errTwoStr(t, line, col, "unresolved name '", name, "'", str.strView::empty(), "");
         return scopes.opaqueType(name, line, col);
     }
@@ -427,6 +437,16 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
         }
         else
         {
+            // builtin compile-time helpers (handled in codegen, not declared)
+            if (scopes.sEq(callee->text, "alignof") || scopes.sEq(callee->text, "offsetof"))
+            {
+                types.CType* st = mman.alloc<types.CType>(1);
+                st->kind = types.TY_INT;
+                st->width = 64;
+                st->isSigned = false;
+                typeArgsOnce(t, call);
+                return st;
+            }
             // unqualified call to a sibling method of the current struct
             if (t->curFn != null && t->curFn->structName.len > 0)
             {
@@ -603,8 +623,8 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
             }
             types.CType* b = typeExpr(t, e->b);
             types.CType* cc = typeExpr(t, e->c);
-            if (b != null && b->kind == types.TY_UNKNOWN) return cc;
-            if (cc != null && cc->kind == types.TY_UNKNOWN) return b;
+            if (b != null && b->kind == types.TY_UNKNOWN) return scopes.opaqueType(str.strView::empty(), e->line, e->col);
+            if (cc != null && cc->kind == types.TY_UNKNOWN) return scopes.opaqueType(str.strView::empty(), e->line, e->col);
             return b != null ? b : cc;
         }
 
@@ -692,9 +712,53 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
     return scopes.opaqueType(str.strView::empty(), e->line, e->col);
 }
 
+// Is `e` a compile-time TYPE reference (generic param name, primitive or
+// named type, module-qualified type path, or type literal)? Used for
+// comptime comparisons like `if (T == i8)` / `T == string.strView`.
+bool comptimeTypeRef(expr.Typer* t, ast.Expr* e)
+{
+    if (e == null) return false;
+    switch (e->kind)
+    {
+    case ast.EX_PAREN:
+        return comptimeTypeRef(t, e->a);
+    case ast.EX_TYPELIT:
+        return true;
+    case ast.EX_IDENT:
+        if (scopes.isGenericParam(t->gnames, t->ng, e->text)) return true;
+        {
+            types.CType p;
+            if (types.primType(e->text, &p)) return true;
+        }
+        {
+            scopes.Sym* s = scopes.scopeLookup(t->top, e->text);
+            if (s != null && (s->kind == scopes.SYM_STRUCT || s->kind == scopes.SYM_ENUM
+                || s->kind == scopes.SYM_TYPEDEF || s->kind == scopes.SYM_DISTINCT
+                || s->kind == scopes.SYM_TRAIT)) return true;
+        }
+        return false;
+    case ast.EX_DOT:
+        if (e->a != null && e->a->kind == ast.EX_IDENT
+            && scopes.modsLookup(t->mods, e->a->text)) return true;
+        return false;
+    default:
+        return false;
+    }
+}
+
 types.CType* typeBinary(Typer* t, ast.Expr* e)
 {
     str.strView op = e->text;
+    // comptime type comparison, e.g. `if (T == i8)`: both sides are type
+    // references with no runtime value, so never type them as values
+    if ((strEq2(op, "==") || strEq2(op, "!=") || strEq2(op, "<") || strEq2(op, "<=")
+         || strEq2(op, ">") || strEq2(op, ">=") || strEq2(op, "!<"))
+        && comptimeTypeRef(t, e->a) && comptimeTypeRef(t, e->b))
+    {
+        types.CType* b = mman.alloc<types.CType>(1);
+        b->kind = types.TY_BOOL;
+        return b;
+    }
     types.CType* l = typeExpr(t, e->a);
     types.CType* r = typeExpr(t, e->b);
     bool litL = e->a->kind == ast.EX_INT || e->a->kind == ast.EX_FLOAT;
@@ -997,7 +1061,7 @@ void typeStmt(Typer* t, ast.Stmt* s)
         }
         break;
 
-    case ast.ST_VAR:
+case ast.ST_VAR:
         {
             types.CType* at = null;
             if (s->type != null)
@@ -1084,6 +1148,7 @@ void typeStmt(Typer* t, ast.Stmt* s)
 
     case ast.ST_FOR:
         {
+            pushBlock(t, str.strView::fromCstr("for"));
             typeStmt(t, s->init);
             if (s->b != null)
             {
@@ -1094,7 +1159,6 @@ void typeStmt(Typer* t, ast.Stmt* s)
                 }
             }
             if (s->c != null) typeExpr(t, s->c);
-            pushBlock(t, str.strView::fromCstr("for"));
             typeStmt(t, s->body);
             popBlock(t, true);
             break;

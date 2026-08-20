@@ -125,7 +125,7 @@ pub struct ArmCodegen
 
     void emitSlot(ir_types.IrValue* v)
     {
-        self.c('['); self.s("fp, #-"); self.u(self.slot(v)); self.c(']');
+        self.c('['); self.s("fp, #-"); self.u((u64)self.slot(v)); self.c(']');
     }
 
     void emitImm(ir_types.IrValue* v)
@@ -358,7 +358,7 @@ pub struct ArmCodegen
         if (nArgs > self.abi.numArgRegs)
         {
             u32 extra = nArgs - self.abi.numArgRegs;
-            self.pad(); self.s("add sp, sp, #"); self.u(extra * 4); self.c('\n');
+            self.pad(); self.s("add sp, sp, #"); self.u((u64)(extra * 4)); self.c('\n');
         }
     }
 
@@ -434,7 +434,7 @@ pub struct ArmCodegen
             sz = ((ew + 7) / 8) * 4;
             if (sz < 4) sz = 4;
         }
-        self.pad(); self.s("sub sp, sp, #"); self.u(sz); self.c('\n');
+        self.pad(); self.s("sub sp, sp, #"); self.u((u64)sz); self.c('\n');
         self.inst3("add", "r0", "sp", "#0");
         self.store(res, "r0");
     }
@@ -468,7 +468,7 @@ pub struct ArmCodegen
                 u32 es = elemSize;
                 while (es > 1) { shift++; es /= 2; }
                 self.pad(); self.s("add r0, r0, r1");
-                if (shift > 0) { self.s(", lsl #"); self.u(shift); }
+                if (shift > 0) { self.s(", lsl #"); self.u((u64)shift); }
                 self.c('\n');
             }
         }
@@ -622,14 +622,14 @@ pub struct ArmCodegen
         u32 lbl = self.popcntLabel++;
         self.loadArith(src, "r0");
         self.inst2("mov", "r1", "#0");
-        self.s(".Lpopcnt"); self.u(lbl); self.s(":\n");
+        self.s(".Lpopcnt"); self.u((u64)lbl); self.s(":\n");
         self.inst2("cmp", "r0", "#0");
-        self.s("    beq .Lpopcnt_done"); self.u(lbl); self.c('\n');
+        self.s("    beq .Lpopcnt_done"); self.u((u64)lbl); self.c('\n');
         self.inst3("sub", "r2", "r0", "#1");
         self.inst3("ands", "r0", "r0", "r2");
         self.inst3("add", "r1", "r1", "#1");
-        self.s("    b .Lpopcnt"); self.u(lbl); self.c('\n');
-        self.s(".Lpopcnt_done"); self.u(lbl); self.s(":\n");
+        self.s("    b .Lpopcnt"); self.u((u64)lbl); self.c('\n');
+        self.s(".Lpopcnt_done"); self.u((u64)lbl); self.s(":\n");
         self.inst2("mov", "r0", "r1");
         self.store(res, "r0");
     }
@@ -672,7 +672,7 @@ pub struct ArmCodegen
         {
             u32 shift = (u32)(cnt->valData & 0x1F);
             if (isLeft) shift = (32 - shift) & 0x1F;
-            self.pad(); self.s("ror r0, r0, #"); self.u(shift); self.c('\n');
+            self.pad(); self.s("ror r0, r0, #"); self.u((u64)shift); self.c('\n');
         }
         else if (cnt)
         {
@@ -806,14 +806,14 @@ pub struct ArmCodegen
         if (self.frameSize > 0)
         {
             u32 aligned = ((self.frameSize + 3) / 4) * 4;
-            self.pad(); self.s("sub sp, sp, #"); self.u(aligned); self.c('\n');
+            self.pad(); self.s("sub sp, sp, #"); self.u((u64)aligned); self.c('\n');
         }
 
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(bi); self.s(":\n");
+            self.s(".LBB"); self.u((u64)bi); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
@@ -828,7 +828,7 @@ pub struct ArmCodegen
                     {
                         self.emitPhiEdges(blk, tgt);
                         u32 tbi = self.resolveBlock(tgt);
-                        if (tbi != ~0u) { self.s("    b .LBB"); self.u(tbi); self.c('\n'); }
+                        if (tbi != ~0u) { self.s("    b .LBB"); self.u((u64)tbi); self.c('\n'); }
                     }
                     break;
                 }
@@ -843,8 +843,8 @@ pub struct ArmCodegen
                     self.emitPhiEdges(blk, ev);
                     self.loadArith(cond, "r0");
                     self.inst2("cmp", "r0", "#0");
-                    if (tbi != ~0u) { self.s("    bne .LBB"); self.u(tbi); self.c('\n'); }
-                    if (ebi != ~0u) { self.s("    b .LBB"); self.u(ebi); self.c('\n'); }
+                    if (tbi != ~0u) { self.s("    bne .LBB"); self.u((u64)tbi); self.c('\n'); }
+                    if (ebi != ~0u) { self.s("    b .LBB"); self.u((u64)ebi); self.c('\n'); }
                     break;
                 }
                 case ir_opcodes.IrOpcode::Ret:

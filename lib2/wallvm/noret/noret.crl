@@ -50,7 +50,8 @@ pub bool isNoret(IrInst* inst)
     return inst->opcode == ir_opcodes.IrOpcode::Noret;
 }
 
-struct ArchCcEntry { const char* name; asm_rules.CallingConvention cc; } // i'm still having import issues, so std isn't used, and map isn't even in the std yet
+struct ArchCcEntry { const char* name; asm_rules.CallingConvention cc; } // i'm still having import issues,
+                                                                         // so std isn't used, and map isn't even in the std yet
 
 static ArchCcEntry ARCH_CC_MAP[] = {
     { "x86_64", asm_rules.CallingConvention::SystemV },

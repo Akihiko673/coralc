@@ -22,7 +22,7 @@ pub struct NoretArm
         return n;
     }
 
-    void ensureCap(NoretArm*, u32 needed)
+    void ensureCap(u32 needed)
     {
         if (self.outLen + needed <= self.outCap) return;
         u32 newCap = self.outCap ? self.outCap * 2 : 64;
@@ -37,13 +37,13 @@ pub struct NoretArm
         self.outCap = newCap;
     }
 
-    void c(NoretArm*, char ch)
+    void c(char ch)
     {
         self.ensureCap(1);
         self.out[self.outLen++] = ch;
     }
 
-    void s(NoretArm*, const char* str) // on sum '.s()' shit
+    void s(const char* str) // on sum '.s()' shit
     {
         u32 len = 0;
         while (str[len]) len++;
@@ -52,24 +52,24 @@ pub struct NoretArm
             self.out[self.outLen++] = str[i];
     }
 
-    const char* getString(NoretArm*)
+    const char* getString()
     {
         self.ensureCap(1);
         self.out[self.outLen] = 0;
         return self.out;
     }
 
-    void clear(NoretArm*)
+    void clear()
     {
         self.outLen = 0;
     }
 
-    void destroy(NoretArm*)
+    void destroy()
     {
         if (self.out) mman.dealloc<char>(self.out);
     }
 
-    void emitLinuxSyscall(NoretArm*)
+    void emitLinuxSyscall()
     {
         self.emitMovImm("r0", self.exitCode);
         self.c('\n');
@@ -79,7 +79,7 @@ pub struct NoretArm
         self.c('\n');
     }
 
-    void emitWindowsTerminate(NoretArm*)
+    void emitWindowsTerminate()
     {
         self.emitMovImm("r0", self.exitCode);
         self.c('\n');
@@ -87,7 +87,7 @@ pub struct NoretArm
         self.c('\n');
     }
 
-    void emitBareMetalHalt(NoretArm*)
+    void emitBareMetalHalt()
     {
         self.s(".halt:");
         self.c('\n');
@@ -97,7 +97,7 @@ pub struct NoretArm
         self.c('\n');
     }
 
-    void emitNoretPlatform(NoretArm*, const char* platform)
+    void emitNoretPlatform(const char* platform)
     {
         if (platformMatch(platform, "LINUX"))
             self.emitLinuxSyscall();
@@ -107,7 +107,7 @@ pub struct NoretArm
             self.emitBareMetalHalt();
     }
 
-    void emitMovImm(NoretArm*, const char* reg, u64 imm)
+    void emitMovImm(const char* reg, u64 imm)
     {
         self.s("\tmov ");
         self.s(reg);

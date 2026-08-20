@@ -142,7 +142,7 @@ pub struct X86_64Codegen
         }
         if (self.externNamesLen == self.externNamesCap)
         {
-            u32 nc = self.externNamesCap == 0 ? 8 : self.externNamesCap * 2;
+            u32 nc = self.externNamesCap == 0 ? 8u : self.externNamesCap * 2u;
             const char** nb = mman.alloc<const char*>(nc);
             for (u32 i = 0; i < self.externNamesLen; i++) nb[i] = self.externNames[i];
             self.externNames = nb;
@@ -204,8 +204,8 @@ pub struct X86_64Codegen
 
     void opMemRbp(u32 off)
     {
-        if (self.att) { self.c('-'); self.u(off); self.s("(%rbp)"); }
-        else { self.c('['); self.s("rbp-"); self.u(off); self.c(']'); }
+        if (self.att) { self.c('-'); self.u((u64)off); self.s("(%rbp)"); }
+        else { self.c('['); self.s("rbp-"); self.u((u64)off); self.c(']'); }
     }
 
     void opMemBase(const char* b)
@@ -458,7 +458,7 @@ pub struct X86_64Codegen
 
     void emitSpillRef(u64 e)
     {
-        self.opMemRbp(((u64)self.valLow(e) + 1) * 8);
+        self.opMemRbp((u32)(((u64)self.valLow(e) + 1) * 8));
     }
 
     void movImm(const char* r, u64 v, u32 w)
@@ -755,8 +755,8 @@ pub struct X86_64Codegen
 
     void emitSpillRefSlot(ir_types.IrValue* v)
     {
-        if (self.att) { self.c('-'); self.u(self.slot(v)); self.s("(%rbp)"); return; }
-        self.c('['); self.s("rbp-"); self.u(self.slot(v)); self.c(']');
+        if (self.att) { self.c('-'); self.u((u64)self.slot(v)); self.s("(%rbp)"); return; }
+        self.c('['); self.s("rbp-"); self.u((u64)self.slot(v)); self.c(']');
     }
 
     // Float helpers
@@ -768,13 +768,13 @@ pub struct X86_64Codegen
             self.movImm("rax", v->valData, 64);
             if (self.att)
             {
-                self.pad(); self.s("movq %rax, "); self.opMemRbp(((u64)self.floatScratchSlot + 1) * 8); self.c('\n');
-                self.pad(); self.s("movq "); self.opMemRbp(((u64)self.floatScratchSlot + 1) * 8); self.s(", %"); self.s(xd); self.c('\n');
+                self.pad(); self.s("movq %rax, "); self.opMemRbp((u32)(((u64)self.floatScratchSlot + 1) * 8)); self.c('\n');
+                self.pad(); self.s("movq "); self.opMemRbp((u32)(((u64)self.floatScratchSlot + 1) * 8)); self.s(", %"); self.s(xd); self.c('\n');
             }
             else
             {
-                self.pad(); self.s("mov "); self.opMemRbp(((u64)self.floatScratchSlot + 1) * 8); self.s(", rax\n");
-                self.pad(); self.s("movq "); self.s(xd); self.s(", "); self.opMemRbp(((u64)self.floatScratchSlot + 1) * 8); self.c('\n');
+                self.pad(); self.s("mov "); self.opMemRbp((u32)(((u64)self.floatScratchSlot + 1) * 8)); self.s(", rax\n");
+                self.pad(); self.s("movq "); self.s(xd); self.s(", "); self.opMemRbp((u32)(((u64)self.floatScratchSlot + 1) * 8)); self.c('\n');
             }
             return;
         }
@@ -836,17 +836,17 @@ pub struct X86_64Codegen
 
     void emitJmp(u32 bi)
     {
-        self.pad(); self.s("jmp .LBB"); self.u(self.blockLabels[bi]); self.c('\n');
+        self.pad(); self.s("jmp .LBB"); self.u((u64)self.blockLabels[bi]); self.c('\n');
     }
 
     void emitJcc(const char* cc, u32 bi)
     {
-        self.pad(); self.s(cc); self.s(" .LBB"); self.u(self.blockLabels[bi]); self.c('\n');
+        self.pad(); self.s(cc); self.s(" .LBB"); self.u((u64)self.blockLabels[bi]); self.c('\n');
     }
 
     void emitBlockLabel(u32 bi)
     {
-        self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+        self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
     }
 
     // The value's destination when it is a plain allocated int register
@@ -1042,7 +1042,7 @@ pub struct X86_64Codegen
         ir_types.IrValue* res = &inst->base;
         ir_opcodes.IrFCmpPred p = inst->fcmpPred;
         bool isDouble = lhs && lhs->type && lhs->type->width == 64;
-        const char* cmpOp = isDouble ? "comisd" : "comiss";
+        const char* cmpOp = (const char*)(isDouble ? "comisd" : "comiss");
         self.floatLoad(lhs, "xmm0");
         self.floatLoad(rhs, "xmm1");
         self.inst2(cmpOp, "xmm0", "xmm1");
@@ -1107,7 +1107,7 @@ pub struct X86_64Codegen
         if (rem != 0) pad = (u32)(align - rem);
 
         if (pad > 0)
-            self.subRsp(pad);
+            self.subRsp((u64)pad);
 
         // Stack args, descending index: the first stack arg ends up at
         // [rsp+8] at the callee.
@@ -1169,7 +1169,7 @@ pub struct X86_64Codegen
         }
 
         if (m > 0 || pad > 0)
-            self.addRsp(m * 8 + pad);
+            self.addRsp((u64)(m * 8 + pad));
         self.clearHolds();
     }
 
@@ -1239,7 +1239,7 @@ pub struct X86_64Codegen
             if (ew == 0) ew = 8;
             sz = ((ew + 7) / 8) * 8;
         }
-        self.subRsp(sz);
+        self.subRsp((u64)sz);
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         if (self.att) { self.pad(); self.s("lea "); self.opMemBase("rsp"); self.s(", %"); self.s(acc); self.c('\n'); }
@@ -1637,7 +1637,7 @@ pub struct X86_64Codegen
         self.inst1("push", "rbp");
         self.inst2("mov", "rbp", "rsp");
         if (self.frameSize > 0)
-            self.subRsp(self.frameSize);
+            self.subRsp((u64)self.frameSize);
 
         // Ensure block label array
         if (func->nblocks > self.blockLabelsCap)

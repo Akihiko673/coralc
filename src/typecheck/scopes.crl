@@ -491,7 +491,8 @@ bool countFold(ast.Expr* e, u64* out)
             u64 mag = 0;
             bool ln = true;
             u32 fw = 0;
-            if (!types.literalIntInfo(e->text, &mag, &ln, &fw)) return false;
+            bool uns = false;
+            if (!types.literalIntInfo(e->text, &mag, &ln, &fw, &uns)) return false;
             if (ln)
             {
                 // negative literal written as -N uses EX_UNARY; treat bare as positive

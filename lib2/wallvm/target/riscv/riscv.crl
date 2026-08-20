@@ -128,7 +128,7 @@ pub struct RiscvCodegen
             }
             return;
         }
-        self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u(self.slot(v)); self.s("(s0)\n");
+        self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u((u64)self.slot(v)); self.s("(s0)\n");
     }
 
     void loadArith(ir_types.IrValue* v, const char* r)
@@ -141,7 +141,7 @@ pub struct RiscvCodegen
     void store(ir_types.IrValue* v, const char* r)
     {
         if (!v) return;
-        self.pad(); self.s("sd "); self.s(r); self.s(", "); self.u(self.slot(v)); self.s("(s0)\n");
+        self.pad(); self.s("sd "); self.s(r); self.s(", "); self.u((u64)self.slot(v)); self.s("(s0)\n");
     }
 
     u32 resolveBlock(ir_types.IrValue* bv)
@@ -257,13 +257,13 @@ pub struct RiscvCodegen
         ir_types.IrValue* res = &inst->base;
         ir_opcodes.IrFCmpPred p = inst->fcmpPred;
         bool isDouble = lhs && lhs->type && lhs->type->width == 64;
-        const char* ld = isDouble ? "fld" : "flw";
-        const char* cmp = isDouble ? "flt.d" : "flt.s";
+        const char* ld = (const char*)(isDouble ? "fld" : "flw");
+        const char* cmp = (const char*)(isDouble ? "flt.d" : "flt.s");
         if (lhs && self.isConst(lhs)) { self.load(lhs, "a0"); self.inst1("fmv.d.x", "fa0, a0"); }
-        else if (lhs) { self.pad(); self.s(ld); self.s(" fa0, "); self.u(self.slot(lhs)); self.s("(s0)\n"); }
+        else if (lhs) { self.pad(); self.s(ld); self.s(" fa0, "); self.u((u64)self.slot(lhs)); self.s("(s0)\n"); }
         else self.inst0("fmv.d.x fa0, zero");
         if (rhs && self.isConst(rhs)) { self.load(rhs, "a0"); self.inst1("fmv.d.x", "fa1, a0"); }
-        else if (rhs) { self.pad(); self.s(ld); self.s(" fa1, "); self.u(self.slot(rhs)); self.s("(s0)\n"); }
+        else if (rhs) { self.pad(); self.s(ld); self.s(" fa1, "); self.u((u64)self.slot(rhs)); self.s("(s0)\n"); }
         else self.inst0("fmv.d.x fa1, zero");
         self.inst3(cmp, "a0", "fa0", "fa1");
         switch (p)
@@ -344,7 +344,7 @@ pub struct RiscvCodegen
             if (ew == 0) ew = 8;
             sz = ((ew + 15) / 16) * 16;
         }
-        self.pad(); self.s("addi sp, sp, -"); self.u(sz); self.c('\n');
+        self.pad(); self.s("addi sp, sp, -"); self.u((u64)sz); self.c('\n');
         self.inst3("addi", "a0", "sp", "0");
         self.store(res, "a0");
     }
@@ -408,31 +408,31 @@ pub struct RiscvCodegen
         case ir_opcodes.IrOpcode::FpTrunc:
         case ir_opcodes.IrOpcode::FpExt:
         {
-            const char* cvt = inst->opcode == ir_opcodes.IrOpcode::FpTrunc ? "fcvt.s.d" : "fcvt.d.s";
-            self.pad(); self.s("fld fa0, "); self.u(self.slot(src)); self.s("(s0)\n");
+            const char* cvt = (const char*)(inst->opcode == ir_opcodes.IrOpcode::FpTrunc ? "fcvt.s.d" : "fcvt.d.s");
+            self.pad(); self.s("fld fa0, "); self.u((u64)self.slot(src)); self.s("(s0)\n");
             self.inst0(cvt);
-            self.pad(); self.s("fsd fa0, "); self.u(self.slot(res)); self.s("(s0)\n");
+            self.pad(); self.s("fsd fa0, "); self.u((u64)self.slot(res)); self.s("(s0)\n");
             break;
         }
         case ir_opcodes.IrOpcode::FpToSi:
         case ir_opcodes.IrOpcode::FpToUi:
         {
-            const char* cvt = dw == 64 ? "fcvt.l.d" : "fcvt.w.d";
+            const char* cvt = (const char*)(dw == 64 ? "fcvt.l.d" : "fcvt.w.d");
             if (inst->opcode == ir_opcodes.IrOpcode::FpToUi)
                 cvt = dw == 64 ? "fcvt.lu.d" : "fcvt.wu.d";
-            self.pad(); self.s("fld fa0, "); self.u(self.slot(src)); self.s("(s0)\n");
+            self.pad(); self.s("fld fa0, "); self.u((u64)self.slot(src)); self.s("(s0)\n");
             self.inst1(cvt, "a0, fa0");
             self.store(res, "a0"); break;
         }
         case ir_opcodes.IrOpcode::SiToFp:
         case ir_opcodes.IrOpcode::UiToFp:
         {
-            const char* cvt = dw == 64 ? "fcvt.d.l" : "fcvt.d.w";
+            const char* cvt = (const char*)(dw == 64 ? "fcvt.d.l" : "fcvt.d.w");
             if (inst->opcode == ir_opcodes.IrOpcode::UiToFp)
                 cvt = dw == 64 ? "fcvt.d.lu" : "fcvt.d.wu";
             self.load(src, "a0");
             self.inst1(cvt, "fa0, a0");
-            self.pad(); self.s("fsd fa0, "); self.u(self.slot(res)); self.s("(s0)\n");
+            self.pad(); self.s("fsd fa0, "); self.u((u64)self.slot(res)); self.s("(s0)\n");
             break;
         }
         case ir_opcodes.IrOpcode::Bitcast:
@@ -568,16 +568,16 @@ pub struct RiscvCodegen
         ir_types.IrValue* c = inst->nops > 2 ? inst->ops[2] : null;
         ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
-        const char* ld = isDouble ? "fld" : "flw";
-        if (a) { self.pad(); self.s(ld); self.s(" fa0, "); self.u(self.slot(a)); self.s("(s0)\n"); }
+        const char* ld = (const char*)(isDouble ? "fld" : "flw");
+        if (a) { self.pad(); self.s(ld); self.s(" fa0, "); self.u((u64)self.slot(a)); self.s("(s0)\n"); }
         else self.inst0("fmv.d.x fa0, zero");
-        if (b) { self.pad(); self.s(ld); self.s(" fa1, "); self.u(self.slot(b)); self.s("(s0)\n"); }
+        if (b) { self.pad(); self.s(ld); self.s(" fa1, "); self.u((u64)self.slot(b)); self.s("(s0)\n"); }
         else self.inst0("fmv.d.x fa1, zero");
-        if (c) { self.pad(); self.s(ld); self.s(" fa2, "); self.u(self.slot(c)); self.s("(s0)\n"); }
+        if (c) { self.pad(); self.s(ld); self.s(" fa2, "); self.u((u64)self.slot(c)); self.s("(s0)\n"); }
         else self.inst0("fmv.d.x fa2, zero");
         self.inst0(isDouble ? "fmadd.d fa0, fa0, fa1, fa2" : "fmadd.s fa0, fa0, fa1, fa2");
-        const char* sd = isDouble ? "fsd" : "fsw";
-        self.pad(); self.s(sd); self.s(" fa0, "); self.u(self.slot(res)); self.s("(s0)\n");
+        const char* sd = (const char*)(isDouble ? "fsd" : "fsw");
+        self.pad(); self.s(sd); self.s(" fa0, "); self.u((u64)self.slot(res)); self.s("(s0)\n");
     }
 
     void emitFAbs(ir_types.IrInst* inst)
@@ -585,11 +585,11 @@ pub struct RiscvCodegen
         ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
         ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
-        const char* ld = isDouble ? "fld" : "flw";
-        const char* sd = isDouble ? "fsd" : "fsw";
-        self.pad(); self.s(ld); self.s(" fa0, "); self.u(self.slot(src)); self.s("(s0)\n");
+        const char* ld = (const char*)(isDouble ? "fld" : "flw");
+        const char* sd = (const char*)(isDouble ? "fsd" : "fsw");
+        self.pad(); self.s(ld); self.s(" fa0, "); self.u((u64)self.slot(src)); self.s("(s0)\n");
         self.inst0(isDouble ? "fabs.d fa0, fa0" : "fabs.s fa0, fa0");
-        self.pad(); self.s(sd); self.s(" fa0, "); self.u(self.slot(res)); self.s("(s0)\n");
+        self.pad(); self.s(sd); self.s(" fa0, "); self.u((u64)self.slot(res)); self.s("(s0)\n");
     }
 
     void emitFSqrt(ir_types.IrInst* inst)
@@ -597,11 +597,11 @@ pub struct RiscvCodegen
         ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
         ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
-        const char* ld = isDouble ? "fld" : "flw";
-        const char* sd = isDouble ? "fsd" : "fsw";
-        self.pad(); self.s(ld); self.s(" fa0, "); self.u(self.slot(src)); self.s("(s0)\n");
+        const char* ld = (const char*)(isDouble ? "fld" : "flw");
+        const char* sd = (const char*)(isDouble ? "fsd" : "fsw");
+        self.pad(); self.s(ld); self.s(" fa0, "); self.u((u64)self.slot(src)); self.s("(s0)\n");
         self.inst0(isDouble ? "fsqrt.d fa0, fa0" : "fsqrt.s fa0, fa0");
-        self.pad(); self.s(sd); self.s(" fa0, "); self.u(self.slot(res)); self.s("(s0)\n");
+        self.pad(); self.s(sd); self.s(" fa0, "); self.u((u64)self.slot(res)); self.s("(s0)\n");
     }
 
     bool genFunc(ir_types.IrFunc* func)
@@ -642,10 +642,10 @@ pub struct RiscvCodegen
 
         u32 alloc = ((self.frameSize + 15) / 16) * 16;
         u32 frame = alloc + 32;
-        self.pad(); self.s("addi sp, sp, -"); self.u(frame); self.c('\n');
-        self.pad(); self.s("sd ra, "); self.u(frame - 8); self.s("(sp)\n");
-        self.pad(); self.s("sd s0, "); self.u(frame - 16); self.s("(sp)\n");
-        self.pad(); self.s("addi s0, sp, "); self.u(frame); self.c('\n');
+        self.pad(); self.s("addi sp, sp, -"); self.u((u64)frame); self.c('\n');
+        self.pad(); self.s("sd ra, "); self.u((u64)(frame - 8)); self.s("(sp)\n");
+        self.pad(); self.s("sd s0, "); self.u((u64)(frame - 16)); self.s("(sp)\n");
+        self.pad(); self.s("addi s0, sp, "); self.u((u64)frame); self.c('\n');
 
         if (func->nblocks > self.blockLabelsCap)
         {
@@ -667,7 +667,7 @@ pub struct RiscvCodegen
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+            self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
@@ -683,7 +683,7 @@ pub struct RiscvCodegen
                         self.emitPhiEdges(blk, tgt);
                         u32 tbi = self.resolveBlock(tgt);
                         if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                        { self.s("    j .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+{ self.s("    j .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     }
                     break;
                 }
@@ -698,9 +698,9 @@ pub struct RiscvCodegen
                     self.emitPhiEdges(blk, ev);
                     self.loadArith(cond, "a0");
                     if (ebi != ~0u && self.blockLabels[ebi] != ~0u)
-                    { self.s("    beqz a0, .LBB"); self.u(self.blockLabels[ebi]); self.c('\n'); }
+                    { self.s("    beqz a0, .LBB"); self.u((u64)self.blockLabels[ebi]); self.c('\n'); }
                     if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                    { self.s("    j .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                    { self.s("    j .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     break;
                 }
                 case ir_opcodes.IrOpcode::Ret:
@@ -711,7 +711,7 @@ pub struct RiscvCodegen
                     {
                         if (rt->kind == ir_types.IrTypeKind::Float)
                         {
-                            self.pad(); self.s("fld fa0, "); self.u(self.slot(rv)); self.s("(s0)\n");
+                            self.pad(); self.s("fld fa0, "); self.u((u64)self.slot(rv)); self.s("(s0)\n");
                         }
                         else
                             self.load(rv, "a0");
@@ -719,7 +719,7 @@ pub struct RiscvCodegen
                     self.inst0("addi sp, s0, 0");
                     self.pad(); self.s("ld ra, -8(sp)\n");
                     self.pad(); self.s("ld s0, -16(sp)\n");
-                    self.pad(); self.s("addi sp, sp, "); self.u(frame); self.c('\n');
+                    self.pad(); self.s("addi sp, sp, "); self.u((u64)frame); self.c('\n');
                     self.inst0("ret");
                     break;
                 }
@@ -797,7 +797,7 @@ pub struct RiscvCodegen
         self.inst0("addi sp, s0, 0");
         self.pad(); self.s("ld ra, -8(sp)\n");
         self.pad(); self.s("ld s0, -16(sp)\n");
-        self.pad(); self.s("addi sp, sp, "); self.u(frame); self.c('\n');
+        self.pad(); self.s("addi sp, sp, "); self.u((u64)frame); self.c('\n');
         self.inst0("ret");
         return true;
     }
