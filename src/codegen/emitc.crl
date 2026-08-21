@@ -8,6 +8,17 @@ mod libc = import("std/platform/libc.crl");
 // emitc.crl: declarative-only C header (src/gen/c/reason.txt). Bodies are never
 // emitted. Generic declarations are skipped (no instantiation info here).
 
+static void pushQualName(str.String* out, str.strView name)
+{
+    // Coral type references may be module-qualified (e.g. `str.strView`).
+    // In a C header we emit only the final segment as the type name.
+    u32 dot = (u32)-1;
+    for (u32 i = 0; i < name.len; i++)
+        if (name.ptr[i] == '.') dot = i;
+    if (dot != (u32)-1) out.pushView(str.strView::fromParts(name.ptr + dot + 1, name.len - dot - 1));
+    else out.pushView(name);
+}
+
 static void pushType(str.String* out, types.CType* ct)
 {
     if (ct == null) { out.pushCstr("void"); return; }
@@ -36,9 +47,7 @@ static void pushType(str.String* out, types.CType* ct)
         if (ct->kind == types.TY_ARRAY && ct->countKnown)
         {
             out.pushCstr("[");
-            char num[24];
-            i32 n = libc.snprintf((u8*)num, 24, "%llu", (unsigned long long)ct->count);
-            if (n > 0) out.pushView(str.strView::fromParts(num, (u32)n));
+            pushU64(out, ct->count);
             out.pushCstr("]");
         }
         else
@@ -58,23 +67,100 @@ static void pushType(str.String* out, types.CType* ct)
         out.pushCstr(")");
         return;
     case types.TY_NAMED:
-        if (ct->name.len > 0) out.pushView(ct->name);
+        if (ct->name.len > 0) pushQualName(out, ct->name);
         else out.pushCstr("void");
         return;
     default:
-        if (ct->name.len > 0) out.pushView(ct->name);
+        if (ct->name.len > 0) pushQualName(out, ct->name);
         else out.pushCstr("void");
         return;
     }
 }
 
-static types.CType* resolve(check.Check* ck, ast.TypeExpr* te)
+static types.CType* resolve(scopes.Scope* top, scopes.ModuleTable* mods, ast.TypeExpr* te)
 {
     if (te == null) return null;
-    return scopes.resolveTypeExpr(te, ck->top, ck->mods, null, 0);
+    return scopes.resolveTypeExpr(te, top, mods, null, 0);
 }
 
-pub void emitH(check.Check* ck, str.strView path, bool debug)
+// Emit the "head" portion of a type (everything to the left of the declarator),
+// e.g. for a function-pointer return type `void (*)(...)` we want "void" or "int*".
+static void emitTypeHead(str.String* out, types.CType* ct)
+{
+    switch (ct->kind)
+    {
+    case types.TY_FUNC: emitTypeHead(out, ct->ret); return;
+    case types.TY_PTR: emitTypeHead(out, ct->elem); out.pushCstr("*"); return;
+    case types.TY_ARRAY:
+    case types.TY_SLICE: emitTypeHead(out, ct->elem); return;
+    default: pushType(out, ct); return;
+    }
+}
+
+// Emit a C declaration with `name` as the declarator, correctly placing the name
+// inside function-pointer parentheses:  ret (*name(outerParams))(innerParams)
+// When hasOuter is false, outerParams are ignored (used for typedefs / vars).
+static void emitCDecl(str.String* out, scopes.Scope* top, scopes.ModuleTable* mods,
+                      types.CType* retCt, str.strView name,
+                      bool hasOuter, ast.Param* outerParams, u32 outerN, bool outerVar)
+{
+    if (retCt != null && retCt->kind == types.TY_FUNC)
+    {
+        emitTypeHead(out, retCt->ret);
+        out.pushCstr(" (*");
+        out.pushView(name);
+        if (hasOuter)
+        {
+            out.pushCstr("(");
+            for (u32 p = 0; p < outerN; p++)
+            {
+                if (p) out.pushCstr(", ");
+                types.CType* pt = resolve(top, mods, outerParams[p].type);
+                pushType(out, pt);
+                if (outerParams[p].name.len > 0) { out.pushCstr(" "); out.pushView(outerParams[p].name); }
+            }
+            if (outerVar) out.pushCstr(outerN ? ", ..." : "...");
+            out.pushCstr(")");
+        }
+        out.pushCstr(")");
+        out.pushCstr("(");
+        for (u32 i = 0; i < retCt->nparams; i++)
+        {
+            if (i) out.pushCstr(", ");
+            pushType(out, retCt->params[i]);
+        }
+        if (retCt->variadic) out.pushCstr(retCt->nparams ? ", ..." : "...");
+        out.pushCstr(")");
+    }
+    else
+    {
+        pushType(out, retCt);
+        if (name.len > 0) { out.pushCstr(" "); out.pushView(name); }
+        if (hasOuter)
+        {
+            out.pushCstr("(");
+            for (u32 p = 0; p < outerN; p++)
+            {
+                if (p) out.pushCstr(", ");
+                types.CType* pt = resolve(top, mods, outerParams[p].type);
+                pushType(out, pt);
+                if (outerParams[p].name.len > 0) { out.pushCstr(" "); out.pushView(outerParams[p].name); }
+            }
+            if (outerVar) out.pushCstr(outerN ? ", ..." : "...");
+            out.pushCstr(")");
+        }
+    }
+}
+
+static void pushU64(str.String* out, u64 v)
+{
+    if (v == 0) { out.pushCstr("0"); return; }
+    char buf[24]; u32 i = 0;
+    while (v > 0) { buf[i++] = (char)('0' + (char)(v % 10)); v = v / 10; }
+    while (i > 0) { out.pushChar(buf[--i]); }
+}
+
+pub void emitH(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, bool debug)
 {
     str.String out = str.String::new();
     out.pushCstr("/* Coral C header (declarations only) for: ");
@@ -83,9 +169,9 @@ pub void emitH(check.Check* ck, str.strView path, bool debug)
     out.pushCstr("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n");
     if (debug) out.pushCstr("/* debug build */\n\n");
 
-    for (u32 i = 0; i < ck->prog->ndecls; i++)
+    for (u32 i = 0; i < prog->ndecls; i++)
     {
-        ast.Decl* d = ck->prog->decls[i];
+        ast.Decl* d = prog->decls[i];
         if (d == null) continue;
         if (d->ngenerics > 0) continue;
         switch (d->kind)
@@ -93,57 +179,36 @@ pub void emitH(check.Check* ck, str.strView path, bool debug)
         case ast.DT_CONST:
         case ast.DT_VAR:
         {
-            types.CType* ct = resolve(ck, d->type);
-            out.pushCstr("extern ");
-            pushType(&out, ct);
-            out.pushCstr(" ");
-            out.pushView(d->name);
-            out.pushCstr(";\n");
+            types.CType* ct = resolve(top, mods, d->type);
+            if (d->value == null)
+            {
+                // `pub <type> <name>;` with no initializer is a type alias
+                // (function-pointer aliases and `pub i64 GInt;`-style aliases alike)
+                out.pushCstr("typedef ");
+                emitCDecl(&out, top, mods, ct, d->name, false, null, 0, false);
+                out.pushCstr(";\n");
+            }
+            else
+            {
+                out.pushCstr("extern ");
+                emitCDecl(&out, top, mods, ct, d->name, false, null, 0, false);
+                out.pushCstr(";\n");
+            }
             break;
         }
         case ast.DT_FUNC:
         {
-            types.CType* ret = resolve(ck, d->type);
-            pushType(&out, ret);
-            out.pushCstr(" ");
-            out.pushView(d->name);
-            out.pushCstr("(");
-            for (u32 p = 0; p < d->nparams; p++)
-            {
-                if (p) out.pushCstr(", ");
-                types.CType* pt = resolve(ck, d->params[p].type);
-                pushType(&out, pt);
-                if (d->params[p].name.len > 0)
-                {
-                    out.pushCstr(" ");
-                    out.pushView(d->params[p].name);
-                }
-            }
-            if (d->variadic) out.pushCstr(d->nparams ? ", ..." : "...");
-            out.pushCstr(");\n");
+            types.CType* ret = resolve(top, mods, d->type);
+            emitCDecl(&out, top, mods, ret, d->name, true, d->params, d->nparams, d->variadic);
+            out.pushCstr(";\n");
             break;
         }
         case ast.DT_EXTERN:
         {
-            types.CType* ret = resolve(ck, d->type);
+            types.CType* ret = resolve(top, mods, d->type);
             out.pushCstr("extern ");
-            pushType(&out, ret);
-            out.pushCstr(" ");
-            out.pushView(d->name);
-            out.pushCstr("(");
-            for (u32 p = 0; p < d->nparams; p++)
-            {
-                if (p) out.pushCstr(", ");
-                types.CType* pt = resolve(ck, d->params[p].type);
-                pushType(&out, pt);
-                if (d->params[p].name.len > 0)
-                {
-                    out.pushCstr(" ");
-                    out.pushView(d->params[p].name);
-                }
-            }
-            if (d->variadic) out.pushCstr(d->nparams ? ", ..." : "...");
-            out.pushCstr(");\n");
+            emitCDecl(&out, top, mods, ret, d->name, true, d->params, d->nparams, d->variadic);
+            out.pushCstr(";\n");
             break;
         }
         case ast.DT_STRUCT:
@@ -153,7 +218,7 @@ pub void emitH(check.Check* ck, str.strView path, bool debug)
             out.pushCstr(" {\n");
             for (u32 f = 0; f < d->nfields; f++)
             {
-                types.CType* ft = resolve(ck, d->fields[f].type);
+                types.CType* ft = resolve(top, mods, d->fields[f].type);
                 out.pushCstr("    ");
                 pushType(&out, ft);
                 out.pushCstr(" ");
@@ -182,7 +247,7 @@ pub void emitH(check.Check* ck, str.strView path, bool debug)
         case ast.DT_TYPEDEF:
         case ast.DT_DISTINCT:
         {
-            types.CType* ut = resolve(ck, d->type);
+            types.CType* ut = resolve(top, mods, d->type);
             out.pushCstr("typedef ");
             pushType(&out, ut);
             out.pushCstr(" ");
@@ -195,7 +260,29 @@ pub void emitH(check.Check* ck, str.strView path, bool debug)
         }
     }
 
-    const char* s = out.asCstr();
-    libc.write(1, (const u8*)s, out.len);
+    // write the header to a sibling .h file (input name with extension -> .h)
+    str.String opath = str.String::new();
+    u32 lastDot = 0; bool dot = false;
+    for (u32 k = 0; k < path.len; k++)
+        if (path.ptr[k] == (u8)'.') { lastDot = k; dot = true; }
+    if (dot) opath.pushView(str.strView::fromParts(path.ptr, lastDot));
+    else opath.pushView(path);
+    opath.pushCstr(".h");
+
+    void* f = libc.fopen(opath.asCstr(), (const u8*)"wb");
+    if (f != null)
+    {
+        libc.fwrite(out.asU8(), 1, out.len, f);
+        libc.fclose(f);
+        const char* msg = "wrote ";
+        libc.write(1, (const u8*)msg, 6);
+        libc.write(1, (const u8*)opath.asCstr(), opath.len);
+        libc.write(1, (const u8*)"\n", 1);
+    }
+    else
+    {
+        libc.write(2, (const u8*)"coral: cannot open output header for writing\n", 44);
+    }
+    opath.free();
     out.free();
 }

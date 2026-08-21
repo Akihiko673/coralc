@@ -14,8 +14,9 @@ mod types = import("typecheck/types.crl");
 mod scopes = import("typecheck/scopes.crl");
 mod expr = import("typecheck/expr.crl");
 mod loader = import("typecheck/loader.crl");
-mod mono = import("mono/mono.crl");
-mod ceval = import("ceval.crl");
+ mod mono = import("mono/mono.crl");
+ mod ceval = import("mono/ceval.crl");
+ mod codegen = import("codegen/emit.crl");
 
 pub struct Check
 {
@@ -34,6 +35,9 @@ pub struct Check
 
     scopes.Scope* top;       // set during run(); used by codegen (emit)
     scopes.ModuleTable* mods;
+    u32 emitMode;             // 0=none 1=h 2=ir 3=asm (set by driver)
+    u32 optLevel;             // -O0..-O3
+    bool debugBuild;
 
     static Check new(ast.Program* prog, str.strView src, str.strView filename, char* exeDir)
     {
@@ -48,6 +52,9 @@ pub struct Check
         c.nerrors = 0;
         c.nwarnings = 0;
         c.nflags = 0;
+        c.emitMode = 0;
+        c.optLevel = 1;
+        c.debugBuild = false;
         return c;
     }
 
@@ -402,6 +409,12 @@ pub struct Check
         // discovered during body typing. Each generic Decl is re-typechecked
         // with its parameters bound to the concrete types (see mono/mono.crl).
         mono.run(&t3, top, mods, ld);
+
+        // codegen dispatch (emit targets). Runs while the scope/mods are still
+        // alive: resolveTypeExpr needs them, and run() frees `top` below.
+        if (self.emitMode == 1) codegen.emitH(self.prog, top, mods, self.filename, self.debugBuild);
+        else if (self.emitMode == 2) codegen.emitIR(self.prog, top, mods, self.filename, self.optLevel, self.debugBuild);
+        else if (self.emitMode == 3) codegen.emitAsm(self.prog, top, mods, self.filename, self.optLevel, self.debugBuild);
 
         scopes.scopeFree(top);
     }

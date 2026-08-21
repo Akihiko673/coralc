@@ -1284,21 +1284,21 @@ bool comptimeTypeEq(types.CType* a, types.CType* b)
 }
 
 // Parse an integer literal's raw text (decimal/hex, ignoring any suffix) to i64.
-bool litToInt(str.strView s, i64* out)
+bool litToInt(str.strView sv, i64* out)
 {
-    if (s.len == 0) return false;
+    if (sv.len == 0) return false;
     u32 i = 0;
     bool neg = false;
-    if (s.ptr[0] == (u8)'-') { neg = true; i = 1; }
+    if (sv.ptr[0] == (u8)'-') { neg = true; i = 1; }
     i64 v = 0;
     bool hex = false;
-    if (i + 1 < s.len && s.ptr[i] == (u8)'0' && (s.ptr[i+1] == (u8)'x' || s.ptr[i+1] == (u8)'X'))
+    if (i + 1 < sv.len && sv.ptr[i] == (u8)'0' && (sv.ptr[i+1] == (u8)'x' || sv.ptr[i+1] == (u8)'X'))
     {
         hex = true; i += 2;
     }
-    for (; i < s.len; i++)
+    for (; i < sv.len; i++)
     {
-        u8 c = s.ptr[i];
+        u8 c = sv.ptr[i];
         if (c >= (u8)'0' && c <= (u8)'9')
             v = v * (hex ? 16 : 10) + (i64)(c - (u8)'0');
         else if (hex && c >= (u8)'a' && c <= (u8)'f')

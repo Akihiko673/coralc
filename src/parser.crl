@@ -3098,6 +3098,15 @@ pub struct Parser
                 self.rewind(saved);
                 return self.parseTypeFirstDecl(exported, false, false);
             }
+            if (self.check(tok.T_SEMI) && typeAnno != null && typeAnno->kind == ast.TYP_FUNC)
+            {
+                // function-pointer type alias with a const-qualified return
+                // type, e.g. `pub const PropertyInfo*(ClassInstance, u32*) Name;`
+                // — route through the type-first decl path (forward function
+                // declaration), not a const-with-initializer.
+                self.rewind(saved);
+                return self.parseTypeFirstDecl(exported, false, false);
+            }
             if (self.check(tok.T_LBRACKET))
             {
                 self.advance();
@@ -3175,6 +3184,32 @@ pub struct Parser
             self.skipSemicolons();
             if (self.check(tok.T_RBRACE) || self.check(tok.TOK_EOF)) break;
             if (self.stallTickTag("struct")) break;
+            // nested type declarations inside a struct body: enum / struct /
+            // typedef / distinct / trait / flag. Parsed as members of the
+            // struct so `pub struct S { pub enum E { ... } }` is valid Coral.
+            {
+                bool nestedPub = self.check(tok.T_PUB);
+                u32 nkw = nestedPub ? self.peekTok(1)->id : self.peekTok(0)->id;
+                if (nkw == tok.T_ENUM || nkw == tok.T_STRUCT || nkw == tok.T_TYPEDEF
+                    || nkw == tok.T_DISTINCT || nkw == tok.T_TRAIT || nkw == tok.T_FLAG)
+                {
+                    if (nestedPub) self.advance();
+                    ast.Decl* nested = null;
+                    if (nkw == tok.T_ENUM) nested = self.parseEnumDecl(nestedPub ? true : exported);
+                    else if (nkw == tok.T_STRUCT) nested = self.parseStructDecl(nestedPub ? true : exported);
+                    else if (nkw == tok.T_TYPEDEF) nested = self.parseTypedefDecl(nestedPub ? true : exported);
+                    else if (nkw == tok.T_DISTINCT) nested = self.parseDistinctDecl(nestedPub ? true : exported);
+                    else if (nkw == tok.T_TRAIT) nested = self.parseTraitDecl(nestedPub ? true : exported);
+                    else if (nkw == tok.T_FLAG) nested = self.parseFlagDecl(nestedPub ? true : exported);
+                    if (nested != null)
+                    {
+                        self.growD(&methods, &nm, &mcap);
+                        methods[nm++] = nested;
+                    }
+                    self.skipSemicolons();
+                    continue;
+                }
+            }
             bool attrMethod = self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET;
             if (attrMethod)
             {

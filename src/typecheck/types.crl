@@ -591,6 +591,30 @@ bool constIntExpr(ast.Expr* e, u64* mag, bool* neg)
     return false;
 }
 
+// Constant-evaluation of pure float-literal expression trees: true when `e` is
+// literal-only floating arithmetic (unary +/-, binary ops, parens, float
+// literals). A bare float literal has no fixed width until it reaches a
+// context (like integer literals); this lets `f32 x = -1.0;` type by adopting
+// the target float type instead of pinning literals to f64 first.
+bool constFloatExpr(ast.Expr* e)
+{
+    if (e == null) return false;
+    if (e->kind == ast.EX_PAREN) return constFloatExpr(e->a);
+    if (e->kind == ast.EX_FLOAT) return true;
+    if (e->kind == ast.EX_UNARY && (teq(e->text, "-") || teq(e->text, "+")))
+        return constFloatExpr(e->a);
+    if (e->kind == ast.EX_BINARY)
+    {
+        str.strView op = e->text;
+        if (teq(op, "==") || teq(op, "!=") || teq(op, "<") || teq(op, "<=")
+            || teq(op, ">") || teq(op, ">=") || teq(op, "&&") || teq(op, "||"))
+            return false;
+        // a float operand makes the whole expression float
+        return constFloatExpr(e->a) || constFloatExpr(e->b);
+    }
+    return false;
+}
+
 // assignable(t, e): does the constant expression e adopt type t? Used where
 // a value flows into a typed context (var init, assign, return, params, ...)
 bool constFitsExpr(ast.Expr* e, CType* t)
@@ -598,7 +622,9 @@ bool constFitsExpr(ast.Expr* e, CType* t)
     if (e == null || t == null) return false;
     u64 mag = 0;
     bool neg = false;
-    return constIntExpr(e, &mag, &neg) && constFits(t, mag, neg);
+    if (constIntExpr(e, &mag, &neg) && constFits(t, mag, neg)) return true;
+    if (constFloatExpr(e)) return t->kind == TY_FLOAT;
+    return false;
 }
 
 // Does a constant (mag, neg) fit target as if the constant were written

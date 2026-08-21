@@ -1,23 +1,26 @@
-mod c = import("emitc");
-mod ir = import("emitir");
-mod s = import("emits");
+mod ast = import("ast/ast.crl");
+mod scopes = import("typecheck/scopes.crl");
+mod str = import("std/text/string.crl");
+mod emitc = import("emitc");
+mod emitir = import("emitir");
+mod emits = import("emits");
 
 // emit.crl: codegen dispatch. Each target lives in its own module:
 //   emitc.crl  - C header (declarations only)
 //   emitir.crl - WallVM IR
 //   emits.crl  - native assembly
 
-pub void emitH(check.Check* ck, str.strView path, bool debug)
+pub void emitH(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, bool debug)
 {
-    c.emitH(ck, path, debug);
+    emitc.emitH(prog, top, mods, path, debug);
 }
 
-pub void emitIR(check.Check* ck, str.strView path, u32 optLevel, bool debug)
+pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
 {
-    ir.emitIR(ck, path, optLevel, debug);
+    emitir.emitIR(prog, top, mods, path, optLevel, debug);
 }
 
-pub void emitAsm(check.Check* ck, str.strView path, u32 optLevel, bool debug)
+pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
 {
-    s.emitAsm(ck, path, optLevel, debug);
+    emits.emitAsm(prog, top, mods, path, optLevel, debug);
 }

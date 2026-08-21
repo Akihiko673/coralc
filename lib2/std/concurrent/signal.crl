@@ -34,10 +34,11 @@ pub const i32 SIGXFSZ = 25;
 // SIG_DFL/SIG_IGN are special pointer values, not integers.
 // On posix, SIG_DFL = (void (*)(int))0, SIG_IGN = (void (*)(int))1.
 // these are passed as raw u64 and cast to function pointer.
-pub const u64 SIG_DFL = 0;
-pub const u64 SIG_IGN = 1;
 
-pub typedef SigHandler = void(i32);
+pub constexpr u64 SIG_DFL = 0;
+pub constexpr u64 SIG_IGN = 1;
+
+pub void(i32) SigHandler;
 
 pub void(i32) handle(i32 sig, SigHandler* handler)
 {

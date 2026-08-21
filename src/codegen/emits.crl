@@ -1,8 +1,36 @@
 mod libc = import("std/platform/libc.crl");
+mod ast = import("ast/ast.crl");
+mod scopes = import("typecheck/scopes.crl");
+mod str = import("std/text/string.crl");
 
-// emits.crl: native assembly emission (not yet implemented).
+// emits.crl: native assembly emission (not yet implemented). Writes a
+// placeholder to the sibling .s file. Real lowering uses lib/wallvm's
+// irCompile/irCompileAsm once the Coral->IR pass lands.
 
-pub void emitAsm(check.Check* ck, str.strView path, u32 optLevel, bool debug)
+pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
 {
-    libc.write(2, (const u8*)"coral: --emit-asm: assembly emission not yet implemented\n", 58);
+    str.String opath = str.String::new();
+    u32 lastDot = 0; bool dot = false;
+    for (u32 k = 0; k < path.len; k++)
+        if (path.ptr[k] == (u8)'.') { lastDot = k; dot = true; }
+    if (dot) opath.pushView(str.strView::fromParts(path.ptr, lastDot));
+    else opath.pushView(path);
+    opath.pushCstr(".s");
+
+    void* f = libc.fopen(opath.asCstr(), (const u8*)"wb");
+    if (f != null)
+    {
+        const char* msg = "; assembly emission not yet implemented (coralc)\n";
+        u32 n = 0; while (msg[n]) n++;
+        libc.fwrite((const u8*)msg, 1, n, f);
+        libc.fclose(f);
+        libc.write(1, (const u8*)"wrote ", 6);
+        libc.write(1, (const u8*)opath.asCstr(), opath.len);
+        libc.write(1, (const u8*)"\n", 1);
+    }
+    else
+    {
+        libc.write(2, (const u8*)"coral: cannot open output .s for writing\n", 41);
+    }
+    opath.free();
 }

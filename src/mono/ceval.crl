@@ -91,11 +91,11 @@ bool strEqSV(str.strView a, str.strView b)
     return true;
 }
 
-str.strView stripQuotes(str.strView s)
+str.strView stripQuotes(str.strView sv)
 {
-    if (s.len >= 2 && s.ptr[0] == (u8)'"' && s.ptr[s.len - 1] == (u8)'"')
-        return str.strView::fromParts(s.ptr + 1, s.len - 2);
-    return s;
+    if (sv.len >= 2 && sv.ptr[0] == (u8)'"' && sv.ptr[sv.len - 1] == (u8)'"')
+        return str.strView::fromParts(sv.ptr + 1, sv.len - 2);
+    return sv;
 }
 
 // Evaluate `e` to a compile-time constant. Returns true on success.
