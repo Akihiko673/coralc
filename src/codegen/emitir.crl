@@ -18,11 +18,21 @@ struct FuncGen
     ir_builder.IrBuilder* bd;
     scopes.Scope* top;
     scopes.ModuleTable* mods;
+    str.strView filename;
+    str.strView* flagNames;
+    str.strView* flagVals;
+    u32 nflags;
+    bool debug;
     str.strView* localNames;
     ir_types.IrValue** localPtrs;
     u32 nlocals;
     u32 capLocals;
     bool terminated;
+}
+str.strView flagValueEmit(FuncGen* fg, str.strView name)
+{
+    for (u32 i = 0; i < fg.nflags; i++) if (strEq(fg.flagNames[i], name)) return fg.flagVals[i];
+    return str.strView::empty();
 }
 
 bool strEq(str.strView a, str.strView b)
@@ -105,7 +115,80 @@ void addLocal(FuncGen* fg, str.strView name, ir_types.IrValue* ptr)
 }
 
 ir_types.IrValue* asVal(ir_types.IrInst* i) { return &i->base; }
-
+ir_types.IrValue* dbgVal(FuncGen* fg, ast.Expr* e, ir_types.IrInst* inst) { setDbgExpr(fg, inst, e); return asVal(inst); }
+void setDbgExpr(FuncGen* fg, ir_types.IrInst* inst, ast.Expr* e)
+{
+    if (!fg.debug || inst == null || e == null) return;
+    u32 len = 0; while (fg.filename.ptr[len] && len < fg.filename.len) len++;
+    char* copy = mman.alloc<char>(fg.filename.len + 1);
+    for (u32 i = 0; i < fg.filename.len; i++) copy[i] = (char)fg.filename.ptr[i];
+    copy[fg.filename.len] = 0;
+    inst.setDebugLoc(copy, e->line, e->col);
+}
+void setDbgStmt(FuncGen* fg, ir_types.IrInst* inst, ast.Stmt* s)
+{
+    if (!fg.debug || inst == null || s == null) return;
+    char* copy = mman.alloc<char>(fg.filename.len + 1);
+    for (u32 i = 0; i < fg.filename.len; i++) copy[i] = (char)fg.filename.ptr[i];
+    copy[fg.filename.len] = 0;
+    inst.setDebugLoc(copy, s->line, s->col);
+}
+u32 cSize(types.CType* ct, scopes.Scope* top)
+{
+    if (ct == null) return 0;
+    ct = types.effective(ct);
+    if (ct == null) return 0;
+    switch (ct->kind)
+    {
+    case types.TY_VOID: return 0;
+    case types.TY_BOOL: return 1;
+    case types.TY_CHAR: return 1;
+    case types.TY_INT: return ct->width ? (ct->width + 7)/8 : 4;
+    case types.TY_FLOAT: return ct->width ? (ct->width + 7)/8 : 8;
+    case types.TY_PTR: return 8;
+    case types.TY_FUNC: return 8;
+    case types.TY_SLICE: return 16;
+    case types.TY_ARRAY:
+        if (ct->elem == null) return 8;
+        { u32 es = cSize(ct->elem, top); if (ct->countKnown) return es * (u32)ct->count; return es; }
+    case types.TY_NAMED:
+        if (ct->decl != null && ct->decl->kind == ast.DT_STRUCT) return ct->decl->nfields * 8;
+        return 8;
+    default: return 8;
+    }
+}
+u32 cAlign(types.CType* ct, scopes.Scope* top)
+{
+    if (ct == null) return 1;
+    ct = types.effective(ct);
+    if (ct == null) return 1;
+    switch (ct->kind)
+    {
+    case types.TY_VOID: return 1;
+    case types.TY_BOOL: return 1;
+    case types.TY_CHAR: return 1;
+    case types.TY_INT: return ct->width ? (ct->width + 7)/8 : 4;
+    case types.TY_FLOAT: return ct->width ? (ct->width + 7)/8 : 8;
+    case types.TY_PTR: return 8;
+    case types.TY_FUNC: return 8;
+    case types.TY_SLICE: return 8;
+    case types.TY_ARRAY: if (ct->elem) return cAlign(ct->elem, top); return 8;
+    case types.TY_NAMED:
+        if (ct->decl != null && ct->decl->kind == ast.DT_STRUCT)
+        {
+            u32 m = 1;
+            for (u32 i = 0; i < ct->decl->nfields; i++)
+            {
+                types.CType* ft = scopes.resolveTypeExpr(ct->decl->fields[i].type, top, null, null, 0);
+                u32 a = cAlign(ft, top);
+                if (a > m) m = a;
+            }
+            return m;
+        }
+        return 8;
+    default: return 8;
+    }
+}
 u64 parseIntLit(str.strView s)
 {
     u64 v = 0;
@@ -124,8 +207,11 @@ u64 parseIntLit(str.strView s)
 
 ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e);
 
-ir_types.IrValue* genBinary(FuncGen* fg, str.strView op, ast.Expr* a, ast.Expr* b)
+ir_types.IrValue* genBinary(FuncGen* fg, ast.Expr* e)
 {
+    str.strView op = e->text;
+    ast.Expr* a = e->a;
+    ast.Expr* b = e->b;
     if (opEq(op, "="))
     {
         ir_types.IrValue* rv = genExpr(fg, b);
@@ -172,57 +258,65 @@ ir_types.IrValue* genBinary(FuncGen* fg, str.strView op, ast.Expr* a, ast.Expr* 
         else if (opEq(op, ">")) t = fg.bd.fcmp(ir_opcodes.IrFCmpPred::Ogt, l, r);
         else if (opEq(op, ">=")) t = fg.bd.fcmp(ir_opcodes.IrFCmpPred::Oge, l, r);
         else t = fg.bd.fadd(l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
-    if (opEq(op, "+")) { ir_types.IrInst* t = fg.bd.add(l, r); return &t->base; }
-    if (opEq(op, "-")) { ir_types.IrInst* t = fg.bd.sub(l, r); return &t->base; }
-    if (opEq(op, "*")) { ir_types.IrInst* t = fg.bd.mul(l, r); return &t->base; }
+    if (opEq(op, "+")) { ir_types.IrInst* t = fg.bd.add(l, r); setDbgExpr(fg, t, e); return &t->base; }
+    if (opEq(op, "-")) { ir_types.IrInst* t = fg.bd.sub(l, r); setDbgExpr(fg, t, e); return &t->base; }
+    if (opEq(op, "*")) { ir_types.IrInst* t = fg.bd.mul(l, r); setDbgExpr(fg, t, e); return &t->base; }
     if (opEq(op, "/"))
     {
         bool uns = (lt && lt->kind == types.TY_INT && !lt->isSigned) || (rt && rt->kind == types.TY_INT && !rt->isSigned);
         ir_types.IrInst* t = uns ? fg.bd.udiv(l, r) : fg.bd.sdiv(l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     if (opEq(op, "%"))
     {
         bool uns = (lt && lt->kind == types.TY_INT && !lt->isSigned) || (rt && rt->kind == types.TY_INT && !rt->isSigned);
         ir_types.IrInst* t = uns ? fg.bd.urem(l, r) : fg.bd.srem(l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
-    if (opEq(op, "&")) { ir_types.IrInst* t = fg.bd.andOp(l, r); return &t->base; }
-    if (opEq(op, "|")) { ir_types.IrInst* t = fg.bd.orOp(l, r); return &t->base; }
-    if (opEq(op, "^")) { ir_types.IrInst* t = fg.bd.xorOp(l, r); return &t->base; }
-    if (opEq(op, "<<")) { ir_types.IrInst* t = fg.bd.shl(l, r); return &t->base; }
+    if (opEq(op, "&")) { ir_types.IrInst* t = fg.bd.andOp(l, r); setDbgExpr(fg, t, e); return &t->base; }
+    if (opEq(op, "|")) { ir_types.IrInst* t = fg.bd.orOp(l, r); setDbgExpr(fg, t, e); return &t->base; }
+    if (opEq(op, "^")) { ir_types.IrInst* t = fg.bd.xorOp(l, r); setDbgExpr(fg, t, e); return &t->base; }
+    if (opEq(op, "<<")) { ir_types.IrInst* t = fg.bd.shl(l, r); setDbgExpr(fg, t, e); return &t->base; }
     if (opEq(op, ">>"))
     {
         bool uns = lt && lt->kind == types.TY_INT && !lt->isSigned;
         ir_types.IrInst* t = uns ? fg.bd.lshr(l, r) : fg.bd.ashr(l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
-    if (opEq(op, "==")) { ir_types.IrInst* t = fg.bd.icmp(ir_opcodes.IrICmpPred::Eq, l, r); return &t->base; }
-    if (opEq(op, "!=")) { ir_types.IrInst* t = fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, l, r); return &t->base; }
+    if (opEq(op, "==")) { ir_types.IrInst* t = fg.bd.icmp(ir_opcodes.IrICmpPred::Eq, l, r); setDbgExpr(fg, t, e); return &t->base; }
+    if (opEq(op, "!=")) { ir_types.IrInst* t = fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, l, r); setDbgExpr(fg, t, e); return &t->base; }
     if (opEq(op, "<"))
     {
         bool uns = lt && lt->kind == types.TY_INT && !lt->isSigned;
         ir_types.IrInst* t = fg.bd.icmp(uns ? ir_opcodes.IrICmpPred::Ult : ir_opcodes.IrICmpPred::Slt, l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     if (opEq(op, "<="))
     {
         bool uns = lt && lt->kind == types.TY_INT && !lt->isSigned;
         ir_types.IrInst* t = fg.bd.icmp(uns ? ir_opcodes.IrICmpPred::Ule : ir_opcodes.IrICmpPred::Sle, l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     if (opEq(op, ">"))
     {
         bool uns = lt && lt->kind == types.TY_INT && !lt->isSigned;
         ir_types.IrInst* t = fg.bd.icmp(uns ? ir_opcodes.IrICmpPred::Ugt : ir_opcodes.IrICmpPred::Sgt, l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     if (opEq(op, ">="))
     {
         bool uns = lt && lt->kind == types.TY_INT && !lt->isSigned;
         ir_types.IrInst* t = fg.bd.icmp(uns ? ir_opcodes.IrICmpPred::Uge : ir_opcodes.IrICmpPred::Sge, l, r);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     if (opEq(op, "&&"))
@@ -231,6 +325,7 @@ ir_types.IrValue* genBinary(FuncGen* fg, str.strView op, ast.Expr* a, ast.Expr* 
         ir_types.IrInst* c1 = fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, l, z);
         ir_types.IrInst* c2 = fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, r, z);
         ir_types.IrInst* t = fg.bd.andOp(&c1->base, &c2->base);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     if (opEq(op, "||"))
@@ -239,9 +334,11 @@ ir_types.IrValue* genBinary(FuncGen* fg, str.strView op, ast.Expr* a, ast.Expr* 
         ir_types.IrInst* c1 = fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, l, z);
         ir_types.IrInst* c2 = fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, r, z);
         ir_types.IrInst* t = fg.bd.orOp(&c1->base, &c2->base);
+        setDbgExpr(fg, t, e);
         return &t->base;
     }
     ir_types.IrInst* t = fg.bd.add(l, r);
+    setDbgExpr(fg, t, e);
     return &t->base;
 }
 
@@ -303,8 +400,8 @@ ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e)
         {
             ir_types.IrType* ty = ptr->type;
             if (ty && ty->kind == ir_types.IrTypeKind::Ptr && ty->elem)
-                return asVal(fg.bd.load(ty->elem, ptr));
-            return asVal(fg.bd.load(fg.ctx.tyInt(64), ptr));
+                return dbgVal(fg, e, fg.bd.load(ty->elem, ptr));
+            return dbgVal(fg, e, fg.bd.load(fg.ctx.tyInt(64), ptr));
         }
         scopes.Sym* s = scopes.scopeLookup(fg.top, e->text);
         if (s != null && s->kind == scopes.SYM_FUNC)
@@ -326,22 +423,22 @@ ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e)
             ir_types.IrValue* v = genExpr(fg, e->a);
             if (v && v->type && v->type->kind == ir_types.IrTypeKind::Float) {
                 ir_types.IrValue* z = fg.ctx.constFloat(v->type, 0.0);
-                return asVal(fg.bd.fsub(z, v));
+                return dbgVal(fg, e, fg.bd.fsub(z, v));
             }
-            return asVal(fg.bd.neg(v));
+            return dbgVal(fg, e, fg.bd.neg(v));
         }
         if (opEq(e->text, "!"))
         {
             ir_types.IrValue* v = genExpr(fg, e->a);
             ir_types.IrValue* z = fg.ctx.constInt(v->type ? v->type : fg.ctx.tyInt(1), 0);
-            return asVal(fg.bd.icmp(ir_opcodes.IrICmpPred::Eq, v, z));
+            return dbgVal(fg, e, fg.bd.icmp(ir_opcodes.IrICmpPred::Eq, v, z));
         }
-        if (opEq(e->text, "~")) return asVal(fg.bd.notOp(genExpr(fg, e->a)));
+        if (opEq(e->text, "~")) return dbgVal(fg, e, fg.bd.notOp(genExpr(fg, e->a)));
         if (opEq(e->text, "*"))
         {
             ir_types.IrValue* ptr = genExpr(fg, e->a);
             ir_types.IrType* ty = ptr && ptr->type && ptr->type->kind==ir_types.IrTypeKind::Ptr && ptr->type->elem ? ptr->type->elem : fg.ctx.tyInt(64);
-            return asVal(fg.bd.load(ty, ptr));
+            return dbgVal(fg, e, fg.bd.load(ty, ptr));
         }
         if (opEq(e->text, "&"))
         {
@@ -356,13 +453,13 @@ ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e)
         return genExpr(fg, e->a);
     }
     case ast.EX_BINARY:
-        return genBinary(fg, e->text, e->a, e->b);
+        return genBinary(fg, e);
     case ast.EX_TERNARY:
     {
         ir_types.IrValue* c = genExpr(fg, e->a);
         ir_types.IrValue* t = genExpr(fg, e->b);
         ir_types.IrValue* f = genExpr(fg, e->c);
-        return asVal(fg.bd.select(c, t, f));
+        return dbgVal(fg, e, fg.bd.select(c, t, f));
     }
     case ast.EX_CALL:
     {
@@ -404,23 +501,124 @@ ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e)
         if (v->type == dt) return v;
         if (v->type && v->type->kind == ir_types.IrTypeKind::Float && dt->kind == ir_types.IrTypeKind::Float)
         {
-            if (v->type->width == 64 && dt->width == 32) return asVal(fg.bd.fpTrunc(v, dt));
-            if (v->type->width == 32 && dt->width == 64) return asVal(fg.bd.fpExt(v, dt));
+            if (v->type->width == 64 && dt->width == 32) return dbgVal(fg, e, fg.bd.fpTrunc(v, dt));
+            if (v->type->width == 32 && dt->width == 64) return dbgVal(fg, e, fg.bd.fpExt(v, dt));
             return v;
         }
-        if (v->type && v->type->kind == ir_types.IrTypeKind::Float) return asVal(fg.bd.fpToSi(v, dt));
+        if (v->type && v->type->kind == ir_types.IrTypeKind::Float) return dbgVal(fg, e, fg.bd.fpToSi(v, dt));
         if (dt->kind == ir_types.IrTypeKind::Float)
         {
-            if (v->type && v->type->width == 64) return asVal(fg.bd.siToFp(v, dt));
-            return asVal(fg.bd.siToFp(v, dt));
+            if (v->type && v->type->width == 64) return dbgVal(fg, e, fg.bd.siToFp(v, dt));
+            return dbgVal(fg, e, fg.bd.siToFp(v, dt));
         }
-        if (v->type && dt->width > v->type->width) return asVal(fg.bd.sext(v, dt));
-        if (v->type && dt->width < v->type->width) return asVal(fg.bd.trunc(v, dt));
-        return asVal(fg.bd.bitcast(v, dt));
+        if (v->type && dt->width > v->type->width) return dbgVal(fg, e, fg.bd.sext(v, dt));
+        if (v->type && dt->width < v->type->width) return dbgVal(fg, e, fg.bd.trunc(v, dt));
+        return dbgVal(fg, e, fg.bd.bitcast(v, dt));
     }
     case ast.EX_DOT:
     case ast.EX_ARROW:
-        return genExpr(fg, e->a);
+        {
+            bool isArrow = e->kind == ast.EX_ARROW;
+            types.CType* baseTy = expr.inferredType(e->a);
+            if (baseTy != null) baseTy = types.effective(baseTy);
+            ast.Decl* structDecl = null;
+            if (baseTy != null && baseTy->kind == types.TY_NAMED && baseTy->decl != null && baseTy->decl->kind == ast.DT_STRUCT) structDecl = baseTy->decl;
+            else if (baseTy != null && baseTy->kind == types.TY_PTR && baseTy->elem != null && baseTy->elem->kind == types.TY_NAMED && baseTy->elem->decl != null && baseTy->elem->decl->kind == ast.DT_STRUCT) structDecl = baseTy->elem->decl;
+            if (structDecl != null)
+            {
+                u32 fieldIdx = (u32)-1;
+                for (u32 fi = 0; fi < structDecl->nfields; fi++) if (strEq(structDecl->fields[fi].name, e->text)) { fieldIdx = fi; break; }
+                if (fieldIdx != (u32)-1)
+                {
+                    u32 off = 0;
+                    bool isPacked = structDecl->layoutMode == 2 || structDecl->layoutMode == 3;
+                    bool isReorder = structDecl->layoutMode == 1 || structDecl->layoutMode == 3;
+                    if (isReorder && structDecl->nfields > 1)
+                    {
+                        u32* order = mman.alloc<u32>(structDecl->nfields);
+                        for (u32 f = 0; f < structDecl->nfields; f++) order[f] = f;
+                        for (u32 i = 0; i < structDecl->nfields; i++)
+                            for (u32 j = i+1; j < structDecl->nfields; j++)
+                            {
+                                types.CType* ti = scopes.resolveTypeExpr(structDecl->fields[order[i]].type, fg.top, fg.mods, null, 0);
+                                types.CType* tj = scopes.resolveTypeExpr(structDecl->fields[order[j]].type, fg.top, fg.mods, null, 0);
+                                u32 si = cSize(ti, fg.top);
+                                u32 sj = cSize(tj, fg.top);
+                                u32 ai = cAlign(ti, fg.top);
+                                u32 aj = cAlign(tj, fg.top);
+                                bool swap = false;
+                                if (ai != aj) swap = aj > ai;
+                                else swap = sj > si;
+                                if (swap) { u32 tmp = order[i]; order[i]=order[j]; order[j]=tmp; }
+                            }
+                        u32 cur = 0;
+                        for (u32 idx = 0; idx < structDecl->nfields; idx++)
+                        {
+                            u32 f = order[idx];
+                            types.CType* ft = scopes.resolveTypeExpr(structDecl->fields[f].type, fg.top, fg.mods, null, 0);
+                            u32 al = cAlign(ft, fg.top);
+                            u32 sz = cSize(ft, fg.top);
+                            if (!isPacked) { u32 pad = (al - (cur % al)) % al; cur += pad; }
+                            if (f == fieldIdx) { off = cur; break; }
+                            cur += sz;
+                        }
+                        mman.dealloc<u32>(order);
+                    } else
+                    {
+                        u32 cur = 0;
+                        for (u32 f = 0; f < structDecl->nfields; f++)
+                        {
+                            types.CType* ft = scopes.resolveTypeExpr(structDecl->fields[f].type, fg.top, fg.mods, null, 0);
+                            u32 al = cAlign(ft, fg.top);
+                            u32 sz = cSize(ft, fg.top);
+                            if (!isPacked) { u32 pad = (al - (cur % al)) % al; cur += pad; }
+                            if (f == fieldIdx) { off = cur; break; }
+                            cur += sz;
+                        }
+                    }
+                    ir_types.IrValue* basePtr = null;
+                    if (!isArrow && e->a->kind == ast.EX_IDENT)
+                    {
+                        basePtr = findLocal(fg, e->a->text);
+                    }
+                    if (basePtr == null) basePtr = genExpr(fg, e->a);
+                    if (basePtr != null && basePtr->type != null && basePtr->type->kind != ir_types.IrTypeKind::Ptr)
+                    {
+                        // base is struct value, need its address: if it was loaded, we need alloca ptr
+                        // For now, if base is struct value (loaded), we can't GEP; fallback to loaded value
+                        // Try to get alloca for ident
+                        if (e->a->kind == ast.EX_IDENT)
+                        {
+                            ir_types.IrValue* ptr = findLocal(fg, e->a->text);
+                            if (ptr != null) basePtr = ptr;
+                        }
+                    }
+                    if (basePtr != null)
+                    {
+                        ir_types.IrType* fieldIrTy = null;
+                        ast.StructField* sf = &structDecl->fields[fieldIdx];
+                        types.CType* fct = scopes.resolveTypeExpr(sf->type, fg.top, fg.mods, null, 0);
+                        fieldIrTy = fct ? mapCType(fg, fct) : fg.ctx.tyInt(64);
+                        // GEP with byte offset
+                        ir_types.IrValue* offVal = fg.ctx.constInt(fg.ctx.tyInt(64), off);
+                        ir_types.IrValue* idxs[1]; idxs[0] = offVal;
+                        // For struct, GEP with byte offset: need to bitcast to i8* then gep
+                        ir_types.IrType* i8Ptr = fg.ctx.tyPtr(fg.ctx.tyInt(8));
+                        ir_types.IrValue* casted = basePtr;
+                        if (basePtr->type != i8Ptr)
+                        {
+                            ir_types.IrInst* bc = fg.bd.bitcast(basePtr, i8Ptr);
+                            casted = &bc->base;
+                        }
+                        ir_types.IrInst* gep = fg.bd.gep(casted, idxs, 1);
+                        ir_types.IrType* fieldPtrTy = fg.ctx.tyPtr(fieldIrTy);
+                        ir_types.IrInst* bc2 = fg.bd.bitcast(&gep->base, fieldPtrTy);
+                        return dbgVal(fg, e, fg.bd.load(fieldIrTy, &bc2->base));
+                    }
+                }
+            }
+            return genExpr(fg, e->a);
+        }
     case ast.EX_INDEX:
     {
         ir_types.IrValue* base = genExpr(fg, e->a);
@@ -429,13 +627,13 @@ ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e)
         ir_types.IrInst* gp = fg.bd.gep(base, idxs, 1);
         ir_types.IrType* et = base->type && base->type->kind==ir_types.IrTypeKind::Ptr && base->type->elem ? base->type->elem : fg.ctx.tyInt(64);
         if (et->kind == ir_types.IrTypeKind::Array && et->elem) et = et->elem;
-        return asVal(fg.bd.load(et, &gp->base));
+        return dbgVal(fg, e, fg.bd.load(et, &gp->base));
     }
     case ast.EX_DEREF:
     {
         ir_types.IrValue* p = genExpr(fg, e->a);
         ir_types.IrType* et = p->type && p->type->kind==ir_types.IrTypeKind::Ptr ? p->type->elem : fg.ctx.tyInt(64);
-        return asVal(fg.bd.load(et, p));
+        return dbgVal(fg, e, fg.bd.load(et, p));
     }
     case ast.EX_ADDR:
     {
@@ -510,7 +708,7 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
         if (c->type && c->type->width != 1)
         {
             ir_types.IrValue* z = fg.ctx.constInt(c->type, 0);
-            c = asVal(fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, c, z));
+            c = dbgVal(fg, s->a, fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, c, z));
         }
         ir_types.IrBlock* thenBb = fg.ctx.createBlock("if.then");
         ir_types.IrBlock* elseBb = s->body2 ? fg.ctx.createBlock("if.else") : null;
@@ -547,7 +745,7 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
         if (c->type && c->type->width != 1)
         {
             ir_types.IrValue* z = fg.ctx.constInt(c->type, 0);
-            c = asVal(fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, c, z));
+            c = dbgVal(fg, s->a, fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, c, z));
         }
         fg.bd.condBr(c, body, exit);
         fg.bd.pos(body, null); fg.terminated = false;
@@ -572,7 +770,7 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
             if (c->type && c->type->width != 1)
             {
                 ir_types.IrValue* z = fg.ctx.constInt(c->type, 0);
-                c = asVal(fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, c, z));
+                c = dbgVal(fg, s->b, fg.bd.icmp(ir_opcodes.IrICmpPred::Ne, c, z));
             }
             fg.bd.condBr(c, body, exit);
         } else fg.bd.br(body);
@@ -595,6 +793,75 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
         fg.bd.pos(exit, null); fg.terminated = false;
         break;
     }
+    case ast.ST_FLAG:
+        {
+            str.strView sel = flagValueEmit(fg, s->text);
+            bool handled = false;
+            for (u32 ci = 0; ci < s->ncases; ci++)
+            {
+                ast.StmtCase* sc = s->cases[ci];
+                if (sc == null || sc->value == null) continue;
+                if (strEq(sc->value->text, sel))
+                {
+                    for (u32 k = 0; k < sc->nbody; k++) genStmt(fg, sc->body[k]);
+                    handled = true;
+                    break;
+                }
+            }
+            if (!handled && s->defaultCase != null)
+                for (u32 k = 0; k < s->defaultCase->nbody; k++) genStmt(fg, s->defaultCase->body[k]);
+            break;
+        }
+    case ast.ST_FORIN:
+        {
+            types.CType* itTy = s->a ? expr.inferredType(s->a) : null;
+            types.CType* elemTy = itTy ? itTy->elem : null;
+            if (elemTy == null && itTy != null && itTy->kind == types.TY_SLICE) elemTy = itTy->elem;
+            if (elemTy == null) elemTy = s->type ? scopes.resolveTypeExpr(s->type, fg.top, fg.mods, null, 0) : null;
+            ir_types.IrType* elemIrTy = elemTy ? mapCType(fg, elemTy) : fg.ctx.tyInt(64);
+            ir_types.IrValue* container = s->a ? genExpr(fg, s->a) : null;
+            if (container == null) break;
+            ir_types.IrType* containerTy = container->type;
+            ir_types.IrValue* lenVal = null;
+            ir_types.IrValue* ptrVal = container;
+            if (itTy != null && itTy->kind == types.TY_ARRAY && itTy->countKnown) lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), itTy->count);
+            else if (containerTy != null && containerTy->kind == ir_types.IrTypeKind::Ptr) lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
+            else lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
+            // handle slice-like container where len is field
+            if (itTy != null && (itTy->kind == types.TY_SLICE || itTy->kind == types.TY_ARRAY))
+            {
+                // for slice, need len from struct; for now use 0
+            }
+            ir_types.IrInst* idxAlloca = fg.bd.alloca(fg.ctx.tyInt(64));
+            fg.bd.store(fg.ctx.constInt(fg.ctx.tyInt(64), 0), &idxAlloca->base);
+            ir_types.IrInst* varAlloca = fg.bd.alloca(elemIrTy);
+            addLocal(fg, s->text, &varAlloca->base);
+            ir_types.IrBlock* head = fg.ctx.createBlock("forin.head");
+            ir_types.IrBlock* body = fg.ctx.createBlock("forin.body");
+            ir_types.IrBlock* exit = fg.ctx.createBlock("forin.exit");
+            fg.func.addBlock(head); fg.func.addBlock(body); fg.func.addBlock(exit);
+            fg.bd.br(head);
+            fg.bd.pos(head, null);
+            ir_types.IrValue* idxVal = dbgVal(fg, s->a, fg.bd.load(fg.ctx.tyInt(64), &idxAlloca->base));
+            ir_types.IrValue* cond = dbgVal(fg, s->a, fg.bd.icmp(ir_opcodes.IrICmpPred::Ult, idxVal, lenVal));
+            fg.bd.condBr(cond, body, exit);
+            fg.bd.pos(body, null); fg.terminated = false;
+            ir_types.IrValue* idxs[1]; idxs[0] = idxVal;
+            ir_types.IrInst* gep = fg.bd.gep(ptrVal, idxs, 1);
+            ir_types.IrValue* elem = dbgVal(fg, s->a, fg.bd.load(elemIrTy, &gep->base));
+            fg.bd.store(elem, &varAlloca->base);
+            genBlockStmts(fg, s->body);
+            if (!fg.terminated)
+            {
+                ir_types.IrValue* cur = dbgVal(fg, s->a, fg.bd.load(fg.ctx.tyInt(64), &idxAlloca->base));
+                ir_types.IrValue* one = fg.ctx.constInt(fg.ctx.tyInt(64), 1);
+                ir_types.IrValue* nxt = dbgVal(fg, s->a, fg.bd.add(cur, one));
+                fg.bd.store(nxt, &idxAlloca->base);
+                fg.bd.br(head);
+            }
+            fg.bd.pos(exit, null); fg.terminated = false;
+            break;
+        }
     case ast.ST_BREAK:
     case ast.ST_CONTINUE:
         break;
@@ -674,15 +941,8 @@ void dumpIR(ir_types.IrModule* irMod, void* f)
     }
 }
 
-pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
+pub ir_types.IrModule* buildModule(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug, ir_types.IrContext** outCtx)
 {
-    str.String opath = str.String::new();
-    u32 lastDot = 0; bool dot = false;
-    for (u32 k = 0; k < path.len; k++) if (path.ptr[k] == (u8)'.') { lastDot = k; dot = true; }
-    if (dot) opath.pushView(str.strView::fromParts(path.ptr, lastDot));
-    else opath.pushView(path);
-    opath.pushCstr(".ir");
-
     ir_types.IrContext* ctx = ir_types.irCtxCreate();
     char mn[256]; u32 ml = 0;
     for (u32 i = 0; i < path.len && ml < 255; i++)
@@ -695,11 +955,85 @@ pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, 
     mn[ml]=0;
     if (ml==0) { mn[0]='m'; mn[1]='o'; mn[2]='d'; mn[3]=0; }
     ir_types.IrModule* irMod = ctx.createModule(mn);
-
+    *outCtx = ctx;
     for (u32 i = 0; i < prog.ndecls; i++)
     {
         ast.Decl* d = prog.decls[i];
         if (d == null) continue;
+        if (d->kind == ast.DT_STRUCT && d->ngenerics == 0)
+        {
+            bool isPacked = d->layoutMode == 2 || d->layoutMode == 3;
+            bool isReorder = d->layoutMode == 1 || d->layoutMode == 3;
+            u32 nf = d->nfields;
+            if (nf == 0) continue;
+            ir_types.IrType** fTypes = mman.alloc<ir_types.IrType*>(nf);
+            char** fNames = mman.alloc<char*>(nf);
+            u32* order = null;
+            if (isReorder && nf > 1)
+            {
+                order = mman.alloc<u32>(nf);
+                for (u32 f = 0; f < nf; f++) order[f] = f;
+                for (u32 a = 0; a < nf; a++)
+                    for (u32 b = a+1; b < nf; b++)
+                    {
+                        types.CType* ta = scopes.resolveTypeExpr(d->fields[order[a]].type, top, mods, null, 0);
+                        types.CType* tb = scopes.resolveTypeExpr(d->fields[order[b]].type, top, mods, null, 0);
+                        u32 sa = cSize(ta, top);
+                        u32 sb = cSize(tb, top);
+                        u32 aa = cAlign(ta, top);
+                        u32 ab = cAlign(tb, top);
+                        bool swap = false;
+                        if (aa != ab) swap = ab > aa;
+                        else swap = sb > sa;
+                        if (swap) { u32 tmp = order[a]; order[a]=order[b]; order[b]=tmp; }
+                    }
+            }
+            for (u32 idx = 0; idx < nf; idx++)
+            {
+                u32 f = isReorder ? order[idx] : idx;
+                types.CType* ft = scopes.resolveTypeExpr(d->fields[f].type, top, mods, null, 0);
+                ir_types.IrType* irt = ft ? null : ctx.tyInt(8);
+                if (ft != null)
+                {
+                    FuncGen tmpFg; tmpFg.ctx = ctx; tmpFg.top = top; tmpFg.mods = mods;
+                    irt = mapCType(&tmpFg, ft);
+                }
+                fTypes[idx] = irt ? irt : ctx.tyInt(8);
+                u32 nl = d->fields[f].name.len;
+                char* nc = mman.alloc<char>(nl+1);
+                for (u32 k = 0; k < nl; k++) nc[k] = (char)d->fields[f].name.ptr[k];
+                nc[nl]=0;
+                fNames[idx] = nc;
+            }
+            if (order) mman.dealloc<u32>(order);
+            char nb[256]; u32 nbl = 0;
+            for (u32 k = 0; k < d->name.len && nbl < 255; k++) nb[nbl++] = (char)d->name.ptr[k];
+            nb[nbl]=0;
+            ir_types.IrStructType* st = ctx.createStructType(nb, fTypes, fNames, nf);
+            // override offsets for packed/reorder if needed (createStructType already handles alignment, but for packed we need no padding)
+            // For now, use the created struct; packed handling is via createStructType's internal align logic which already handles packed via isPacked flag? 
+            // We need to patch offsets for packed: if isPacked, remove padding
+            if (isPacked)
+            {
+                u32 cur = 0;
+                for (u32 fi = 0; fi < st->nfields; fi++)
+                {
+                    st->offsets[fi] = cur;
+                    cur += ctx.irTypeSizeOf(st->fieldTypes[fi]);
+                }
+                st->size = cur;
+            }
+            irMod.addStruct(st);
+            continue;
+        }
+        if (d->kind == ast.DT_FLAG)
+        {
+            // top-level flag: emit chosen case's inner decls that are funcs/structs
+            str.strView sel = str.strView::empty();
+            // flag values are not directly available in emitIR's prog, but check.crl already expanded DT_FLAG for top-level,
+            // so this case should not occur if check expanded. Keep as fallback: emit nothing.
+            continue;
+        }
         if (d->kind != ast.DT_FUNC) continue;
         if (d->body == null) continue;
         if (d->ngenerics > 0) continue;
@@ -711,6 +1045,9 @@ pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, 
 
         FuncGen fg;
         fg.ctx = ctx; fg.irMod = irMod; fg.top = top; fg.mods = mods;
+        fg.filename = path;
+        fg.flagNames = null; fg.flagVals = null; fg.nflags = 0;
+        fg.debug = debug;
         fg.localNames = null; fg.localPtrs = null; fg.nlocals = 0; fg.capLocals = 0; fg.terminated = false;
 
         types.CType* retCt = d->type ? scopes.resolveTypeExpr(d->type, top, mods, null, 0) : null;
@@ -787,6 +1124,6 @@ pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, 
         libc.write(1, (const u8*)"wrote ", 6);
         libc.write(1, (const u8*)opath.asCstr(), opath.len);
         libc.write(1, (const u8*)"\n", 1);
-    } else libc.write(2, (const u8*)"coral: cannot open output .ir\n", 28);
+    } else libc.write(2, (const u8*)"coralc: cannot open output .ir\n", 28);
     opath.free();
 }

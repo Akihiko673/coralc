@@ -119,11 +119,10 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
     s.pushChar((char)ESC);
     s.pushView(C_RESET);
 
-    // context window: one line above, the error line, one line below
-    u32 numW = digits(line + 1);
+    u32 numW = digits(line);
     if (numW < 2) numW = 2;
 
-    for (i32 off = -1; off <= 1; off++)
+    for (i32 off = -1; off <= 0; off++)
     {
         i32 ln = (i32)line + off;
         if (ln < 1) continue;
@@ -141,8 +140,7 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
         s.pushChar('\n');
     }
 
-    // caret line: prefix "  |" then spaces to the offending column, then ▲
-    u32 prefixLen = 3 + numW + 3; // "  │ " + numW + " │ "  (3 + numW + 3)
+    u32 prefixLen = 4 + numW + 3;
     i32 caretSpaces = (i32)prefixLen + (i32)col - 4;
     if (caretSpaces < 0) caretSpaces = 0;
     s.pushChar((char)ESC);

@@ -22,6 +22,12 @@ pub types.CType* inferredType(ast.Expr* e)
     if (e == null) return null;
     return (types.CType*)e->inferredTy;
 }
+str.strView typerFlagValue(Typer* t, str.strView name)
+{
+    for (u32 i = 0; i < t->nflags; i++)
+        if (scopes.sEq(t->flagNames[i], name)) return t->flagVals[i];
+    return str.strView::empty();
+}
 
 pub struct Typer
 {
@@ -45,6 +51,9 @@ pub struct Typer
     u32 ng;
     bool inComptime;   // inside a `comptime { }` block: if conditions that
                        // resolve to constants are pruned (dead branches erased)
+    str.strView* flagNames;
+    str.strView* flagVals;
+    u32 nflags;
 
     static Typer new(ast.Program* prog, str.strView src, str.strView filename,
                      Scope* top, ModuleTable* mods, loader.Loader* ld,
@@ -67,6 +76,9 @@ pub struct Typer
         t.retType = null;
         t.curFn = null;
         t.gnames = null;
+        t.flagNames = null;
+        t.flagVals = null;
+        t.nflags = 0;
         t.ng = 0;
         t.inComptime = false;
         return t;
@@ -1766,8 +1778,47 @@ case ast.ST_VAR:
         break;
 
     case ast.ST_FLAG:
-        // platform-specific bodies may reference targets unknown here — skip
-        break;
+    {
+        str.strView sel = typerFlagValue(t, s->text);
+        Stmt* chosen = null;
+        u32 nchosen = 0;
+        if (sel.len > 0)
+        {
+            for (u32 ci = 0; ci < s->ncases; ci++)
+                if (s->cases[ci] != null && s->cases[ci]->value != null && strEq2(s->cases[ci]->value->text, sel))
+                    { chosen = s->cases[ci]->body[0]; nchosen = s->cases[ci]->nbody; break; }
+            }
+            else if (s->defaultCase != null) { chosen = s->defaultCase->body[0]; nchosen = s->defaultCase->nbody; }
+            if (chosen != null) for (u32 k = 0; k < nchosen; k++) typeStmt(t, chosen);
+            break;
+        }
+    case ast.ST_FORIN:
+        {
+            types.CType* itTy = typeExpr(t, s->a);
+            if (s->type != null)
+            {
+                types.CType* varTy = scopes.resolveTypeExpr(s->type, t->top, t->mods, t->gnames, t->ng);
+                if (varTy != null && itTy != null && itTy->elem != null)
+                {
+                    // var type should be element type of iterable
+                }
+            }
+            // create loop var scope
+            pushBlock(t, s->text);
+            if (s->text.len > 0)
+            {
+                types.CType* varCt = null;
+                if (s->type != null) varCt = scopes.resolveTypeExpr(s->type, t->top, t->mods, t->gnames, t->ng);
+                else if (itTy != null && itTy->elem != null) varCt = itTy->elem;
+                else if (itTy != null && itTy->kind == types.TY_SLICE) varCt = itTy->elem;
+                scopes.Sym* vs = scopes.symNew(s->text, scopes.SYM_LOCAL, null, s->line, s->col);
+                vs->type = varCt;
+                scopes.scopeDeclare(t->fnScope, vs);
+            }
+            typeBody(t, s->body);
+            popBlock(t, true);
+            break;
+        }
     }
 }
 

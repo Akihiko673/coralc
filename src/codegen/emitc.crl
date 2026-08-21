@@ -160,6 +160,68 @@ static void pushU64(str.String* out, u64 v)
     while (i > 0) { out.pushChar(buf[--i]); }
 }
 
+u32 cSize(types.CType* ct, scopes.Scope* top)
+{
+    if (ct == null) return 0;
+    ct = types.effective(ct);
+    if (ct == null) return 0;
+    switch (ct->kind)
+    {
+    case types.TY_VOID: return 0;
+    case types.TY_BOOL: return 1;
+    case types.TY_CHAR: return 1;
+    case types.TY_INT: return ct->width ? (ct->width + 7) / 8 : 4;
+    case types.TY_FLOAT: return ct->width ? (ct->width + 7) / 8 : 8;
+    case types.TY_PTR: return 8;
+    case types.TY_FUNC: return 8;
+    case types.TY_SLICE: return 16;
+    case types.TY_ARRAY:
+        if (ct->elem == null) return 8;
+        {
+            u32 es = cSize(ct->elem, top);
+            if (ct->countKnown) return es * (u32)ct->count;
+            return es;
+        }
+    case types.TY_NAMED:
+        if (ct->decl != null && ct->decl->kind == ast.DT_STRUCT) return ct->decl->nfields * 8;
+        return 8;
+    default: return 8;
+    }
+}
+u32 cAlign(types.CType* ct, scopes.Scope* top)
+{
+    if (ct == null) return 1;
+    ct = types.effective(ct);
+    if (ct == null) return 1;
+    switch (ct->kind)
+    {
+    case types.TY_VOID: return 1;
+    case types.TY_BOOL: return 1;
+    case types.TY_CHAR: return 1;
+    case types.TY_INT: return ct->width ? (ct->width + 7) / 8 : 4;
+    case types.TY_FLOAT: return ct->width ? (ct->width + 7) / 8 : 8;
+    case types.TY_PTR: return 8;
+    case types.TY_FUNC: return 8;
+    case types.TY_SLICE: return 8;
+    case types.TY_ARRAY:
+        if (ct->elem) return cAlign(ct->elem, top);
+        return 8;
+    case types.TY_NAMED:
+        if (ct->decl != null && ct->decl->kind == ast.DT_STRUCT)
+        {
+            u32 m = 1;
+            for (u32 i = 0; i < ct->decl->nfields; i++)
+            {
+                types.CType* ft = scopes.resolveTypeExpr(ct->decl->fields[i].type, top, null, null, 0);
+                u32 a = cAlign(ft, top);
+                if (a > m) m = a;
+            }
+            return m;
+        }
+        return 8;
+    default: return 8;
+    }
+}
 pub void emitH(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, bool debug)
 {
     str.String out = str.String::new();
@@ -168,6 +230,19 @@ pub void emitH(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, s
     out.pushCstr(" */\n");
     out.pushCstr("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n");
     if (debug) out.pushCstr("/* debug build */\n\n");
+    for (u32 i = 0; i < prog->ndecls; i++)
+    {
+        ast.Decl* d = prog->decls[i];
+        if (d != null && d->kind == ast.DT_STRUCT && d->ngenerics == 0)
+        {
+            out.pushCstr("typedef struct ");
+            out.pushView(d->name);
+            out.pushCstr(" ");
+            out.pushView(d->name);
+            out.pushCstr(";\n");
+        }
+    }
+    if (prog->ndecls > 0) out.pushCstr("\n");
 
     for (u32 i = 0; i < prog->ndecls; i++)
     {
@@ -213,20 +288,61 @@ pub void emitH(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, s
         }
         case ast.DT_STRUCT:
         {
+            bool isPacked = d->layoutMode == 2 || d->layoutMode == 3;
+            bool isReorder = d->layoutMode == 1 || d->layoutMode == 3;
             out.pushCstr("typedef struct ");
+            if (isPacked) out.pushCstr("__attribute__((packed)) ");
             out.pushView(d->name);
             out.pushCstr(" {\n");
-            for (u32 f = 0; f < d->nfields; f++)
+            if (isReorder && d->nfields > 1)
             {
-                types.CType* ft = resolve(top, mods, d->fields[f].type);
-                out.pushCstr("    ");
-                pushType(&out, ft);
-                out.pushCstr(" ");
-                out.pushView(d->fields[f].name);
-                out.pushCstr(";\n");
+                u32* order = mman.alloc<u32>(d->nfields);
+                for (u32 f = 0; f < d->nfields; f++) order[f] = f;
+                for (u32 i = 0; i < d->nfields; i++)
+                    for (u32 j = i + 1; j < d->nfields; j++)
+                    {
+                        types.CType* ti = resolve(top, mods, d->fields[order[i]].type);
+                        types.CType* tj = resolve(top, mods, d->fields[order[j]].type);
+                        u32 si = cSize(ti, top);
+                        u32 sj = cSize(tj, top);
+                        u32 ai = cAlign(ti, top);
+                        u32 aj = cAlign(tj, top);
+                        bool swap = false;
+                        if (ai != aj) swap = aj > ai;
+                        else swap = sj > si;
+                        if (swap)
+                        {
+                            u32 tmp = order[i];
+                            order[i] = order[j];
+                            order[j] = tmp;
+                        }
+                    }
+                for (u32 idx = 0; idx < d->nfields; idx++)
+                {
+                    u32 f = order[idx];
+                    types.CType* ft = resolve(top, mods, d->fields[f].type);
+                    out.pushCstr("    ");
+                    pushType(&out, ft);
+                    out.pushCstr(" ");
+                    out.pushView(d->fields[f].name);
+                    out.pushCstr(";\n");
+                }
+                mman.dealloc<u32>(order);
+            } else
+            {
+                for (u32 f = 0; f < d->nfields; f++)
+                {
+                    types.CType* ft = resolve(top, mods, d->fields[f].type);
+                    out.pushCstr("    ");
+                    pushType(&out, ft);
+                    out.pushCstr(" ");
+                    out.pushView(d->fields[f].name);
+                    out.pushCstr(";\n");
+                }
             }
             out.pushCstr("} ");
             out.pushView(d->name);
+            if (isPacked) out.pushCstr(" __attribute__((packed))");
             out.pushCstr(";\n");
             break;
         }
@@ -281,7 +397,7 @@ pub void emitH(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, s
     }
     else
     {
-        libc.write(2, (const u8*)"coral: cannot open output header for writing\n", 44);
+        libc.write(2, (const u8*)"coralc: cannot open output header for writing\n", 44);
     }
     opath.free();
     out.free();

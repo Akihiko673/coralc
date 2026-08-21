@@ -743,6 +743,7 @@ pub struct Parser
         d->ncases = 0;
         d->defaultBody = null;
         d->ndeclDefault = 0;
+        d->layoutMode = 0;
         d->line = line;
         d->col = col;
         return d;
@@ -3174,6 +3175,14 @@ pub struct Parser
         str.strView name = self.expectIdent();
         self.ctxPush(CTX_STRUCT, name, str.strView::empty());
         ast.Decl* d = self.parseStructRest(exported, name, t);
+        bool isReorder = self.hasAttr("reorder");
+        bool isPacked = self.hasAttr("packed");
+        bool isReorderPacked = self.hasAttr("reorder_packed");
+        if (isReorderPacked || (isReorder && isPacked)) d->layoutMode = 3;
+        else if (isReorder) d->layoutMode = 1;
+        else if (isPacked) d->layoutMode = 2;
+        else d->layoutMode = 0;
+        self.nattrs = 0;
         self.ctxPop();
         return d;
     }

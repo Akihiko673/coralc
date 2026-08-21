@@ -121,11 +121,62 @@ pub struct Check
 
     expr.Typer typer(scopes.Scope* top, scopes.ModuleTable* mods, loader.Loader* ld)
     {
-        return expr.Typer::new(self.prog, self.src, self.filename, top, mods, ld,
+        expr.Typer t = expr.Typer::new(self.prog, self.src, self.filename, top, mods, ld,
                                &self.nerrors, &self.nwarnings,
                                self.noWarnUnsafe, self.forcedSkip);
+        t.flagNames = self.flagNames;
+        t.flagVals = self.flagVals;
+        t.nflags = self.nflags;
+        return t;
     }
 
+    void expandStmtFlags(ast.Stmt* s, Check* self)
+    {
+        if (s == null) return;
+        if (s->kind == ast.ST_BLOCK)
+        {
+            u32 write = 0;
+            for (u32 i = 0; i < s->nstmts; i++)
+            {
+                ast.Stmt* cur = s->stmts[i];
+                if (cur != null && cur->kind == ast.ST_FLAG)
+                {
+                    str.strView sel = self.flagValue(cur->text);
+                    ast.StmtCase* chosenCase = null;
+                    for (u32 ci = 0; ci < cur->ncases; ci++)
+                    {
+                        ast.StmtCase* sc = cur->cases[ci];
+                        if (sc != null && sc->value != null && vEqSV(sc->value->text, sel)) { chosenCase = sc; break; }
+                    }
+                    if (chosenCase == null) chosenCase = cur->defaultCase;
+                    if (chosenCase != null)
+                    {
+                        for (u32 k = 0; k < chosenCase->nbody; k++)
+                        {
+                            ast.Stmt* inner = chosenCase->body[k];
+                            expandStmtFlags(inner, self);
+                            s->stmts[write++] = inner;
+                        }
+                    }
+                    continue;
+                }
+                expandStmtFlags(cur, self);
+                s->stmts[write++] = cur;
+            }
+            s->nstmts = write;
+        } else if (s->kind == ast.ST_IF)
+        {
+            expandStmtFlags(s->body, self);
+            expandStmtFlags(s->body2, self);
+        } else if (s->kind == ast.ST_FOR) { expandStmtFlags(s->body, self); expandStmtFlags(s->init, self); }
+        else if (s->kind == ast.ST_FORIN) expandStmtFlags(s->body, self);
+        else if (s->kind == ast.ST_WHILE) expandStmtFlags(s->body, self);
+        else if (s->kind == ast.ST_LOOP) expandStmtFlags(s->body, self);
+        else if (s->kind == ast.ST_SWITCH) {
+            for (u32 ci = 0; ci < s->ncases; ci++) if (s->cases[ci] != null) for (u32 k = 0; k < s->cases[ci]->nbody; k++) expandStmtFlags(s->cases[ci]->body[k], self);
+            if (s->defaultCase != null) for (u32 k = 0; k < s->defaultCase->nbody; k++) expandStmtFlags(s->defaultCase->body[k], self);
+        }
+    }
     void run()
     {
         // file attribute contract
@@ -385,6 +436,40 @@ pub struct Check
             }
         }
 
+        {
+            ast.Decl** newDecls = mman.alloc<ast.Decl*>(self.prog->ndecls * 4 + 4);
+            u32 newN = 0;
+            for (u32 i = 0; i < self.prog->ndecls; i++)
+            {
+                ast.Decl* d = self.prog->decls[i];
+                if (d == null) continue;
+                if (d->kind == ast.DT_FLAG)
+                {
+                    ast.Decl** body = null;
+                    u32 nbody = 0;
+                    str.strView sel = self.flagValue(d->name);
+                    if (sel.len > 0)
+                    {
+                        u32 off = 0;
+                        for (u32 ci = 0; ci < d->ncases; ci++)
+                        {
+                            if (vEqSV(d->caseNames[ci], sel)) { body = d->cases + off; nbody = d->caseLens[ci]; break; }
+                            off += d->caseLens[ci];
+                        }
+                    } else if (d->defaultBody != null) { body = d->defaultBody; nbody = d->ndeclDefault; }
+                    if (body != null)
+                        for (u32 k = 0; k < nbody; k++) if (body[k] != null) newDecls[newN++] = body[k];
+                    continue;
+                }
+                newDecls[newN++] = d;
+            }
+            if (newN != self.prog->ndecls)
+            {
+                if (self.prog->decls) mman.dealloc<ast.Decl*>(self.prog->decls);
+                self.prog->decls = newDecls;
+                self.prog->ndecls = newN;
+            } else mman.dealloc<ast.Decl*>(newDecls);
+        }
         // pass 2: type-check const/var initializers and enum variant values
         for (u32 i = 0; i < self.prog->ndecls; i++)
         {
@@ -473,6 +558,16 @@ pub struct Check
             }
         }
 
+        for (u32 i = 0; i < self.prog->ndecls; i++)
+        {
+            ast.Decl* d = self.prog->decls[i];
+            if (d == null) continue;
+            if (d->kind == ast.DT_FUNC && d->body != null) expandStmtFlags(d->body, self);
+            else if (d->kind == ast.DT_STRUCT)
+                for (u32 k = 0; k < d->ndecls; k++) if (d->decls[k] != null && d->decls[k]->body != null) expandStmtFlags(d->decls[k]->body, self);
+            else if (d->kind == ast.DT_METHODBLOCK)
+                for (u32 k = 0; k < d->ndecls; k++) if (d->decls[k] != null && d->decls[k]->body != null) expandStmtFlags(d->decls[k]->body, self);
+        }
         // monomorphisation pass: specialize every concrete generic instantiation
         // discovered during body typing. Each generic Decl is re-typechecked
         // with its parameters bound to the concrete types (see mono/mono.crl).

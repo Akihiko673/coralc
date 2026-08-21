@@ -178,6 +178,7 @@ pub struct Decl
     bool isInline;
     bool isExtern;      // DT_FUNC declared extern (trait methods, compiler_fn)
     bool noreturn;      // DT_FUNC / DT_EXTERN !return
+    u32 layoutMode;     // DT_STRUCT: 0=default,1=reorder,2=packed,3=reorder_packed
     bool isVar;         // DT_EXTERN without parens (global var)
     str.strView cc;     // DT_EXTERN calling convention
     str.strView structName; // DT_FUNC method owner / DT_METHODBLOCK struct

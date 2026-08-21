@@ -4,9 +4,9 @@
 #include <stddef.h>
 
 typedef struct LexResult {
-    tok.LexTok* toks;
+    LexTok* toks;
     uint32_t n;
-    tok.LexErr* errs;
+    LexErr* errs;
     uint32_t nerrs;
 } LexResult;
 typedef struct Lexer {
@@ -15,10 +15,10 @@ typedef struct Lexer {
     uint32_t pos;
     uint32_t row;
     uint32_t col;
-    tok.LexTok* toks;
+    LexTok* toks;
     uint32_t ntoks;
     uint32_t cap;
-    tok.LexErr* errs;
+    LexErr* errs;
     uint32_t nerrs;
     uint32_t ecap;
 } Lexer;
