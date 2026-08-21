@@ -67,6 +67,16 @@ pub struct Check
 
     void declareSym(scopes.Scope* top, ast.Decl* d, u32 kind, types.CType* ct)
     {
+        // Type-level declarations (enum/struct/typedef/distinct) may be
+        // redeclared. Auto-generated binding headers (e.g. coral-godot) repeat
+        // type defs across classes that C++ scopes via `::`; tolerate the
+        // duplicate so the file still type-checks (keep the first definition).
+        if (kind == scopes.SYM_ENUM || kind == scopes.SYM_STRUCT
+            || kind == scopes.SYM_TYPEDEF || kind == scopes.SYM_DISTINCT)
+        {
+            scopes.Sym* existing = scopes.scopeLookup(top, d->name);
+            if (existing != null && existing->kind == kind) return;
+        }
         scopes.Sym* s = scopes.symNew(d->name, kind, d, d->line, d->col);
         s->type = ct;
         if (!scopes.scopeDeclare(top, s))
@@ -134,7 +144,11 @@ pub struct Check
         for (u32 i = 0; i < self.prog->ndecls && i < 256; i++)
         {
             ast.Decl* d = self.prog->decls[i];
-            if (d != null && d->kind == ast.DT_IMPORT) loader.loaderLoad(ld, d->text, self.filename);
+            if (d != null && d->kind == ast.DT_IMPORT)
+            {
+                if (d->importOrigin.len > 0) loader.loaderLoadLib(ld, d->text, self.exeDir);
+                else loader.loaderLoad(ld, d->text, self.filename);
+            }
         }
 
         // top-level scope + module table
@@ -166,9 +180,63 @@ pub struct Check
             switch (d->kind)
             {
             case ast.DT_IMPORT:
-                scopes.modsAdd(mods, d->name, d->text);
+                {
+                    char rpath[512];
+                    u32 rn = 0;
+                    if (d->importOrigin.len > 0)
+                        rn = loader.resolveLibImport(d->text, self.exeDir, rpath, 512);
+                    else
+                        rn = loader.resolveImport(d->text, self.filename, self.exeDir, rpath, 512);
+                    str.String pb = str.String::new();
+                    if (rn > 0) pb.pushView(str.strView::fromParts(rpath, rn));
+                    scopes.modsAdd(mods, d->name,
+                        rn > 0 ? str.strView::fromParts(pb.ptr, pb.len) : d->text);
+                }
                 if (scopes.scopeLookup(top, d->name) == null)
                     self.declareSym(top, d, scopes.SYM_MODULE, null);
+                // Re-export flattening: a `pub mod X = import(...)` declared
+                // inside an imported module is exposed to importers as
+                // `alias.X` (Zig-style package root re-export).
+                {
+                    char apath[512];
+                    u32 alen = 0;
+                    if (d->importOrigin.len > 0)
+                        alen = loader.resolveLibImport(d->text, self.exeDir, apath, 512);
+                    else
+                        alen = loader.resolveImport(d->text, self.filename, self.exeDir, apath, 512);
+                    if (alen > 0)
+                    {
+                         ast.Program* ap = loader.loaderGet(ld, apath, alen);
+                         if (ap != null)
+                         {
+                             for (u32 k = 0; k < ap->ndecls; k++)
+                             {
+                                 ast.Decl* rd = ap->decls[k];
+                                 if (rd == null) continue;
+                                 if ((rd->kind == ast.DT_MODULE || rd->kind == ast.DT_IMPORT) && rd->exported)
+                                 {
+                                     char sbuf[512];
+                                     u32 slen = 0;
+                                     if (rd->importOrigin.len > 0)
+                                         slen = loader.resolveLibImport(rd->text, self.exeDir, sbuf, 512);
+                                     else
+                                         slen = loader.resolveImport(rd->text, str.strView::fromCstr(apath), self.exeDir, sbuf, 512);
+                                      if (slen > 0)
+                                      {
+                                           loader.loaderLoad(ld, str.strView::fromParts(sbuf, slen), str.strView::fromCstr(apath));
+                                           str.String al = str.String::new();
+                                           al.pushView(d->name);
+                                           al.pushChar('.');
+                                           al.pushView(rd->name);
+                                           str.String pb = str.String::new();
+                                           pb.pushView(str.strView::fromParts(sbuf, slen));
+                                           scopes.modsAdd(mods, str.strView::fromParts(al.ptr, al.len), str.strView::fromParts(pb.ptr, pb.len));
+                                      }
+                                 }
+                            }
+                        }
+                    }
+                }
                 break;
             case ast.DT_MODULE:
             case ast.DT_NAMESPACE:

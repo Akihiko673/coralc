@@ -1,6 +1,7 @@
-mod libc = import("std/platform/libc.crl");
 @[[no_drop]]
-mod string = import("std/text/string.crl");
+
+mod libc = import(lib, "std/platform/libc.crl");
+mod string = import(lib, "std/text/string.crl");
 
 const string.strView CSI = string.strView::fromCstr("\x1B[");
 

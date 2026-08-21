@@ -1,6 +1,6 @@
 
 @[[no_drop]]
-mod string = import("std/text/string.crl");
+mod string = import(lib, "std/text/string.crl");
 
 pub u64 split(strView sv, char delim, strView* out, u64 maxParts)
 {

@@ -4,8 +4,8 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
-mod thread = import("std/concurrent/thread.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod thread = import(lib, "std/concurrent/thread.crl");
 
 struct Task
 {

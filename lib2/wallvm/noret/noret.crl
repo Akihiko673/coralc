@@ -4,11 +4,11 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod asm_rules = import("wallvm/rules/asm_rules.crl");
-mod ir_types = import("wallvm/ir_types.crl");
-mod mman = import("std/memory/mman.crl");
-mod string = import("std/text/string.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod asm_rules = import(lib, "wallvm/rules/asm_rules.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod string = import(lib, "std/text/string.crl");
 
 pub const char* KNOWN_ARCHS[] = {
     "x86_64", "x86", "x86_32",

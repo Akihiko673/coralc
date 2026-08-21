@@ -1,9 +1,9 @@
 
 @[[no_drop]]
-mod libc = import("std/platform/libc.crl");
-mod vec = import("std/collections/vec.crl");
-mod string = import("std/text/string.crl");
-mod mman = import("std/memory/mman.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod vec = import(lib, "std/collections/vec.crl");
+mod string = import(lib, "std/text/string.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 const i32 REG_EXTENDED = 1;
 const i32 REG_ICASE = 2;

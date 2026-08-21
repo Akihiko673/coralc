@@ -4,10 +4,10 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod libc = import("std/platform/libc.crl");
-mod mman = import("std/memory/mman.crl");
-mod vec = import("std/collections/vec.crl");
-mod ch = import("std/core/char.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod vec = import(lib, "std/collections/vec.crl");
+mod ch = import(lib, "std/core/char.crl");
 
 pub struct ByteView
 {

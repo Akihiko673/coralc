@@ -1,7 +1,7 @@
-mod string = import("std/text/string.crl");
+mod string = import(lib, "std/text/string.crl");
 @[[no_drop]]
-mod libc = import("std/platform/libc.crl");
-mod mman = import("std/memory/mman.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 u64 _clampRadix(u64 radix)
 {

@@ -3,7 +3,7 @@
 @[[forced_pointer]]
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
-mod string.String = import("std/text/string.crl");
+mod string.String = import(lib, "std/text/string.crl");
 
 pub u8 encodeCodepoint(u32 cp, u8* out)
 {

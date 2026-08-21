@@ -1,0 +1,12 @@
+pub mod bio = import(lib, "std/io/bio.crl");
+pub mod cmd = import(lib, "std/io/cmd.crl");
+pub mod env = import(lib, "std/io/env.crl");
+pub mod fios = import(lib, "std/io/fios.crl");
+pub mod fs = import(lib, "std/io/fs.crl");
+pub mod ios = import(lib, "std/io/ios.crl");
+pub mod log = import(lib, "std/io/log.crl");
+pub mod net = import(lib, "std/io/net.crl");
+pub mod path = import(lib, "std/io/path.crl");
+pub mod process = import(lib, "std/io/process.crl");
+pub mod temp = import(lib, "std/io/temp.crl");
+pub mod term = import(lib, "std/io/term.crl");

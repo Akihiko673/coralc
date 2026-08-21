@@ -1,10 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod mman = import("std/memory/mman.crl");
-mod vec = import("std/collections/vec.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod vec = import(lib, "std/collections/vec.crl");
 
 const u32 K[64] =
 {

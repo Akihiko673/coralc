@@ -348,3 +348,9 @@ Size = 0, alignment = 1. Layout is trivial.
 ---
 
 That's the full strategy. The key insight: **layout calculation is separate from codegen**—compute it once per struct type, then reuse during code generation and comptime introspection.
+
+the syntax is simply,
+
+"[[reorder]]", or "[[reorder]]", or to use both, "[[reorder, packed]]"
+
+this should already be supported by the fron end? right?

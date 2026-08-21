@@ -3,8 +3,8 @@
 @[[forced_pointer]]
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
-mod mman = import("std/memory/mman.crl");
-mod sha256 = import("std/crypto/sha256.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod sha256 = import(lib, "std/crypto/sha256.crl");
 
 const u64 BLOCK_SIZE = 64;
 const u64 HASH_SIZE = 32;

@@ -1,0 +1,5 @@
+pub mod mman = import(lib, "std/memory/mman.crl");
+pub mod pool = import(lib, "std/memory/pool.crl");
+pub mod shared_ptr = import(lib, "std/memory/shared_ptr.crl");
+pub mod smart_ptr = import(lib, "std/memory/smart_ptr.crl");
+pub mod tlsf = import(lib, "std/memory/tlsf.crl");

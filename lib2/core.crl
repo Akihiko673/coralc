@@ -1,0 +1,7 @@
+// Package root for `mod core = import(lib, "core")`.
+// Re-exports every submodule file under std/core/ (recursively).
+
+pub mod char = import(lib, "std/core/char.crl");
+pub mod duration = import(lib, "std/core/duration.crl");
+pub mod limits = import(lib, "std/core/limits.crl");
+pub mod time = import(lib, "std/core/time.crl");

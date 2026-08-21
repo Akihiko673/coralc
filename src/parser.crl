@@ -2888,7 +2888,7 @@ pub struct Parser
     {
         if (self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET)
             self.parseAttachedAttrs();
-        if (self.check(tok.T_MOD)) return self.parseModuleDecl(o1, o2);
+        if (self.check(tok.T_MOD)) return self.parseModuleDecl(exported, o1, o2);
         if (self.check(tok.T_EXTERN))
         {
             ast.Decl* d = self.parseExternDecl(exported);
@@ -2974,31 +2974,45 @@ pub struct Parser
         return 0;
     }
 
-    u32 parseModuleDecl(ast.Decl** o1, ast.Decl** o2)
-    {
-        tok.LexTok* t = self.advance();
-        str.strView alias = self.expectIdent();
-        while (self.check(tok.T_DOT))
-        {
-            self.advance();
-            self.expectIdent();
-        }
-        self.expect(tok.T_ASSIGN);
-        if (self.check(tok.T_IMPORT)) self.advance();
-        self.expect(tok.T_LPAREN);
-        str.strView path = self.expectString();
-        self.expect(tok.T_RPAREN);
-        self.expect(tok.T_SEMI);
-        ast.Decl* m = self.declBase(ast.DT_MODULE, t->row, t->col);
-        m->name = alias;
-        m->text = path;
-        ast.Decl* im = self.declBase(ast.DT_IMPORT, t->row, t->col);
-        im->name = alias;
-        im->text = path;
-        *o1 = m;
-        *o2 = im;
-        return 2;
-    }
+     u32 parseModuleDecl(bool exported, ast.Decl** o1, ast.Decl** o2)
+     {
+         tok.LexTok* t = self.advance();
+         str.strView alias = self.expectIdent();
+         while (self.check(tok.T_DOT))
+         {
+             self.advance();
+             self.expectIdent();
+         }
+         self.expect(tok.T_ASSIGN);
+         if (self.check(tok.T_IMPORT)) self.advance();
+         self.expect(tok.T_LPAREN);
+         str.strView origin = str.strView::empty();
+         str.strView path = str.strView::empty();
+         if (self.peekTok(0)->id == tok.TOK_IDENT)
+         {
+            // new form: import(lib, "std") — first arg is an origin
+            // specifier (e.g. `lib` => the lib2 folder), second is the
+            // module name/dir to import. A trailing '*' on the module name
+            // means import the whole subtree recursively.
+            origin = self.expectIdent();
+            self.expect(tok.T_COMMA);
+            path = self.expectString();
+         }
+         else
+         {
+            path = self.expectString();
+         }
+         self.expect(tok.T_RPAREN);
+         self.expect(tok.T_SEMI);
+          ast.Decl* im = self.declBase(ast.DT_IMPORT, t->row, t->col);
+          im->name = alias;
+          im->text = path;
+          im->importOrigin = origin;
+          im->exported = exported;
+          *o1 = im;
+          *o2 = null;
+          return 1;
+     }
 
     ast.Decl* parseExternDecl(bool exported)
     {

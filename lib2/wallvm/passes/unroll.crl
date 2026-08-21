@@ -32,11 +32,11 @@
 // in its own pipeline lane (pipelineLane) rather than the numbered
 // optimization levels.
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod loop_detect = import("wallvm/passes/loop_detect.crl");
-mod licm = import("wallvm/passes/licm.crl");
-mod mman = import("std/memory/mman.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod loop_detect = import(lib, "wallvm/passes/loop_detect.crl");
+mod licm = import(lib, "wallvm/passes/licm.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 // Value map used for remapping during cloning (tco.crl style).
 struct ValMap

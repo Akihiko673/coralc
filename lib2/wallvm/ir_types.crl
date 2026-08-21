@@ -1,8 +1,8 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
+@[[forced_pointer]]
+@[[no_warn_unsafe]]
+@[[no_drop]]
 
 mod ir_opcodes = import("wallvm/ir_opcodes.crl");
 mod mman = import("std/memory/mman.crl");
@@ -764,7 +764,7 @@ pub struct IrContext
     IrValue* constFloat(IrType* ty, f64 val)
     {
         u64 raw;
-        mman.copy<u8>(cast<u8*>(&raw), cast<u8*>(&val), 8);
+        mman.copy<u8>((u8*)&raw, (u8*)&val, 8);
         // Coral has no f32 scalar type, so consts always carry the f64 bit
         // pattern; width-32 float types are only a codegen-level hint.
         for (u32 i = 0; i < self.nconstFloats; i++)

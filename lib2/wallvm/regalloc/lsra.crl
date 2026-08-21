@@ -197,7 +197,7 @@ pub struct LinearScanRegAlloc
         return r;
     }
 
-    void ensureVregs(LinearScanRegAlloc*, u32 vreg)
+    void ensureVregs(u32 vreg)
     {
         if (vreg >= self.capVregs)
         {
@@ -228,7 +228,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void ensureIntervals(LinearScanRegAlloc*)
+    void ensureIntervals()
     {
         if (self.numIntervals >= self.capIntervals)
         {
@@ -244,7 +244,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void ensureSlotAllocas(LinearScanRegAlloc*, i32 slot)
+    void ensureSlotAllocas(i32 slot)
     {
         u32 s = (u32)slot;
         if (s >= self.numSlots)
@@ -263,7 +263,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void assignVregs(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    void assignVregs(ir_types.IrFunc* func)
     {
         self.blocks = func->blocks;
         self.numBlocks = func->nblocks;
@@ -319,7 +319,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void computeIntervals(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    void computeIntervals(ir_types.IrFunc* func)
     {
         for (u32 i = 0; i < self.totalInsts; i++)
         {
@@ -553,7 +553,7 @@ pub struct LinearScanRegAlloc
         *numActivePtr = numActive;
     }
 
-    void linearScan(LinearScanRegAlloc*)
+    void linearScan()
     {
         for (u32 i = 0; i < self.numRegs; i++)
             self.regIsFree[i] = 1;
@@ -621,7 +621,7 @@ pub struct LinearScanRegAlloc
         bb.ninsts++;
     }
 
-    ir_types.IrValue* getOrCreateSlotAlloca(LinearScanRegAlloc*, i32 slot, ir_types.IrBlock* insertBlock, u32 insertIdx)
+    ir_types.IrValue* getOrCreateSlotAlloca(i32 slot, ir_types.IrBlock* insertBlock, u32 insertIdx)
     {
         self.ensureSlotAllocas(slot);
         if (self.slotAllocas[slot])
@@ -634,7 +634,7 @@ pub struct LinearScanRegAlloc
         return &alloca->base;
     }
 
-    void handleSpills(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    void handleSpills(ir_types.IrFunc* func)
     {
         // When the backend consumes valData directly, it decodes SPILL_BIT
         // itself, no IR-level load/store rewriting.
@@ -769,7 +769,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void rewrite(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    void rewrite(ir_types.IrFunc* func)
     {
         // Store physreg assignments in valData for codegen consumption.
         // Bit 31, spilled (low 31 bits = spill slot index)
@@ -795,7 +795,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    bool allocate(LinearScanRegAlloc*, ir_types.IrFunc* func)
+    bool allocate(ir_types.IrFunc* func)
     {
         if (!func || func->nblocks == 0) return false;
 
@@ -823,7 +823,7 @@ pub struct LinearScanRegAlloc
         return true;
     }
 
-    void destroy(LinearScanRegAlloc*)
+    void destroy()
     {
         if (self.vregValues) mman.dealloc<ir_types.IrValue*>(self.vregValues);
         if (self.regForVreg) mman.dealloc<u32>(self.regForVreg);

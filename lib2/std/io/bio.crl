@@ -4,7 +4,7 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod libc = import("std/platform/libc.crl");
+mod libc = import(lib, "std/platform/libc.crl");
 
 const i32 SEEK_SET = 0;
 const i32 SEEK_CUR = 1;

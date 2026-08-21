@@ -4,12 +4,12 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod loop_detect = import("wallvm/passes/loop_detect.crl");
-mod licm = import("wallvm/passes/licm.crl");
-mod domtree = import("wallvm/domtree.crl");
-mod mman = import("std/memory/mman.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod loop_detect = import(lib, "wallvm/passes/loop_detect.crl");
+mod licm = import(lib, "wallvm/passes/licm.crl");
+mod domtree = import(lib, "wallvm/domtree.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 // Cross-loop CSE. LICM skips memory operations, so hoisting loop-invariant
 // loads out of loops that cannot write memory, then sweeping the preheader for

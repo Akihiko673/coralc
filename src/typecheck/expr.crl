@@ -323,8 +323,21 @@ types.CType* cBuiltin(str.strView name)
 }
 
 // Resolve a member of an imported module to its Decl, or null if absent.
-ast.Decl* moduleMemberDecl(Typer* t, str.strView alias, str.strView member)
+// `full` is the dotted path "alias.member"; the member is the final segment.
+// Single str.strView argument to avoid the compiler's two-str.strView-arg bug.
+ast.Decl* moduleMemberDecl(Typer* t, str.strView full)
 {
+    u32 lastDot = 0;
+    bool hasDot = false;
+    for (u32 i = 0; i < full.len; i++)
+        if (full.ptr[i] == '.') { lastDot = i; hasDot = true; }
+    str.strView alias = full;
+    str.strView member = str.strView::empty();
+    if (hasDot)
+    {
+        alias = str.strView::fromParts(full.ptr, lastDot);
+        member = str.strView::fromParts(full.ptr + lastDot + 1, full.len - lastDot - 1);
+    }
     str.strView path = scopes.modsPath(t->mods, alias);
     if (path.len == 0) return null;
     ast.Program* p = loader.loaderGet(t->ld, path.ptr, path.len);
@@ -337,15 +350,48 @@ ast.Decl* moduleMemberDecl(Typer* t, str.strView alias, str.strView member)
     return null;
 }
 
+// Flatten a module-path expression (std.wallvm.ir_types) into its dotted
+// string. Returns false unless `e` is a pure chain of idents joined by dots.
+bool flattenModPath(ast.Expr* e, str.String* out)
+{
+    if (e->kind == ast.EX_IDENT)
+    {
+        out->pushView(e->text);
+        return true;
+    }
+    if (e->kind == ast.EX_DOT)
+    {
+        if (!flattenModPath(e->a, out)) return false;
+        out->pushChar('.');
+        out->pushView(e->text);
+        return true;
+    }
+    return false;
+}
+
 // Enforce `pub` visibility on cross-module member access: a name not declared
 // `pub` in the imported module must not be reachable via `mod.name`.
-void checkModuleAccess(Typer* t, str.strView alias, str.strView member, u32 line, u32 col)
+//
+// Takes a single `full` dotted path (e.g. "wallvm.ir_types.nope"); the member
+// is the final segment and the module alias is everything before the last dot.
+// A single str.strView argument is used deliberately: the Coral compiler
+// miscompiles calls that pass two str.strView values derived from the same
+// base pointer, corrupting the arguments.
+void checkModuleAccess(Typer* t, str.strView full, u32 line, u32 col)
 {
-    // Only imported modules are subject to `pub` access control. A module
-    // alias that is merely the current file's own name (registered so
-    // self-qualified references resolve) is the same module and always allowed.
+    u32 lastDot = 0;
+    bool hasDot = false;
+    for (u32 i = 0; i < full.len; i++)
+        if (full.ptr[i] == '.') { lastDot = i; hasDot = true; }
+    str.strView alias = full;
+    str.strView member = str.strView::empty();
+    if (hasDot)
+    {
+        alias = str.strView::fromParts(full.ptr, lastDot);
+        member = str.strView::fromParts(full.ptr + lastDot + 1, full.len - lastDot - 1);
+    }
     if (!scopes.modsLookup(t->mods, alias)) return;
-    ast.Decl* d = moduleMemberDecl(t, alias, member);
+    ast.Decl* d = moduleMemberDecl(t, full);
     if (d == null)
     {
         errTwoStr(t, line, col, "TC-ACCESS", "module '", alias,
@@ -410,14 +456,29 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
     {
         ast.Expr* obj = callee->a;
         while (obj != null && obj->kind == ast.EX_PAREN) obj = obj->a;
-        if (obj != null && obj->kind == ast.EX_IDENT)
+        if (obj != null && (obj->kind == ast.EX_IDENT || obj->kind == ast.EX_DOT))
         {
-            Sym* so = scopes.scopeLookup(t->top, obj->text);
-            if (so != null && so->kind == scopes.SYM_MODULE)
-            {
-                checkModuleAccess(t, obj->text, callee->text, call->line, call->col);
-                typeArgsOnce(t, call);
-                return scopes.opaqueType(callee->text, call->line, call->col);
+                str.String mp = str.String::new();
+                if (flattenModPath(obj, &mp))
+                {
+                u32 dot = 0;
+                while (dot < mp.len && mp.ptr[dot] != '.') dot++;
+                str.strView first = str.strView::fromParts(mp.ptr, dot);
+                Sym* so = scopes.scopeLookup(t->top, first);
+                if (so != null && so->kind == scopes.SYM_MODULE
+                    && scopes.modsLookup(t->mods, str.strView::fromParts(mp.ptr, mp.len)))
+                {
+                    str.String comb = str.String::new();
+                    comb.pushView(str.strView::fromParts(mp.ptr, mp.len));
+                    comb.pushChar('.');
+                    comb.pushView(callee->text);
+                    checkModuleAccess(t, str.strView::fromParts(comb.ptr, comb.len), call->line, call->col);
+                    comb.free();
+                    typeArgsOnce(t, call);
+                    mp.free();
+                    return scopes.opaqueType(callee->text, call->line, call->col);
+                }
+                mp.free();
             }
         }
     }
@@ -488,21 +549,36 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
             // in-scope module whose members live in this program)
             ast.Expr* bobj = base->a;
             while (bobj != null && bobj->kind == ast.EX_PAREN) bobj = bobj->a;
-            if (bobj != null && bobj->kind == ast.EX_IDENT)
+            if (bobj != null && (bobj->kind == ast.EX_IDENT || bobj->kind == ast.EX_DOT))
             {
-                Sym* bom = scopes.scopeLookup(t->top, bobj->text);
-                if (bom != null && (bom->kind == scopes.SYM_MODULE || bom->kind == scopes.SYM_NS))
-                {
-                    checkModuleAccess(t, bobj->text, base->text, call->line, call->col);
-                    Sym* mf = scopes.scopeLookup(t->top, base->text);
-                    if (mf != null && mf->kind == scopes.SYM_FUNC)
+                    str.String mp = str.String::new();
+                    if (flattenModPath(bobj, &mp))
                     {
-                        scopes.symMarkUsed(mf);
-                        types.CType* msig = fnSig(t, mf->decl);
-                        checkArgs(t, call, msig, mf->decl->ngenerics > 0);
-                        tryRecordGeneric(t, mf->decl, callee);
-                        return msig->ret;
+                        u32 dot = 0;
+                        while (dot < mp.len && mp.ptr[dot] != '.') dot++;
+                        str.strView first = str.strView::fromParts(mp.ptr, dot);
+                        Sym* bom = scopes.scopeLookup(t->top, first);
+                        if (bom != null && (bom->kind == scopes.SYM_MODULE || bom->kind == scopes.SYM_NS)
+                            && scopes.modsLookup(t->mods, str.strView::fromParts(mp.ptr, mp.len)))
+                        {
+                            str.String comb = str.String::new();
+                            comb.pushView(str.strView::fromParts(mp.ptr, mp.len));
+                            comb.pushChar('.');
+                            comb.pushView(base->text);
+                            checkModuleAccess(t, str.strView::fromParts(comb.ptr, comb.len), call->line, call->col);
+                            comb.free();
+                            Sym* mf = scopes.scopeLookup(t->top, base->text);
+                            if (mf != null && mf->kind == scopes.SYM_FUNC)
+                            {
+                            scopes.symMarkUsed(mf);
+                            types.CType* msig = fnSig(t, mf->decl);
+                            checkArgs(t, call, msig, mf->decl->ngenerics > 0);
+                            tryRecordGeneric(t, mf->decl, callee);
+                            mp.free();
+                            return msig->ret;
+                        }
                     }
+                    mp.free();
                 }
             }
             typeArgsOnce(t, call);
@@ -1103,14 +1179,28 @@ types.CType* typeMember(Typer* t, ast.Expr* e)
     ast.Expr* obj = e->a;
     str.strView mem = e->text;
 
-    // module member access: mod.fn / mod.Value
-    if (obj != null && obj->kind == ast.EX_IDENT)
+    // module member access: mod.fn / mod.Value (also multi-segment: std.string.x)
+    if (obj != null && (obj->kind == ast.EX_IDENT || obj->kind == ast.EX_DOT))
     {
-        Sym* so = scopes.scopeLookup(t->top, obj->text);
-        if (so != null && so->kind == scopes.SYM_MODULE)
+        str.String mp = str.String::new();
+        if (flattenModPath(obj, &mp))
         {
-            checkModuleAccess(t, obj->text, mem, e->line, e->col);
-            return scopes.opaqueType(str.strView::fromCstr("module"), e->line, e->col);
+            u32 dot = 0;
+            while (dot < mp.len && mp.ptr[dot] != '.') dot++;
+            str.strView first = str.strView::fromParts(mp.ptr, dot);
+            Sym* so = scopes.scopeLookup(t->top, first);
+            if (so != null && so->kind == scopes.SYM_MODULE && scopes.modsLookup(t->mods, str.strView::fromParts(mp.ptr, mp.len)))
+            {
+                str.String comb = str.String::new();
+                comb.pushView(str.strView::fromParts(mp.ptr, mp.len));
+                comb.pushChar('.');
+                comb.pushView(mem);
+                checkModuleAccess(t, str.strView::fromParts(comb.ptr, comb.len), e->line, e->col);
+                comb.free();
+                mp.free();
+                return scopes.opaqueType(str.strView::fromCstr("module"), e->line, e->col);
+            }
+            mp.free();
         }
     }
     // enum variant: Enum.Variant

@@ -5,10 +5,10 @@
 @[[forced_null_deref]]
 
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod mman = import("std/memory/mman.crl");
-mod limits = import("std/core/limits.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod limits = import(lib, "std/core/limits.crl");
 
 // Sign-extend the low `bits` of val to the full signed width.
 static i64 _signExt(u64 val, u32 bits)

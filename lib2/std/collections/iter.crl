@@ -4,7 +4,7 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod vec = import("std/collections/vec.crl");
+mod vec = import(lib, "std/collections/vec.crl");
 
 pub vec.vec<U> map<T, U>(const vec.vec<T>* v, U(T) fn)
 {

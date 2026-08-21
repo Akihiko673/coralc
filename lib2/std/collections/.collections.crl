@@ -1,0 +1,17 @@
+pub mod arr = import(lib, "std/collections/arr.crl");
+pub mod bitset = import(lib, "std/collections/bitset.crl");
+pub mod cache = import(lib, "std/collections/cache.crl");
+pub mod deque = import(lib, "std/collections/deque.crl");
+pub mod hashmap = import(lib, "std/collections/hashmap.crl");
+pub mod iter = import(lib, "std/collections/iter.crl");
+pub mod linkedlist = import(lib, "std/collections/linkedlist.crl");
+pub mod map = import(lib, "std/collections/map.crl");
+pub mod priorityqueue = import(lib, "std/collections/priorityqueue.crl");
+pub mod queue = import(lib, "std/collections/queue.crl");
+pub mod ringbuf = import(lib, "std/collections/ringbuf.crl");
+pub mod set = import(lib, "std/collections/set.crl");
+pub mod sort = import(lib, "std/collections/sort.crl");
+pub mod tree = import(lib, "std/collections/tree.crl");
+pub mod trie = import(lib, "std/collections/trie.crl");
+pub mod unordered_map = import(lib, "std/collections/unordered_map.crl");
+pub mod vec = import(lib, "std/collections/vec.crl");

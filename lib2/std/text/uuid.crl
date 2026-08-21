@@ -1,8 +1,7 @@
-
 @[[no_drop]]
-mod random = import("std/math/random.crl");
-mod string = import("std/text/string.crl");
-mod hex = import("std/crypto/hex.crl");
+mod random = import(lib, "std/math/random.crl");
+mod string = import(lib, "std/text/string.crl");
+mod hex = import(lib, "std/crypto/hex.crl");
 
 pub struct Uuid
 {

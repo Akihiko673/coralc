@@ -3,7 +3,7 @@
 @[[forced_pointer]]
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
-mod libc = import("std/platform/libc.crl");
+mod libc = import(lib, "std/platform/libc.crl");
 
 pub const i32 SIGABRT = 6;
 pub const i32 SIGALRM = 14;

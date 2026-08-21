@@ -1,5 +1,5 @@
-mod libc = import("std/platform/libc.crl");
 @[[no_drop]]
+mod libc = import(lib, "std/platform/libc.crl");
 
 pub struct mutex
 {

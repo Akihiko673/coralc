@@ -4,9 +4,9 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
-mod hashmap = import("std/collections/hashmap.crl");
-mod option = import("std/data/option.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod hashmap = import(lib, "std/collections/hashmap.crl");
+mod option = import(lib, "std/data/option.crl");
 
 pub struct CacheEntry<K, V>
 {

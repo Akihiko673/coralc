@@ -1,5 +1,5 @@
-mod string = import("std/text/string.crl");
 @[[no_drop]]
+mod string = import(lib, "std/text/string.crl");
 
 const char SEP = '/';
 const char ALT_SEP = '\\';

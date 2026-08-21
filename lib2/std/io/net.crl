@@ -4,8 +4,8 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod libc = import("std/platform/libc.crl");
-mod string = import("std/text/string.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod string = import(lib, "std/text/string.crl");
 
 extern i32 socket(i32 domain, i32 type, i32 protocol);
 extern i32 connect(i32 fd, const void* addr, i32 addrLen);

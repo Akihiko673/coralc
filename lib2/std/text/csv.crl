@@ -1,8 +1,8 @@
 
 @[[no_drop]]
-mod string = import("std/text/string.crl");
-mod mman = import("std/memory/mman.crl");
-mod vec = import("std/collections/vec.crl");
+mod string = import(lib, "std/text/string.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod vec = import(lib, "std/collections/vec.crl");
 
 pub struct csvReader
 {

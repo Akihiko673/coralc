@@ -1,5 +1,5 @@
-mod vector = import("std/math/vector.crl");
 @[[no_drop]]
+mod vector = import(lib, "std/math/vector.crl");
 
 pub struct Mat2
 {

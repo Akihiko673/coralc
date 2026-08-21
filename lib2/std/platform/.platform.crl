@@ -1,0 +1,4 @@
+pub mod arch = import(lib, "std/platform/arch.crl");
+pub mod endian = import(lib, "std/platform/endian.crl");
+pub mod libc = import(lib, "std/platform/libc.crl");
+pub mod os = import(lib, "std/platform/os.crl");

@@ -4,9 +4,9 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
-mod string = import("std/text/string.crl");
-mod vec = import("std/collections/vec.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod string = import(lib, "std/text/string.crl");
+mod vec = import(lib, "std/collections/vec.crl");
 
 pub struct XmlAttribute
 {

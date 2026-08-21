@@ -1,0 +1,15 @@
+// Package root for `mod wallvm = import(lib, "wallvm")`.
+// Re-exports every submodule file under wallvm/ (recursively).
+
+pub mod domtree = import(lib, "wallvm/domtree.crl");
+pub mod wallvm = import(lib, "wallvm/wallvm.crl");
+pub mod ffi_extern = import(lib, "wallvm/ffi/extern.crl");
+pub mod ir_builder = import(lib, "wallvm/ir_builder.crl");
+pub mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+pub mod ir_types = import(lib, "wallvm/ir_types.crl");
+pub mod regalloc = import(lib, "wallvm/regalloc/lsra.crl");
+pub mod asm_rules = import(lib, "wallvm/rules/asm_rules.crl");
+
+pub mod noret = import(lib, "wallvm/noret/.noret.crl");
+pub mod passes = import(lib, "wallvm/passes/.passes.crl");
+pub mod target = import(lib, "wallvm/target/.target.crl");

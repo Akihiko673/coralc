@@ -1,0 +1,8 @@
+// Package root for `mod embed = import(lib, "embed")`.
+// Re-exports every submodule file under embed/ (recursively).
+
+pub mod bioembed = import(lib, "embed/bioembed.crl");
+pub mod hexembed = import(lib, "embed/hexembed.crl");
+pub mod mathembed = import(lib, "embed/mathembed.crl");
+pub mod mman = import(lib, "embed/mman.crl");
+pub mod utf8embed = import(lib, "embed/utf8embed.crl");

@@ -1,5 +1,5 @@
-mod libc = import("std/platform/libc.crl");
-mod mman = import("std/memory/mman.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 pub constexpr f64 tau = 6.28318530717958647692;
 pub constexpr f64 srt2 = 1.41421356237309504880;

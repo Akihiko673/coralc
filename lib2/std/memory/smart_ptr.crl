@@ -4,7 +4,7 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 pub struct smart_ptr<T>
 {

@@ -1,0 +1,13 @@
+// Package root for `mod std = import(lib, "std")`.
+// Re-exports every submodule file under std/ (recursively).
+
+pub mod collections = import(lib, "std/collections/.collections.crl");
+pub mod concurrent = import(lib, "std/concurrent/.concurrent.crl");
+pub mod crypto = import(lib, "std/crypto/.crypto.crl");
+pub mod data = import(lib, "std/data/.data.crl");
+pub mod io = import(lib, "std/io/.io.crl");
+pub mod math = import(lib, "std/math/.math.crl");
+pub mod memory = import(lib, "std/memory/.memory.crl");
+pub mod misc = import(lib, "std/misc/.misc.crl");
+pub mod platform = import(lib, "std/platform/.platform.crl");
+pub mod text_ = import(lib, "std/text/.text.crl");

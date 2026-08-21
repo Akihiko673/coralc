@@ -1,5 +1,4 @@
 mod vec = import("std/collections/vec.crl");
-@[[no_drop]]
 
 i32 main()
 {

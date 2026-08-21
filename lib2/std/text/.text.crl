@@ -1,0 +1,12 @@
+pub mod csv = import(lib, "std/text/csv.crl");
+pub mod fmt = import(lib, "std/text/fmt.crl");
+pub mod ini = import(lib, "std/text/ini.crl");
+pub mod json = import(lib, "std/text/json.crl");
+pub mod regex = import(lib, "std/text/regex.crl");
+pub mod string = import(lib, "std/text/string.crl");
+pub mod strutil = import(lib, "std/text/strutil.crl");
+pub mod toml = import(lib, "std/text/toml.crl");
+pub mod uri = import(lib, "std/text/uri.crl");
+pub mod utf8 = import(lib, "std/text/utf8.crl");
+pub mod uuid = import(lib, "std/text/uuid.crl");
+pub mod xml = import(lib, "std/text/xml.crl");

@@ -3,8 +3,8 @@
 @[[forced_pointer]]
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
-mod libc = import("std/platform/libc.crl");
-mod string = import("std/text/string.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod string = import(lib, "std/text/string.crl");
 
 pub u64 encode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
 {

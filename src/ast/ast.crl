@@ -167,6 +167,7 @@ pub struct Decl
     u32 kind;
     str.strView name;   // DT_MODULE/DT_IMPORT: alias; DT_METHODBLOCK: struct
     str.strView text;   // DT_MODULE/DT_IMPORT: path
+    str.strView importOrigin; // DT_MODULE/DT_IMPORT: origin specifier ("lib" = lib2 folder)
     TypeExpr* type;     // const/var/typedef/distinct/extern/func return
     Expr* value;        // const/var initializer
     bool exported;

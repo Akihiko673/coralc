@@ -1,0 +1,5 @@
+pub mod complex = import(lib, "std/math/complex.crl");
+pub mod math = import(lib, "std/math/math.crl");
+pub mod matrix = import(lib, "std/math/matrix.crl");
+pub mod random = import(lib, "std/math/random.crl");
+pub mod vector = import(lib, "std/math/vector.crl");

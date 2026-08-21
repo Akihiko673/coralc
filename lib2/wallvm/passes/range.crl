@@ -4,8 +4,8 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
 
 const u32 MAX_LEAVES = 16;
 

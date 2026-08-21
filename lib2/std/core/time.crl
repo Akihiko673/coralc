@@ -1,4 +1,4 @@
-mod libc = import("std/platform/libc.crl");
+mod libc = import(lib, "std/platform/libc.crl");
 
 constexpr i32 CLOCK_MONOTONIC = 1;
 

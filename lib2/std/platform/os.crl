@@ -1,5 +1,4 @@
 mod string = import("std/text/string.crl");
-@[[no_drop]]
 
 flag (platform) {
 LINUX:

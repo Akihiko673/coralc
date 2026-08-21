@@ -4,11 +4,11 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod libc = import("std/platform/libc.crl");
-mod mman = import("std/memory/mman.crl");
-mod string = import("std/text/string.crl");
-mod fmt = import("std/text/fmt.crl");
-mod limits = import("std/core/limits.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod string = import(lib, "std/text/string.crl");
+mod fmt = import(lib, "std/text/fmt.crl");
+mod limits = import(lib, "std/core/limits.crl");
 
 void _writeStr(i32 fd, string.strView s)
 {

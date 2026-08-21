@@ -4,9 +4,9 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod domtree = import("wallvm/domtree.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod domtree = import(lib, "wallvm/domtree.crl");
 
 // Div/rem fusion, when both div(x, y) and rem(x, y) exist, the remainder can
 // be computed as x - div(x, y) * y, replacing an expensive division with a

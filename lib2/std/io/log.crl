@@ -1,7 +1,7 @@
-mod string = import("std/text/string.crl");
 @[[no_drop]]
-mod ios = import("std/io/ios.crl");
-mod time = import("std/core/time.crl");
+mod string = import(lib, "std/text/string.crl");
+mod ios = import(lib, "std/io/ios.crl");
+mod time = import(lib, "std/core/time.crl");
 
 pub enum LogLevel
 {

@@ -1,0 +1,4 @@
+// Package root for `mod start = import(lib, "start")`.
+// Re-exports every submodule file under start/ (recursively).
+
+pub mod startup_templates = import(lib, "start/startup_templates.crl");

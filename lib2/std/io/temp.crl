@@ -1,7 +1,7 @@
-mod mman = import("std/memory/mman.crl");
 @[[no_drop]]
-mod string = import("std/text/string.crl");
-mod libc = import("std/platform/libc.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod string = import(lib, "std/text/string.crl");
+mod libc = import(lib, "std/platform/libc.crl");
 
 pub struct TempFile
 {

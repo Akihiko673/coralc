@@ -4,7 +4,7 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 pub struct bitset
 {
@@ -168,5 +168,18 @@ pub struct bitset
         for (u64 i = 0; i < self.numWords; i++)
             self.words[i] = ~self.words[i];
         self._maskPadding();
+    }
+}
+
+trait drop
+{
+    inline void drop();
+}
+
+vec::drop
+{
+    inline void drop()
+    {
+        self.dispose();
     }
 }

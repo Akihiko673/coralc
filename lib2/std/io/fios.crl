@@ -4,9 +4,9 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod libc = import("std/platform/libc.crl");
-mod string = import("std/text/string.crl");
-mod mman = import("std/memory/mman.crl");
+mod libc = import(lib, "std/platform/libc.crl");
+mod string = import(lib, "std/text/string.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 pub distinct FileHandle = void*; // i used distinct, cuz i don't want niggas randomly placing a void* in place of it
                                  // niggas gonna need to ocast it. then, they's on their own

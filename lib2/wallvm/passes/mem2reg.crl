@@ -5,10 +5,10 @@
 @[[forced_null_deref]]
 
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod domtree = import("wallvm/domtree.crl");
-mod mman = import("std/memory/mman.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod domtree = import(lib, "wallvm/domtree.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 struct AllocaInfo
 {

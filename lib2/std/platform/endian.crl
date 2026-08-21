@@ -1,15 +1,13 @@
-@[[no_drop]]
-
 flag (ENDIAN) {
-little:
-    pub constexpr bool IS_LITTLE_ENDIAN = true;
-    pub constexpr bool IS_BIG_ENDIAN = false;
-big:
-    pub constexpr bool IS_LITTLE_ENDIAN = false;
-    pub constexpr bool IS_BIG_ENDIAN = true;
-default:
-    pub constexpr bool IS_LITTLE_ENDIAN = true;
-    pub constexpr bool IS_BIG_ENDIAN = false;
+    little:
+        pub constexpr bool IS_LITTLE_ENDIAN = true;
+        pub constexpr bool IS_BIG_ENDIAN = false;
+    big:
+        pub constexpr bool IS_LITTLE_ENDIAN = false;
+        pub constexpr bool IS_BIG_ENDIAN = true;
+    default:
+        pub constexpr bool IS_LITTLE_ENDIAN = true;
+        pub constexpr bool IS_BIG_ENDIAN = false;
 }
 
 pub u16 bswapU16(u16 v)

@@ -4,9 +4,9 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod ir_types = import("wallvm/ir_types.crl");
-mod asm_rules = import("wallvm/rules/asm_rules.crl");
-mod mman = import("std/memory/mman.crl");
+mod ir_types = import(lib, "wallvm/ir_types.crl");
+mod asm_rules = import(lib, "wallvm/rules/asm_rules.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 pub struct ExternLib
 {

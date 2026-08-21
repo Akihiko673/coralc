@@ -1,10 +1,10 @@
-mod string = import("std/text/string.crl");
+mod string = import(lib, "std/text/string.crl");
 @[[no_drop]]
-mod mman = import("std/memory/mman.crl");
-mod hashmap = import("std/collections/hashmap.crl");
-mod strutil = import("std/text/strutil.crl");
-mod option = import("std/data/option.crl");
-mod vec = import("std/collections/vec.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod hashmap = import(lib, "std/collections/hashmap.crl");
+mod strutil = import(lib, "std/text/strutil.crl");
+mod option = import(lib, "std/data/option.crl");
+mod vec = import(lib, "std/collections/vec.crl");
 
 pub struct iniSection
 {

@@ -1,5 +1,4 @@
-mod mman = import("std/memory/mman.crl");
-@[[no_drop]]
+mod mman = import(lib, "std/memory/mman.crl");
 
 extern u8 __bss_start;
 extern u8 __bss_end;

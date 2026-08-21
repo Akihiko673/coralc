@@ -1,5 +1,6 @@
-pub struct Vec2
 @[[no_drop]]
+
+pub struct Vec2
 {
     f64 x;
     f64 y;

@@ -1,0 +1,6 @@
+pub mod mutex = import(lib, "std/concurrent/mutex.crl");
+pub mod rwlock = import(lib, "std/concurrent/rwlock.crl");
+pub mod semaphore = import(lib, "std/concurrent/semaphore.crl");
+pub mod signal = import(lib, "std/concurrent/signal.crl");
+pub mod thread = import(lib, "std/concurrent/thread.crl");
+pub mod threadpool = import(lib, "std/concurrent/threadpool.crl");

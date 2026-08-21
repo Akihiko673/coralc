@@ -1,5 +1,5 @@
-mod math = import("std/math/math.crl");
 @[[no_drop]]
+mod math = import(lib, "std/math/math.crl");
 
 pub struct Complex
 {

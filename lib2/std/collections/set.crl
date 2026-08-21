@@ -1,7 +1,7 @@
-mod hashmap = import("std/collections/hashmap.crl");
+mod hashmap = import(lib, "std/collections/hashmap.crl");
 @[[no_drop]]
-mod vec = import("std/collections/vec.crl");
-mod mman = import("std/memory/mman.crl");
+mod vec = import(lib, "std/collections/vec.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 pub struct set<T>
 {

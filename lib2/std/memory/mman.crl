@@ -3,7 +3,7 @@
 @[[forced_pointer]]
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
-mod tlsf = import("std/memory/tlsf.crl");
+mod tlsf = import(lib, "std/memory/tlsf.crl");
 
 pub struct Allocator
 {

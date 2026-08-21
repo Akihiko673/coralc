@@ -1,5 +1,3 @@
-@[[no_drop]]
-
 mod string = import("std/text/string.crl");
 
 flag (ARCH) {

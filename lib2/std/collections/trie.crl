@@ -4,8 +4,8 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
-mod string = import("std/text/string.crl");
+mod mman = import(lib, "std/memory/mman.crl");
+mod string = import(lib, "std/text/string.crl");
 
 const u64 TRIE_FANOUT = 256;
 

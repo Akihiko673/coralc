@@ -253,3 +253,16 @@ pub struct vec<T>
         self.cap = 0;
     }
 }
+
+trait drop()
+{
+    inline void drop();
+}
+
+vec::drop
+{
+    inline void drop()
+    {
+        self.dispose();
+    }
+}

@@ -4,7 +4,7 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("lib/embed/mman.crl");
+mod mman = import(lib, "lib/embed/mman.crl");
 
 pub struct _strView
 {

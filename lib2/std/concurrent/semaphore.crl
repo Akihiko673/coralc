@@ -1,6 +1,7 @@
-mod libc = import("std/platform/libc.crl");
 @[[no_drop]]
-mod arr = import("std/collections/arr.crl");
+
+mod libc = import(lib, "std/platform/libc.crl");
+mod arr = import(lib, "std/collections/arr.crl");
 
 pub struct semaphore
 {

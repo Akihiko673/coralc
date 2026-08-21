@@ -173,19 +173,25 @@ ModuleTable* modsNew()
     return m;
 }
 
-// Register a `mod alias = import("path")`.
+// Register a `mod alias = import("path")`. The alias and path byte ranges are
+// copied into persistent storage, so callers may pass views into temporary
+// buffers (e.g. a local str.String) without dangling.
 void modsAdd(ModuleTable* m, str.strView alias, str.strView path)
 {
     u32 nc = m->n + 1;
     str.strView* na = mman.alloc<str.strView>(nc);
     str.strView* np = mman.alloc<str.strView>(nc);
+    char* acopy = (char*)mman.alloc<u8>(alias.len ? alias.len : 1);
+    libc.memcpy(acopy, alias.ptr, alias.len);
+    char* pcopy = (char*)mman.alloc<u8>(path.len ? path.len : 1);
+    libc.memcpy(pcopy, path.ptr, path.len);
     for (u32 i = 0; i < m->n; i++)
     {
         na[i] = m->aliases[i];
         np[i] = m->paths[i];
     }
-    na[m->n] = alias;
-    np[m->n] = path;
+    na[m->n] = str.strView::fromParts(acopy, alias.len);
+    np[m->n] = str.strView::fromParts(pcopy, path.len);
     if (m->aliases) mman.dealloc<str.strView>(m->aliases);
     if (m->paths) mman.dealloc<str.strView>(m->paths);
     m->aliases = na;

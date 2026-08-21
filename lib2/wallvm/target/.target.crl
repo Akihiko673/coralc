@@ -1,0 +1,12 @@
+pub mod arm64 = import(lib, "wallvm/target/arm64/arm64.crl");
+pub mod arm = import(lib, "wallvm/target/arm/arm.crl");
+pub mod mips64 = import(lib, "wallvm/target/mips64/mips64.crl");
+pub mod mips = import(lib, "wallvm/target/mips/mips.crl");
+pub mod ppc64 = import(lib, "wallvm/target/ppc64/ppc64.crl");
+pub mod ppc = import(lib, "wallvm/target/ppc/ppc.crl");
+pub mod riscv = import(lib, "wallvm/target/riscv/riscv.crl");
+pub mod sparc64 = import(lib, "wallvm/target/sparc64/sparc64.crl");
+pub mod wasm32 = import(lib, "wallvm/target/wasm32/wasm32.crl");
+pub mod wasm64 = import(lib, "wallvm/target/wasm64/wasm64.crl");
+pub mod x86_64 = import(lib, "wallvm/target/x86_64/x86_64.crl");
+pub mod x86 = import(lib, "wallvm/target/x86/x86.crl");

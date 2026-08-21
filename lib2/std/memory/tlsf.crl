@@ -4,7 +4,7 @@
 @[[forced_unsafe_cast]]
 @[[forced_null_deref]]
 
-mod mman = import("std/memory/mman.crl");
+mod mman = import(lib, "std/memory/mman.crl");
 
 const u32 FLI_COUNT = 32; // still thinking of adding a constexpr or final keyword
 const u32 SLI_COUNT = 32;
