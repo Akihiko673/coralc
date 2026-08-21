@@ -8,6 +8,12 @@ mod str = import("std/text/string.crl");
 mod mman = import("std/memory/mman.crl");
 mod libc = import("std/platform/libc.crl");
 
+// When true, the compiler permits ALL casts (every source type is treated as
+// assignable to every target type). Set only by the explicit `--fcast` CLI
+// flag; the strict no-implicit-conversion rules otherwise apply. This is an
+// escape hatch for code that genuinely needs unchecked conversion.
+bool gForceCast = false;
+
 pub const u32 TY_UNKNOWN = 0;   // unresolved / poison / opaque module escape
 pub const u32 TY_VOID = 1;
 pub const u32 TY_BOOL = 2;
@@ -113,6 +119,7 @@ bool primType(str.strView n, CType* out)
     if (n.len == 4 && n.ptr[0] == 'c' && n.ptr[1] == 'h' && n.ptr[2] == 'a' && n.ptr[3] == 'r')
     {
         out->kind = TY_CHAR;
+        out->width = 8;
         return true;
     }
     if (n.len == 4 && n.ptr[0] == 'v' && n.ptr[1] == 'o' && n.ptr[2] == 'i' && n.ptr[3] == 'd')
@@ -208,12 +215,40 @@ bool typesEqual(CType* a, CType* b)
 // that is structurally equal except that the target only ADDS const qualifiers
 // (char* -> const char* is fine; removing const is not). Returns false for
 // everything else so the strict no-implicit-conversion rules still apply.
+// Lossless numeric widening: can a value of `src` be assigned to `dst` with
+// no loss of value range? Only integer->integer and float->float widening
+// where the entire source range fits inside the destination range (a smaller
+// number going into a bigger number). Narrowing, sign-flipping, and
+// int<->float conversions are NOT lossless and are rejected here.
+bool losslessWiden(CType* src, CType* dst)
+{
+    if (src->kind == TY_INT && dst->kind == TY_INT)
+    {
+        if (src->width < dst->width)
+        {
+            if (src->isSigned == dst->isSigned) return true;
+            // unsigned -> signed of strictly greater width is value-preserving
+            // (e.g. u8 -> i16); signed -> unsigned can lose negatives, so no.
+            if (!src->isSigned && dst->isSigned) return true;
+            return false;
+        }
+        return false;
+    }
+    if (src->kind == TY_FLOAT && dst->kind == TY_FLOAT)
+    {
+        return src->width < dst->width; // f32 -> f64 only
+    }
+    return false;
+}
+
 bool typesCompatible(CType* a, CType* b)
 {
     a = effective(a);
     b = effective(b);
     if (containsUnknown(a) || containsUnknown(b)) return true; // poison
+    if (gForceCast) return true; // --fcast: allow every cast
     if (typesEqual(a, b)) return true;
+    if (losslessWiden(b, a)) return true; // b is src, a is dst: src wider-safe
     if (a->kind == TY_PTR && b->kind == TY_PTR)
     {
         if (b->isConstPtr && !a->isConstPtr) return false; // dropping const
@@ -258,6 +293,8 @@ bool comparable(CType* a, CType* b)
     b = effective(b);
     if (containsUnknown(a) || containsUnknown(b)) return true;
     if (typesEqual(a, b)) return true;
+    // lossless numeric widening makes the operands comparable either way
+    if (losslessWiden(a, b) || losslessWiden(b, a)) return true;
     bool aPtrLike = a->kind == TY_PTR || a->kind == TY_SLICE || a->kind == TY_ARRAY;
     bool bPtrLike = b->kind == TY_PTR || b->kind == TY_SLICE || b->kind == TY_ARRAY;
     if (aPtrLike && bPtrLike)
@@ -318,6 +355,29 @@ str.strView typeName(CType* t)
         tmp[k] = 0;
         return str.strView::fromParts((const char*)tmp, (u64)k);
     }
+    if (t->kind == TY_FUNC)
+    {
+        u32 cap = 16u;
+        for (u32 i = 0; i < t->nparams; i++)
+        {
+            if (t->params != null && t->params[i] != null) cap += typeName(t->params[i]).len + 1u;
+        }
+        u8* buf = mman.alloc<u8>(cap + 64u);
+        u32 k = 0;
+        buf[k++] = 'f'; buf[k++] = 'u'; buf[k++] = 'n'; buf[k++] = '(';
+        for (u32 i = 0; i < t->nparams; i++)
+        {
+            if (i > 0) buf[k++] = ',';
+            if (t->params != null && t->params[i] != null)
+            {
+                str.strView pn = typeName(t->params[i]);
+                for (u32 j = 0; j < pn.len; j++) buf[k++] = pn.ptr[j];
+            }
+        }
+        buf[k++] = ')';
+        buf[k] = 0;
+        return str.strView::fromParts((const char*)buf, (u64)k);
+    }
     return str.strView::fromCstr("?");
 }
 
@@ -353,34 +413,30 @@ bool literalIntInfo(str.strView text, u64* mag, bool* litSigned, u32* forcedWidt
     *unsignedLit = false;
     if (text.len == 0) return false;
     u32 n = text.len;
-    u32 suf = 0; // 0 none, 1 u, 2 l, 3 ul
-    bool peeled = false;
-    u8 last = (u8)text.ptr[n - 1];
-    if ((last == 'u' || last == 'U') && n >= 2)
+    bool uSuffix = false;
+    bool longSuffix = false;
+    // Peel trailing multiplier/sign suffix letters: u/U (unsigned) and l/L
+    // (long, forced 64-bit). Any ordering is accepted: ul, lu, ull, ULL, uL,
+    // ll, ... so standard literals like 1ULL / 0xffu work.
+    while (n > 0)
     {
-        n--;
-        suf = 1;
-        peeled = true;
-        last = (u8)text.ptr[n - 1];
-        if ((last == 'l' || last == 'L') && n >= 2)
+        u8 c = (u8)text.ptr[n - 1];
+        if (c == 'u' || c == 'U') { uSuffix = true; n--; }
+        else if (c == 'l' || c == 'L')
         {
+            longSuffix = true;
             n--;
-            suf = 3;
+            if (n > 0 && ((u8)text.ptr[n - 1] == 'l' || (u8)text.ptr[n - 1] == 'L'))
+                n--;
         }
-    }
-    else if ((last == 'l' || last == 'L') && n >= 2)
-    {
-        n--;
-        suf = 2;
-        peeled = true;
+        else break;
     }
     str.strView body = str.strView::fromParts(text.ptr, n);
     if (!parseUIntBody(body, mag)) return false;
     // 'u' marks the literal unsigned; the width still follows the value
     // magnitude (smallest of 32/64 that fits). 'l' is forced 64.
-    if (suf == 1) { *forcedWidth = 0; *litSigned = false; *unsignedLit = true; }
-    else if (suf == 2) { *forcedWidth = 64; *litSigned = true; }
-    else if (suf == 3) { *forcedWidth = 64; *litSigned = false; *unsignedLit = true; }
+    if (longSuffix) { *forcedWidth = 64; *litSigned = !uSuffix; *unsignedLit = uSuffix; }
+    else if (uSuffix) { *forcedWidth = 0; *litSigned = false; *unsignedLit = true; }
     return true;
 }
 

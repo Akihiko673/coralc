@@ -54,7 +54,7 @@ pub struct pool<T>
         while (oldFree != null)
         {
             void* next = *(void**)oldFree;
-            u64 idx = ((u8*)oldFree - oldBase) / self.blockSize;
+            u64 idx = (u64)((u8*)oldFree - oldBase) / self.blockSize;
             void* block = (void*)(self.blocks + idx * self.blockSize);
             *(void**)block = self.freeList;
             self.freeList = block;

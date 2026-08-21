@@ -26,6 +26,9 @@ pub struct Check
     bool forcedSkip;        // any @[[forced_*]]: borrow checker skips file
     u32 nerrors;
     u32 nwarnings;
+    str.strView flagNames[16];
+    str.strView flagVals[16];
+    u32 nflags;
 
     static Check new(ast.Program* prog, str.strView src, str.strView filename, char* exeDir)
     {
@@ -39,6 +42,7 @@ pub struct Check
         c.forcedSkip = false;
         c.nerrors = 0;
         c.nwarnings = 0;
+        c.nflags = 0;
         return c;
     }
 
@@ -62,6 +66,35 @@ pub struct Check
             self.errDecl(d, str.strView::fromCstr("TC-REDECL"), str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
             msg.free();
         }
+    }
+
+    bool vEqCI(str.strView a, str.strView b)
+    {
+        if (a.len != b.len) return false;
+        for (u32 i = 0; i < a.len; i++)
+        {
+            char ca = a.ptr[i]; if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+            char cb = b.ptr[i]; if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+            if (ca != cb) return false;
+        }
+        return true;
+    }
+
+    bool vEqSV(str.strView a, str.strView b)
+    {
+        if (a.len != b.len) return false;
+        for (u32 i = 0; i < a.len; i++)
+            if (a.ptr[i] != b.ptr[i]) return false;
+        return true;
+    }
+
+    // value supplied for a flag (terminal --flags, or the value the compiler
+    // was built with and re-supplies -- e.g. arch/platform). empty if none.
+    str.strView flagValue(str.strView name)
+    {
+        for (u32 i = 0; i < self.nflags; i++)
+            if (vEqCI(self.flagNames[i], name)) return self.flagVals[i];
+        return str.strView::empty();
     }
 
     expr.Typer typer(scopes.Scope* top, scopes.ModuleTable* mods, loader.Loader* ld)
@@ -181,7 +214,91 @@ pub struct Check
             case ast.DT_METHODBLOCK:
                 break;
             case ast.DT_FLAG:
-                break;
+                {
+                    // Compile-time configuration flag. The active case is:
+                    //   1. the case matching the flag's supplied value (terminal
+                    //      --flags, or the value the compiler was built with,
+                    //      e.g. arch/platform), else
+                    //   2. the `default` case (the only allowed fallback), else
+                    //   3. an error: unresolved flag (no silent first-case pick).
+                    ast.Decl** body = null;
+                    u32 nbody = 0;
+                    str.strView sel = self.flagValue(d->name);
+                    if (sel.len > 0)
+                    {
+                        u32 off = 0;
+                        for (u32 ci = 0; ci < d->ncases; ci++)
+                        {
+                            if (vEqSV(d->caseNames[ci], sel))
+                            {
+                                body = d->cases + off;
+                                nbody = d->caseLens[ci];
+                                break;
+                            }
+                            off += d->caseLens[ci];
+                        }
+                        if (body == null)
+                        {
+                            self.errDecl(d, str.strView::fromCstr("TC-RESOLVE"),
+                                str.strView::fromCstr("unresolved flag '"), str.strView::empty());
+                            str.String m = str.String::new();
+                            m.pushView(d->name);
+                            m.pushView(str.strView::fromCstr("': no case named '"));
+                            m.pushView(sel);
+                            m.pushView(str.strView::fromCstr("' (set it with --flags="));
+                            m.pushView(d->name);
+                            m.pushView(str.strView::fromCstr("=<case>)"));
+                            self.errDecl(d, str.strView::fromCstr("TC-RESOLVE"),
+                                str.strView::fromParts(m.ptr, m.len), str.strView::empty());
+                            m.free();
+                            break;
+                        }
+                    }
+                    else if (d->defaultBody != null)
+                    {
+                        body = d->defaultBody;
+                        nbody = d->ndeclDefault;
+                    }
+                    else
+                    {
+                        self.errDecl(d, str.strView::fromCstr("TC-RESOLVE"),
+                            str.strView::fromCstr("unresolved flag '"), str.strView::empty());
+                        str.String m = str.String::new();
+                        m.pushView(d->name);
+                        m.pushView(str.strView::fromCstr("': no default case and no value supplied (pass --flags="));
+                        m.pushView(d->name);
+                        m.pushView(str.strView::fromCstr("=<case> to the compiler)"));
+                        self.errDecl(d, str.strView::fromCstr("TC-RESOLVE"),
+                            str.strView::fromParts(m.ptr, m.len), str.strView::empty());
+                        m.free();
+                        break;
+                    }
+                    if (body != null)
+                    {
+                        for (u32 k = 0; k < nbody; k++)
+                        {
+                            ast.Decl* inner = body[k];
+                            if (inner == null) continue;
+                            if (inner->kind == ast.DT_FUNC)
+                                self.declareSym(top, inner, scopes.SYM_FUNC, null);
+                            else if (inner->kind == ast.DT_CONST)
+                            {
+                                types.CType* ct = null;
+                                if (inner->type != null)
+                                    ct = scopes.resolveTypeExpr(inner->type, top, mods, null, 0);
+                                self.declareSym(top, inner, scopes.SYM_CONST, ct);
+                            }
+                            else if (inner->kind == ast.DT_VAR)
+                            {
+                                types.CType* ct = null;
+                                if (inner->type != null)
+                                    ct = scopes.resolveTypeExpr(inner->type, top, mods, null, 0);
+                                self.declareSym(top, inner, scopes.SYM_VAR, ct);
+                            }
+                        }
+                    }
+                    break;
+                }
             }
         }
 

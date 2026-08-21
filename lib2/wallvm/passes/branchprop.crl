@@ -7,6 +7,7 @@
 mod ir_types = import("wallvm/ir_types.crl");
 mod ir_opcodes = import("wallvm/ir_opcodes.crl");
 mod domtree = import("wallvm/domtree.crl");
+mod mman = import("std/memory/mman.crl");
 
 // Condition-constraint propagation, for a cond_br whose condition is
 // icmp eq/ne (v, const) (optionally negated), the comparison guarantees

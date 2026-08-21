@@ -19,7 +19,7 @@ pub u64 _absI64(i64 x)
 
 pub i64 signI64(i64 x)
 {
-    return x < 0 ? -1 : (x > 0 ? 1 : 0);
+    return (i64)(x < 0 ? -1 : (x > 0 ? 1 : 0));
 }
 
 pub f64 signF64(f64 x)

@@ -318,6 +318,45 @@ types.CType* cBuiltin(str.strView name)
     return sig;
 }
 
+// Resolve a member of an imported module to its Decl, or null if absent.
+ast.Decl* moduleMemberDecl(Typer* t, str.strView alias, str.strView member)
+{
+    str.strView path = scopes.modsPath(t->mods, alias);
+    if (path.len == 0) return null;
+    ast.Program* p = loader.loaderGet(t->ld, path.ptr, path.len);
+    if (p == null) return null;
+    for (u32 i = 0; i < p->ndecls; i++)
+    {
+        ast.Decl* d = p->decls[i];
+        if (d != null && scopes.sEq(d->name, member)) return d;
+    }
+    return null;
+}
+
+// Enforce `pub` visibility on cross-module member access: a name not declared
+// `pub` in the imported module must not be reachable via `mod.name`.
+void checkModuleAccess(Typer* t, str.strView alias, str.strView member, u32 line, u32 col)
+{
+    // Only imported modules are subject to `pub` access control. A module
+    // alias that is merely the current file's own name (registered so
+    // self-qualified references resolve) is the same module and always allowed.
+    if (!scopes.modsLookup(t->mods, alias)) return;
+    ast.Decl* d = moduleMemberDecl(t, alias, member);
+    if (d == null)
+    {
+        errTwoStr(t, line, col, "TC-ACCESS", "module '", alias,
+                  "' has no member '", member,
+                  "'", str.strView::empty());
+        return;
+    }
+    if (!d->exported)
+    {
+        errTwoStr(t, line, col, "TC-ACCESS", "member '", member,
+                  "' of module '", alias,
+                  "' is private (not declared pub)", str.strView::empty());
+    }
+}
+
 types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
 {
     // module-qualified function call: mod.fn(...) -> opaque result
@@ -330,6 +369,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
             Sym* so = scopes.scopeLookup(t->top, obj->text);
             if (so != null && so->kind == scopes.SYM_MODULE)
             {
+                checkModuleAccess(t, obj->text, callee->text, call->line, call->col);
                 typeArgsOnce(t, call);
                 return scopes.opaqueType(callee->text, call->line, call->col);
             }
@@ -407,6 +447,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                 Sym* bom = scopes.scopeLookup(t->top, bobj->text);
                 if (bom != null && (bom->kind == scopes.SYM_MODULE || bom->kind == scopes.SYM_NS))
                 {
+                    checkModuleAccess(t, bobj->text, base->text, call->line, call->col);
                     Sym* mf = scopes.scopeLookup(t->top, base->text);
                     if (mf != null && mf->kind == scopes.SYM_FUNC)
                     {
@@ -528,8 +569,44 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
         }
         else
         {
+            // generic parameter used as a default constructor: `T()` yields a
+            // default value of the (still-opaque) generic type.
+            if (callee->kind == ast.EX_IDENT
+                && scopes.isGenericParam(t->gnames, t->ng, callee->text)
+                && call->nargs == 0)
+            {
+                typeArgsOnce(t, call);
+                return scopes.opaqueType(callee->text, callee->line, callee->col);
+            }
             // builtin compile-time helpers (handled in codegen, not declared)
-            if (scopes.sEq(callee->text, "alignof") || scopes.sEq(callee->text, "offsetof"))
+            if (scopes.sEq(callee->text, "alignof"))
+            {
+                types.CType* st = mman.alloc<types.CType>(1);
+                st->kind = types.TY_INT;
+                st->width = 64;
+                st->isSigned = false;
+                // alignof's operand is a TYPE: it may reference a generic
+                // parameter (e.g. `alignof(T)` inside a generic function), so
+                // resolve it as a type rather than typechecking it as a value.
+                if (call->nargs > 0 && call->args[0] != null
+                    && call->args[0]->kind == ast.EX_IDENT)
+                {
+                    ast.TypeExpr te;
+                    te.kind = types.TY_NAMED;
+                    te.name = call->args[0]->text;
+                    te.elem = null; te.count = null;
+                    te.args = null; te.nargs = 0; te.cargs = null; te.ncargs = 0;
+                    te.ret = null; te.isConst = false;
+                    te.line = call->args[0]->line; te.col = call->args[0]->col;
+                    types.CType* rt = scopes.resolveTypeExpr(&te, t->top, t->mods,
+                                                             t->gnames, t->ng);
+                    (void)rt;
+                }
+                else
+                    typeArgsOnce(t, call);
+                return st;
+            }
+            if (scopes.sEq(callee->text, "offsetof"))
             {
                 types.CType* st = mman.alloc<types.CType>(1);
                 st->kind = types.TY_INT;
@@ -629,6 +706,7 @@ types.CType* typeExpr(Typer* t, ast.Expr* e)
         {
             types.CType* ct = mman.alloc<types.CType>(1);
             ct->kind = types.TY_CHAR;
+            ct->width = 8;
             return ct;
         }
     case ast.EX_BOOL:
@@ -883,9 +961,9 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
             if (litL) ok = types.isNumeric(re);
             else if (litR) ok = types.isNumeric(le);
             else if (le->kind == types.TY_NULL) ok = re->kind == types.TY_PTR || re->kind == types.TY_SLICE
-                || re->kind == types.TY_ARRAY;
+                || re->kind == types.TY_ARRAY || re->kind == types.TY_FUNC;
             else if (re->kind == types.TY_NULL) ok = le->kind == types.TY_PTR || le->kind == types.TY_SLICE
-                || le->kind == types.TY_ARRAY;
+                || le->kind == types.TY_ARRAY || le->kind == types.TY_FUNC;
             else if (types.isIntLike(le) && types.isIntLike(re)) ok = true;
             else if (types.comparable(le, re)) ok = true;
             if (!ok)
@@ -979,6 +1057,7 @@ types.CType* typeMember(Typer* t, ast.Expr* e)
         Sym* so = scopes.scopeLookup(t->top, obj->text);
         if (so != null && so->kind == scopes.SYM_MODULE)
         {
+            checkModuleAccess(t, obj->text, mem, e->line, e->col);
             return scopes.opaqueType(str.strView::fromCstr("module"), e->line, e->col);
         }
     }
@@ -1388,7 +1467,32 @@ ast.Decl* findStructInProgram(Typer* t, str.strView name, ast.Program** owner)
 }
 
 // Entry for a function/method body.
-void typeFunction(Typer* t, ast.Decl* d)
+// Build the element type of `self` for a method on struct `sd`. For a generic
+// struct (e.g. `set<T>`), `self` must carry the generic args so it matches
+// parameters declared as `const set<T>*` etc. rather than a bare `set*`.
+types.CType* selfElemType(Typer* t, ast.Decl* sd, str.strView name, u32 line, u32 col)
+{
+    if (sd != null && sd->ngenerics > 0)
+    {
+        ast.TypeExpr* ge = mman.alloc<ast.TypeExpr>(1);
+        ge->kind = ast.TYP_GENERIC;
+        ge->name = name;
+        ge->args = mman.alloc<ast.TypeExpr*>(sd->ngenerics);
+        ge->nargs = sd->ngenerics;
+        for (u32 gi = 0; gi < sd->ngenerics; gi++)
+        {
+            ast.TypeExpr* tp = mman.alloc<ast.TypeExpr>(1);
+            tp->kind = ast.TYP_IDENT;
+            tp->name = sd->generics[gi];
+            tp->line = line; tp->col = col;
+            ge->args[gi] = tp;
+        }
+        return scopes.resolveTypeExpr(ge, t->top, t->mods, sd->generics, sd->ngenerics);
+    }
+    return scopes.namedType(sd, name, line, col);
+}
+
+ void typeFunction(Typer* t, ast.Decl* d)
 {
     if (d == null || d->body == null) return;
     t->curFn = d;
@@ -1414,7 +1518,7 @@ void typeFunction(Typer* t, ast.Decl* d)
         ast.Decl* sd = findNamedStruct(t, d->structName);
         types.CType* stp = mman.alloc<types.CType>(1);
         stp->kind = types.TY_PTR;
-        stp->elem = sd != null ? scopes.namedType(sd, d->structName, d->line, d->col)
+        stp->elem = sd != null ? selfElemType(t, sd, d->structName, d->line, d->col)
                                : scopes.opaqueType(d->structName, d->line, d->col);
         self->type = stp;
         self->used = true;
@@ -1444,14 +1548,14 @@ void typeFunction(Typer* t, ast.Decl* d)
             // `self*`/`self` typed slot: resolve to the owning struct
             ast.Decl* sd = findNamedStruct(t, d->structName);
             s->type->elem = sd != null
-                ? scopes.namedType(sd, d->structName, d->line, d->col)
+                ? selfElemType(t, sd, d->structName, d->line, d->col)
                 : scopes.opaqueType(d->structName, d->line, d->col);
         }
         else if (paramIsSelf && s->type != null && s->type->kind == types.TY_NAMED
                  && s->type->decl == null && strEq2(s->type->name, "self"))
         {
             ast.Decl* sd = findNamedStruct(t, d->structName);
-            s->type = sd != null ? scopes.namedType(sd, d->structName, d->line, d->col)
+            s->type = sd != null ? selfElemType(t, sd, d->structName, d->line, d->col)
                                  : scopes.opaqueType(d->structName, d->line, d->col);
         }
         if (!scopes.scopeDeclare(t->fnScope, s))

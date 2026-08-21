@@ -147,7 +147,7 @@ struct _ParseCtx
 
     bool expect(char ch)
     {
-        u8 c = self.next();
+        u8 c = (u8)self.next();
         if (c != ch) { self.error = true; return false; }
         return true;
     }
@@ -300,7 +300,7 @@ struct _ParseCtx
                 u64 tpos = 0;
                 while (self.pos < self.len && tpos < 63)
                 {
-                    u8 ch = self.ptr[self.pos];
+                    u8 ch = (u8)self.ptr[self.pos];
                     if ((ch < '0' || ch > '9') && ch != '.' && ch != 'e' && ch != 'E' && ch != '+' && ch != '-') break;
                     tmp[tpos++] = ch;
                     self.pos++;
@@ -402,7 +402,7 @@ void _serialize(JsonValue* v, string* out)
     {
         u8 buf[32];
         i32 n = libc.snprintf(buf, 32u, "%lld", v->i64Val);
-        out->pushView(strView::fromParts(buf, (u64)n));
+        out->pushView(strView::fromParts((const char*)buf, (u64)n));
         return;
     }
     if (v->type == JsonType::F64)
@@ -414,7 +414,7 @@ void _serialize(JsonValue* v, string* out)
         }
         u8 buf[64];
         i32 n = libc.snprintf(buf, 64u, "%.17g", v->f64Val);
-        out->pushView(strView::fromParts(buf, (u64)n));
+        out->pushView(strView::fromParts((const char*)buf, (u64)n));
         return;
     }
     if (v->type == JsonType::String)

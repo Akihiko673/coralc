@@ -109,7 +109,7 @@ pub IrLoop** irDetectLoops(ir_types.IrFunc* func, domtree.IrDomTree* dt)
 
     loops[nloops] = null;
 
-    if (ownDt) irDomtreeFree(dt);
+    if (ownDt) domtree.irDomtreeFree(dt);
     return loops;
 }
 

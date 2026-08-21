@@ -171,7 +171,7 @@ pub struct ByteReader
     bool readBytes(u8* dst, u64 n)
     {
         if (self.pos + n > self.len) return false;
-        mmanCopy(dst, self.data + self.pos, n);
+        mman.mmanCopy(dst, self.data + self.pos, n);
         self.pos += n;
         return true;
     }
@@ -266,7 +266,7 @@ pub struct ByteWriter
     void writeBytes(const u8* src, u64 n)
     {
         self._ensure(n);
-        mmanCopy(self.data + self.pos, src, n);
+        mman.mmanCopy(self.data + self.pos, src, n);
         self.pos += n;
         if (self.pos > self.len) self.len = self.pos;
     }
@@ -347,7 +347,7 @@ pub u64 bitExtract(u64 value, u64 start, u64 len)
 pub u64 bitInsert(u64 value, u64 field, u64 start, u64 len)
 {
     if (start >= 64 || len >= 64 || start + len > 64) return value;
-    u64 mask = ((1u << len) - 1) << start;
+    u64 mask = ((1ULL << len) - 1) << start;
     return (value & ~mask) | ((field << start) & mask);
 }
 

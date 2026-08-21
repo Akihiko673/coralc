@@ -1,5 +1,4 @@
-@[no_warn_unsafe]
-
+@[[no_warn_unsafe]]
 
 mod ir_types = import("wallvm/ir_types.crl");
 mod ir_opcodes = import("wallvm/ir_opcodes.crl");
@@ -59,7 +58,7 @@ pub struct PpcCodegen
     }
     u32 slot(ir_types.IrValue* v) { if (!v) return 0; u32 id = v->id; if (id >= self.stackSlotsCap) self.ensureSlots(id); if (self.stackSlots[id] == 0) { self.frameSize += 4; self.stackSlots[id] = self.frameSize; } return self.stackSlots[id]; }
     bool isConst(ir_types.IrValue* v) { if (!v) return true; ir_types.IrValueKind k = v->kind; return k == ir_types.IrValueKind::ConstInt || k == ir_types.IrValueKind::ConstFloat; }
-    void emitSlot(ir_types.IrValue* v) { self.u(self.slot(v)); self.s("(r1)"); }
+    void emitSlot(ir_types.IrValue* v) { self.u((u64)self.slot(v)); self.s("(r1)"); }
     void emitImm(ir_types.IrValue* v) { self.u(v->valData); }
 
     void load(ir_types.IrValue* v, const char* r)
@@ -187,7 +186,7 @@ pub struct PpcCodegen
     }
     void emitAlloca(ir_types.IrInst* inst)
     {
-        u32 sz = 16; self.pad(); self.s("addi r1, r1, -"); self.u(sz); self.c('\n');
+        u32 sz = 16; self.pad(); self.s("addi r1, r1, -"); self.u((u64)sz); self.c('\n');
         self.inst3("addi", "r3", "r1", "0");
         self.store(&inst->base, "r3");
     }
@@ -292,8 +291,8 @@ pub struct PpcCodegen
         if (func->base.name && func->base.name[0]) self.emitLabel(func->base.name);
         else self.emitLabel(".Lanon");
         u32 frame = ((self.frameSize + 15) / 16) * 16 + 8;
-        self.inst0("mflr r0"); self.pad(); self.s("stw r0, "); self.u(frame - 4); self.s("(r1)\n");
-        self.pad(); self.s("stwu r1, -"); self.u(frame); self.s("(r1)\n");
+        self.inst0("mflr r0"); self.pad(); self.s("stw r0, "); self.u((u64)(frame - 4)); self.s("(r1)\n");
+        self.pad(); self.s("stwu r1, -"); self.u((u64)frame); self.s("(r1)\n");
         if (func->nblocks > self.blockLabelsCap)
         {
             u32 nc = self.blockLabelsCap ? self.blockLabelsCap * 2 : 16;
@@ -310,14 +309,14 @@ pub struct PpcCodegen
         {
             ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
-            self.s(".LBB"); self.u(self.blockLabels[bi]); self.s(":\n");
+            self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
                 ir_types.IrInst* inst = blk->insts[ii];
                 switch (inst->opcode)
                 {
                 case ir_opcodes.IrOpcode::Br:
-                { ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null; if (tgt) { self.emitPhiEdges(blk, tgt); u32 tbi = self.resolveBlock(tgt); if (tbi != ~0u && self.blockLabels[tbi] != ~0u) { self.s("    b .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); } } break; }
+                { ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null; if (tgt) { self.emitPhiEdges(blk, tgt); u32 tbi = self.resolveBlock(tgt); if (tbi != ~0u && self.blockLabels[tbi] != ~0u) { self.s("    b .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); } } break; }
                 case ir_opcodes.IrOpcode::CondBr:
                 {
                     ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
@@ -329,9 +328,9 @@ pub struct PpcCodegen
                     self.emitPhiEdges(blk, ev);
                     self.loadArith(cond, "r3"); self.inst2("cmpwi", "r3", "0");
                     if (ebi != ~0u && self.blockLabels[ebi] != ~0u)
-                    { self.s("    beq .LBB"); self.u(self.blockLabels[ebi]); self.c('\n'); }
+                    { self.s("    beq .LBB"); self.u((u64)self.blockLabels[ebi]); self.c('\n'); }
                     if (tbi != ~0u && self.blockLabels[tbi] != ~0u)
-                    { self.s("    b .LBB"); self.u(self.blockLabels[tbi]); self.c('\n'); }
+                    { self.s("    b .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     break;
                 }
                 case ir_opcodes.IrOpcode::Ret:
@@ -339,8 +338,8 @@ pub struct PpcCodegen
                     ir_types.IrValue* rv = inst->nops > 0 ? inst->ops[0] : null;
                     if (rv && func->retType && func->retType->kind != ir_types.IrTypeKind::Void)
                         self.load(rv, "r3");
-                    self.pad(); self.s("addi r1, r1, "); self.u(frame); self.c('\n');
-                    self.pad(); self.s("lwz r0, "); self.u(frame - 4); self.s("(r1)\n");
+                    self.pad(); self.s("addi r1, r1, "); self.u((u64)frame); self.c('\n');
+                    self.pad(); self.s("lwz r0, "); self.u((u64)(frame - 4)); self.s("(r1)\n");
                     self.inst0("mtlr r0"); self.inst0("blr");
                     break;
                 }
@@ -400,8 +399,8 @@ pub struct PpcCodegen
                 }
             }
         }
-        self.pad(); self.s("addi r1, r1, "); self.u(frame); self.c('\n');
-        self.pad(); self.s("lwz r0, "); self.u(frame - 4); self.s("(r1)\n");
+        self.pad(); self.s("addi r1, r1, "); self.u((u64)frame); self.c('\n');
+        self.pad(); self.s("lwz r0, "); self.u((u64)(frame - 4)); self.s("(r1)\n");
         self.inst0("mtlr r0"); self.inst0("blr");
         return true;
     }

@@ -165,7 +165,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             case ir_opcodes.IrICmpPred::Ugt: res = (au > bu); break;
             case ir_opcodes.IrICmpPred::Uge: res = (au >= bu); break;
             }
-            return latticeConstInt(res ? 1 : 0);
+            return latticeConstInt((u64)(res ? 1 : 0));
         }
         if (ac.kind == LatticeKind::ConstFloat && bc.kind == LatticeKind::ConstFloat)
         {
@@ -183,7 +183,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             case ir_opcodes.IrICmpPred::Sgt: case ir_opcodes.IrICmpPred::Ugt: res = (fa > fb); break;
             case ir_opcodes.IrICmpPred::Sge: case ir_opcodes.IrICmpPred::Uge: res = (fa >= fb); break;
             }
-            return latticeConstInt(res ? 1 : 0);
+            return latticeConstInt((u64)(res ? 1 : 0));
         }
         return latticeTop();
     }
@@ -212,7 +212,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             case ir_opcodes.IrFCmpPred::Ogt: case ir_opcodes.IrFCmpPred::Ugt: res = (fa > fb); break;
             case ir_opcodes.IrFCmpPred::Oge: case ir_opcodes.IrFCmpPred::Uge: res = (fa >= fb); break;
             }
-            return latticeConstInt(res ? 1 : 0);
+            return latticeConstInt((u64)(res ? 1 : 0));
         }
         if (ac.kind == LatticeKind::ConstInt && bc.kind == LatticeKind::ConstInt)
         {
@@ -228,7 +228,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             case ir_opcodes.IrFCmpPred::Ogt: case ir_opcodes.IrFCmpPred::Ugt: res = (au > bu); break;
             case ir_opcodes.IrFCmpPred::Oge: case ir_opcodes.IrFCmpPred::Uge: res = (au >= bu); break;
             }
-            return latticeConstInt(res ? 1 : 0);
+            return latticeConstInt((u64)(res ? 1 : 0));
         }
         return latticeTop();
     }
@@ -426,7 +426,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             u64 v = ac.valData;
             u32 cnt = 0;
             while (v) { cnt += v & 1; v >>= 1; }
-            return latticeConstInt(cnt);
+            return latticeConstInt((u64)cnt);
         }
         return latticeTop();
     }
@@ -440,9 +440,9 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         {
             u64 v = ac.valData;
             u32 bits = inst.base.type ? inst.base.type.width : 64;
-            if (v == 0) return latticeConstInt(bits);
-            u32 result = __builtin_clzll(v) - (64 - bits);
-            return latticeConstInt(result);
+            if (v == 0) return latticeConstInt((u64)bits);
+            u32 result = (u32)__builtin_clzll(v) - (64 - bits);
+            return latticeConstInt((u64)result);
         }
         return latticeTop();
     }
@@ -456,10 +456,10 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         {
             u64 v = ac.valData;
             u32 bits = inst.base.type ? inst.base.type.width : 64;
-            if (v == 0) return latticeConstInt(bits);
-            u32 result = __builtin_ctzll(v);
+            if (v == 0) return latticeConstInt((u64)bits);
+            u32 result = (u32)__builtin_ctzll(v);
             if (result > bits) result = bits;
-            return latticeConstInt(result);
+            return latticeConstInt((u64)result);
         }
         return latticeTop();
     }
@@ -550,7 +550,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
                     result = av % bv; break;
                 case ir_opcodes.IrOpcode::Rotl:
                 {
-                    u32 shift = bv & (bits > 0 ? (bits - 1) : 0x3F);
+                    u32 shift = (u32)(bv & (bits > 0 ? (bits - 1) : 0x3F));
                     if (bits > 0 && bits < 64)
                     {
                         u64 low = (av << shift) & mask;
@@ -566,7 +566,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
                 }
                 case ir_opcodes.IrOpcode::Rotr:
                 {
-                    u32 shift = bv & (bits > 0 ? (bits - 1) : 0x3F);
+                    u32 shift = (u32)(bv & (bits > 0 ? (bits - 1) : 0x3F));
                     if (bits > 0 && bits < 64)
                     {
                         u64 low = (av >> shift) & mask;

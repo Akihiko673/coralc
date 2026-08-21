@@ -1,7 +1,6 @@
 mod libc = import("std/platform/libc.crl");
-@[[no_drop]]
 
-const i32 CLOCK_MONOTONIC = 1;
+constexpr i32 CLOCK_MONOTONIC = 1;
 
 pub struct Timespec
 {

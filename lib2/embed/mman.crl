@@ -517,7 +517,7 @@ pub struct StaticPool<T, u64 N>
 }
 
 pub BumpAllocator DEFAULT_EMBEDDED_ALLOCATOR;
-pub Allocator* EMBEDDED_ALLOC = DEFAULT_EMBEDDED_ALLOCATOR.allocator(&DEFAULT_EMBEDDED_ALLOCATOR);
+pub Allocator* EMBEDDED_ALLOC = &(DEFAULT_EMBEDDED_ALLOCATOR.allocator());
 
 Allocator* _embeddedAlloc()
 {
@@ -779,7 +779,7 @@ TlsfBlockHeader* _tlsfFindSuitableBlock(TlsfAllocator* t, u64 fli, u64 sli)
         // Find first set bit in slBitmap
         u32 foundSli = 0;
         while ((slBitmap & 1) == 0) { slBitmap >>= 1; foundSli++; }
-        return _tlsfRemoveFirstFit(t, fli, foundSli);
+        return _tlsfRemoveFirstFit(t, fli, (u64)foundSli);
     }
 
     // Search higher FLIs
@@ -791,7 +791,7 @@ TlsfBlockHeader* _tlsfFindSuitableBlock(TlsfAllocator* t, u64 fli, u64 sli)
         slBitmap = t->slBitmaps[foundFli];
         u32 foundSli = 0;
         while ((slBitmap & 1) == 0) { slBitmap >>= 1; foundSli++; }
-        return _tlsfRemoveFirstFit(t, foundFli, foundSli);
+        return _tlsfRemoveFirstFit(t, (u64)foundFli, (u64)foundSli);
     }
     return null;
 }

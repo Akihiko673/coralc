@@ -154,7 +154,7 @@ pub struct trie
     {
         if (node == null) return;
         if (node->isEnd)
-            fn(strView::fromParts(buf, depth));
+            fn(strView::fromParts((const char*)buf, depth));
         for (u64 i = 0; i < TRIE_FANOUT; i++)
         {
             if (node->children[i] != null)

@@ -147,7 +147,7 @@ void _xorBlock(u8* dst, const u8* src)
 
 void _keyExpansion(const u8* key, u8* roundKeys, u32 nRounds)
 {
-    u32 nk = nRounds == 10 ? 4 : (nRounds == 12 ? 6 : 8);
+    u32 nk = (u32)(nRounds == 10 ? 4 : (nRounds == 12 ? 6 : 8));
     u32 totalWords = 4 * (nRounds + 1);
     for (u32 i = 0; i < nk; i++)
     {

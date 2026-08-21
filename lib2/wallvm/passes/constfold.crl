@@ -159,7 +159,7 @@ pub struct ConstFoldPass
             break;
         case ir_opcodes.IrOpcode::Rotl:
         {
-            u32 shift = bv & (bits > 0 ? (bits - 1) : 0x3F);
+            u32 shift = (u32)(bv & (bits > 0 ? (bits - 1) : 0x3F));
             if (bits > 0 && bits < 64)
             {
                 u64 low = (av << shift) & mask;
@@ -175,7 +175,7 @@ pub struct ConstFoldPass
 
         case ir_opcodes.IrOpcode::Rotr:
         {
-            u32 shift = bv & (bits > 0 ? (bits - 1) : 0x3F);
+            u32 shift = (u32)(bv & (bits > 0 ? (bits - 1) : 0x3F));
             if (bits > 0 && bits < 64)
             {
                 u64 low = (av >> shift) & mask;

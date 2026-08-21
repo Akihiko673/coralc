@@ -1,9 +1,8 @@
 mod libc = import("std/platform/libc.crl");
-@[[no_drop]]
 mod mman = import("std/memory/mman.crl");
 
-pub const f64 tau = 6.28318530717958647692;
-pub const f64 srt2 = 1.41421356237309504880;
+pub constexpr f64 tau = 6.28318530717958647692;
+pub constexpr f64 srt2 = 1.41421356237309504880;
 
 pub f64 pi() { return 3.14159265358979323846; }
 pub f64 e() { return 2.71828182845904523536; }
@@ -62,7 +61,7 @@ pub u64 absI64(i64 x)
 }
 pub f64 absF64(f64 x) { return libc.fabs(x); }
 
-pub i64 signI64(i64 x) { return x < 0 ? -1 : (x > 0 ? 1 : 0); }
+pub i64 signI64(i64 x) { return (i64)(x < 0 ? -1 : (x > 0 ? 1 : 0)); }
 pub f64 signF64(f64 x) { return x < 0.0 ? -1.0 : (x > 0.0 ? 1.0 : 0.0); }
 
 pub bool isFinite(f64 x)

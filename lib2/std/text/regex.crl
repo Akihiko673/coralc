@@ -86,7 +86,7 @@ pub struct Regex
             i64 so = matches[i * 2];
             i64 eo = matches[i * 2 + 1];
             if (so < 0 || eo < 0) { groups->push(strView::empty()); continue; }
-            groups->push(strView::fromParts(self.findBuf + so, (u64)(eo - so)));
+            groups->push(strView::fromParts((const char*)(self.findBuf + so), (u64)(eo - so)));
         }
         mman.dealloc<u8>(pmatch);
         return true;

@@ -133,7 +133,7 @@ pub struct bitset
         u64 remaining = self.numBits % 64;
         if (remaining > 0)
         {
-            u64 mask = (1u << remaining) - 1;
+            u64 mask = (1ULL << remaining) - 1;
             if (self.words[fullWords] != mask) return false;
         }
         return true;

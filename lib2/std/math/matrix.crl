@@ -66,7 +66,7 @@ pub struct Mat2
     Mat2 inverse()
     {
         f64 d = self.det();
-        if (d < 1e-15 && d > -1e-15) return self;
+        if (d < 1e-15 && d > -1e-15) return *self;
         f64 invDet = 1.0 / d;
         Mat2 r;
         r.m[0] = self.m[3] * invDet;

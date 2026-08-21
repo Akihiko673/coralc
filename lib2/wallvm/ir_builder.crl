@@ -164,12 +164,12 @@ pub struct IrBuilder
 
     ir_types.IrInst* neg(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Neg, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::Neg, v);
     }
 
     ir_types.IrInst* notOp(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Not, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::Not, v);
     }
 
     //   Memory
@@ -209,52 +209,52 @@ pub struct IrBuilder
     //   Cast
     ir_types.IrInst* trunc(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Trunc, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::Trunc, v, dt);
     }
 
     ir_types.IrInst* zext(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Zext, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::Zext, v, dt);
     }
 
     ir_types.IrInst* sext(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Sext, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::Sext, v, dt);
     }
 
     ir_types.IrInst* fpTrunc(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::FpTrunc, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::FpTrunc, v, dt);
     }
 
     ir_types.IrInst* fpExt(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::FpExt, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::FpExt, v, dt);
     }
 
     ir_types.IrInst* fpToSi(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::FpToSi, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::FpToSi, v, dt);
     }
 
     ir_types.IrInst* fpToUi(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::FpToUi, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::FpToUi, v, dt);
     }
 
     ir_types.IrInst* siToFp(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::SiToFp, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::SiToFp, v, dt);
     }
 
     ir_types.IrInst* uiToFp(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::UiToFp, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::UiToFp, v, dt);
     }
 
     ir_types.IrInst* bitcast(ir_types.IrValue* v, ir_types.IrType* dt)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Bitcast, v, dt);
+        return self.createUnary3(ir_opcodes.IrOpcode::Bitcast, v, dt);
     }
 
     //   Compare
@@ -279,17 +279,17 @@ pub struct IrBuilder
     //   bit man
     ir_types.IrInst* ctPop(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::CtPop, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::CtPop, v);
     }
 
     ir_types.IrInst* ctLz(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::CtLz, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::CtLz, v);
     }
 
     ir_types.IrInst* ctTz(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::CtTz, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::CtTz, v);
     }
 
     ir_types.IrInst* rotl(ir_types.IrValue* x, ir_types.IrValue* y)
@@ -304,7 +304,7 @@ pub struct IrBuilder
 
     ir_types.IrInst* bswap(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Bswap, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::Bswap, v);
     }
 
     // maths shit
@@ -330,7 +330,7 @@ pub struct IrBuilder
 
     ir_types.IrInst* abs(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::Abs, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::Abs, v);
     }
 
     //   Floating-point
@@ -346,12 +346,12 @@ pub struct IrBuilder
 
     ir_types.IrInst* fabs(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::FAbs, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::FAbs, v);
     }
 
     ir_types.IrInst* fsqrt(ir_types.IrValue* v)
     {
-        return self.createUnary(ir_opcodes.IrOpcode::FSqrt, v);
+        return self.createUnary2(ir_opcodes.IrOpcode::FSqrt, v);
     }
 
     ir_types.IrInst* shuffleVector(ir_types.IrValue* v1, ir_types.IrValue* v2, ir_types.IrValue** mask, u32 nmask)
@@ -531,14 +531,14 @@ pub struct IrBuilder
         return self.createInst(op, l.type, ops, 2, 0, 0);
     }
 
-    ir_types.IrInst* createUnary(ir_opcodes.IrOpcode op, ir_types.IrValue* v)
+    ir_types.IrInst* createUnary2(ir_opcodes.IrOpcode op, ir_types.IrValue* v)
     {
         ir_types.IrValue** ops = self.allocOps(1);
         ops[0] = v;
         return self.createInst(op, v.type, ops, 1, 0, 0);
     }
 
-    ir_types.IrInst* createUnary(ir_opcodes.IrOpcode op, ir_types.IrValue* v, ir_types.IrType* dt)
+    ir_types.IrInst* createUnary3(ir_opcodes.IrOpcode op, ir_types.IrValue* v, ir_types.IrType* dt)
     {
         ir_types.IrValue** ops = self.allocOps(1);
         ops[0] = v;

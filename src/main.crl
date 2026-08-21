@@ -1,4 +1,3 @@
-// Self-host driver: file → tokenize → parse → report diagnostics.
 mod mman = import("std/memory/mman.crl");
 mod str = import("std/text/string.crl");
 mod libc = import("std/platform/libc.crl");
@@ -8,6 +7,49 @@ mod ast = import("ast/ast.crl");
 mod error = import("error");
 mod parse = import("parser");
 mod check = import("typecheck/check.crl");
+mod types = import("typecheck/types.crl");
+
+flag (platform) {
+    LINUX:
+        const u32 BUILD_PLATFORM_ID = 1;
+    MACOS:
+        const u32 BUILD_PLATFORM_ID = 2;
+    WINDOWS:
+        const u32 BUILD_PLATFORM_ID = 3;
+    FREEBSD:
+        const u32 BUILD_PLATFORM_ID = 4;
+    OPENBSD:
+        const u32 BUILD_PLATFORM_ID = 5;
+    WASM:
+        const u32 BUILD_PLATFORM_ID = 6;
+}
+
+flag (ARCH) {
+    x86_64:
+        const u32 BUILD_ARCH_ID = 1;
+    x86:
+        const u32 BUILD_ARCH_ID = 2;
+    arm64:
+        const u32 BUILD_ARCH_ID = 3;
+    arm32:
+        const u32 BUILD_ARCH_ID = 4;
+    riscv64:
+        const u32 BUILD_ARCH_ID = 5;
+    riscv32:
+        const u32 BUILD_ARCH_ID = 6;
+    ppc64:
+        const u32 BUILD_ARCH_ID = 7;
+    ppc:
+        const u32 BUILD_ARCH_ID = 8;
+    mips64:
+        const u32 BUILD_ARCH_ID = 9;
+    mips:
+        const u32 BUILD_ARCH_ID = 10;
+    sparc64:
+        const u32 BUILD_ARCH_ID = 11;
+    wasm32:
+        const u32 BUILD_ARCH_ID = 12;
+}
 
 const u8* readFile(str.strView path, u32* outLen)
 {
@@ -31,6 +73,18 @@ const u8* readFile(str.strView path, u32* outLen)
     libc.fclose(f);
     *outLen = (u32)used;
     return buf;
+}
+
+bool vEqCI(str.strView a, str.strView b)
+{
+    if (a.len != b.len) return false;
+    for (u32 i = 0; i < a.len; i++)
+    {
+        char ca = a.ptr[i]; if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        char cb = b.ptr[i]; if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return false;
+    }
+    return true;
 }
 
 i32 main(u32 argc, char** argv)
@@ -85,7 +139,76 @@ i32 main(u32 argc, char** argv)
     ast.Program* prog = p.parseProgram();
     if (prog != null)
     {
+        // Flag overrides for this compilation. Seed with the platform/arch this
+        // compiler was built for (embedded via the build's --flags); terminal
+        // --flags below override these. This is how `flag (platform)` /
+        // `flag (ARCH)` resolve in every compiled file without hardcoding.
+        str.strView flagNames[16];
+        str.strView flagVals[16];
+        u32 nflags = 0;
+        str.strView bp = str.strView::fromCstr("UNKNOWN");
+        if (BUILD_PLATFORM_ID == 1) bp = str.strView::fromCstr("LINUX");
+        else if (BUILD_PLATFORM_ID == 2) bp = str.strView::fromCstr("MACOS");
+        else if (BUILD_PLATFORM_ID == 3) bp = str.strView::fromCstr("WINDOWS");
+        else if (BUILD_PLATFORM_ID == 4) bp = str.strView::fromCstr("FREEBSD");
+        else if (BUILD_PLATFORM_ID == 5) bp = str.strView::fromCstr("OPENBSD");
+        else if (BUILD_PLATFORM_ID == 6) bp = str.strView::fromCstr("WASM");
+        str.strView ba = str.strView::fromCstr("UNKNOWN");
+        if (BUILD_ARCH_ID == 1) ba = str.strView::fromCstr("x86_64");
+        else if (BUILD_ARCH_ID == 2) ba = str.strView::fromCstr("x86");
+        else if (BUILD_ARCH_ID == 3) ba = str.strView::fromCstr("arm64");
+        else if (BUILD_ARCH_ID == 4) ba = str.strView::fromCstr("arm32");
+        else if (BUILD_ARCH_ID == 5) ba = str.strView::fromCstr("riscv64");
+        else if (BUILD_ARCH_ID == 6) ba = str.strView::fromCstr("riscv32");
+        else if (BUILD_ARCH_ID == 7) ba = str.strView::fromCstr("ppc64");
+        else if (BUILD_ARCH_ID == 8) ba = str.strView::fromCstr("ppc");
+        else if (BUILD_ARCH_ID == 9) ba = str.strView::fromCstr("mips64");
+        else if (BUILD_ARCH_ID == 10) ba = str.strView::fromCstr("mips");
+        else if (BUILD_ARCH_ID == 11) ba = str.strView::fromCstr("sparc64");
+        else if (BUILD_ARCH_ID == 12) ba = str.strView::fromCstr("wasm32");
+        if (nflags < 16) { flagNames[nflags] = str.strView::fromCstr("platform"); flagVals[nflags] = bp; nflags++; }
+        if (nflags < 16) { flagNames[nflags] = str.strView::fromCstr("arch"); flagVals[nflags] = ba; nflags++; }
+        for (u32 ai = 2; ai < argc; ai++)
+        {
+            str.strView a = str.strView::fromCstr(argv[ai]);
+            // --fcast: force every cast (escape hatch for code that needs
+            // unchecked conversion). Off by default.
+            if (a.len == 7 && a.ptr[0] == (u8)'-' && a.ptr[1] == (u8)'-' && a.ptr[2] == (u8)'f' && a.ptr[3] == (u8)'c' && a.ptr[4] == (u8)'a' && a.ptr[5] == (u8)'s' && a.ptr[6] == (u8)'t')
+            {
+                types.gForceCast = true;
+                continue;
+            }
+            if (a.len > 8 && a.ptr[0] == (u8)'-' && a.ptr[1] == (u8)'-' && a.ptr[2] == (u8)'f' && a.ptr[3] == (u8)'l' && a.ptr[4] == (u8)'a' && a.ptr[5] == (u8)'g' && a.ptr[6] == (u8)'s' && a.ptr[7] == (u8)'=')
+            {
+                str.strView rest = str.strView::fromParts(a.ptr + 8, a.len - 8);
+                u32 start = 0;
+                for (u32 j = 0; j <= rest.len; j++)
+                {
+                    if (j == rest.len || rest.ptr[j] == (u8)',')
+                    {
+                        str.strView pair = str.strView::fromParts(rest.ptr + start, j - start);
+                        u32 eq = 0; bool found = false;
+                        for (u32 k = 0; k < pair.len; k++) if (pair.ptr[k] == (u8)'=') { eq = k; found = true; break; }
+                        if (found && eq > 0 && nflags < 16)
+                        {
+                            str.strView kn = str.strView::fromParts(pair.ptr, eq);
+                            str.strView kv = str.strView::fromParts(pair.ptr + eq + 1, pair.len - eq - 1);
+                            bool repl = false;
+                            for (u32 fi = 0; fi < nflags; fi++) { if (vEqCI(flagNames[fi], kn)) { flagVals[fi] = kv; repl = true; break; } }
+                            if (!repl) { flagNames[nflags] = kn; flagVals[nflags] = kv; nflags++; }
+                        }
+                        start = j + 1;
+                    }
+                }
+            }
+        }
         check.Check ck = check.Check::new(prog, str.strView::fromParts((const char*)src, len), path, exeDir);
+        for (u32 fi = 0; fi < nflags && fi < 16; fi++)
+        {
+            ck.flagNames[fi] = flagNames[fi];
+            ck.flagVals[fi] = flagVals[fi];
+        }
+        ck.nflags = nflags < 16 ? nflags : 16;
         ck.run();
         if (ck.nerrors > 0) return 1;
         u8 buf[64];

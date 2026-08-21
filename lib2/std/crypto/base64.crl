@@ -7,7 +7,7 @@
 mod string = import("std/text/string.crl");
 mod mman = import("std/memory/mman.crl");
 
-const u8 _TABLE[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const u8* _TABLE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub u64 encode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
 {

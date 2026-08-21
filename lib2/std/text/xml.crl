@@ -167,7 +167,7 @@ struct _XmlParser
                 while (self.pos < self.len && self.data[self.pos] != ';') self.pos++;
                 if (self.pos >= self.len) { self.error = true; return s; }
                 self.pos++;
-                strView ent = strView::fromParts(self.data + entStart, self.pos - entStart - 1);
+                strView ent = strView::fromParts((const char*)(self.data + entStart), self.pos - entStart - 1);
                 if (ent.equals(strView::fromCstr("lt"))) s.pushChar('<');
                 else if (ent.equals(strView::fromCstr("gt"))) s.pushChar('>');
                 else if (ent.equals(strView::fromCstr("amp"))) s.pushChar('&');

@@ -601,7 +601,7 @@ pub struct UnrollPass
                 dst.addInst(nt);
                 if (nt.opcode == ir_opcodes.IrOpcode::Br || nt.opcode == ir_opcodes.IrOpcode::CondBr)
                 {
-                    u32 ntgt = nt.opcode == ir_opcodes.IrOpcode::Br ? 1 : 2;
+                    u32 ntgt = (u32)(nt.opcode == ir_opcodes.IrOpcode::Br ? 1 : 2);
                     for (u32 tj = 0; tj < ntgt; tj++)
                         dst.addSucc((ir_types.IrBlock*)nt.ops[tj]);
                 }
