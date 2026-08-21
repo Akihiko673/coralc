@@ -1,0 +1,23 @@
+mod c = import("emitc");
+mod ir = import("emitir");
+mod s = import("emits");
+
+// emit.crl: codegen dispatch. Each target lives in its own module:
+//   emitc.crl  - C header (declarations only)
+//   emitir.crl - WallVM IR
+//   emits.crl  - native assembly
+
+pub void emitH(check.Check* ck, str.strView path, bool debug)
+{
+    c.emitH(ck, path, debug);
+}
+
+pub void emitIR(check.Check* ck, str.strView path, u32 optLevel, bool debug)
+{
+    ir.emitIR(ck, path, optLevel, debug);
+}
+
+pub void emitAsm(check.Check* ck, str.strView path, u32 optLevel, bool debug)
+{
+    s.emitAsm(ck, path, optLevel, debug);
+}

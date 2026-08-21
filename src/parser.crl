@@ -700,6 +700,7 @@ pub struct Parser
         s->ncases = 0;
         s->defaultCase = null;
         s->synthetic = false;
+        s->isComptime = false;
         s->line = line;
         s->col = col;
         return s;
@@ -714,6 +715,7 @@ pub struct Parser
         d->type = null;
         d->value = null;
         d->exported = false;
+        d->isConstExpr = false;
         d->isStatic = false;
         d->isInline = false;
         d->isExtern = false;
@@ -1335,7 +1337,9 @@ pub struct Parser
         if (self.check(tok.T_COMPTIME))
         {
             self.advance();
-            return self.parseBlock();
+            ast.Stmt* b = self.parseBlock();
+            if (b != null) b->isComptime = true;
+            return b;
         }
         if (self.check(tok.T_FLAG)) return self.parseFlagStmt();
         if (self.check(tok.T_VAR))
@@ -3112,6 +3116,7 @@ pub struct Parser
         d->type = typeAnno;
         d->value = value;
         d->exported = exported;
+        d->isConstExpr = (t->id == tok.T_CONSTEXPR);
         return d;
     }
 

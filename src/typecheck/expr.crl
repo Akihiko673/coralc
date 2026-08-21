@@ -15,6 +15,7 @@ mod error = import("error");
 mod types = import("typecheck/types.crl");
 mod scopes = import("typecheck/scopes.crl");
 mod loader = import("typecheck/loader.crl");
+mod subst = import("mono/subst.crl");
 
 pub struct Typer
 {
@@ -36,6 +37,8 @@ pub struct Typer
     ast.Decl* curFn;
     str.strView* gnames;
     u32 ng;
+    bool inComptime;   // inside a `comptime { }` block: if conditions that
+                       // resolve to constants are pruned (dead branches erased)
 
     static Typer new(ast.Program* prog, str.strView src, str.strView filename,
                      Scope* top, ModuleTable* mods, loader.Loader* ld,
@@ -59,6 +62,7 @@ pub struct Typer
         t.curFn = null;
         t.gnames = null;
         t.ng = 0;
+        t.inComptime = false;
         return t;
     }
 }
@@ -357,6 +361,48 @@ void checkModuleAccess(Typer* t, str.strView alias, str.strView member, u32 line
     }
 }
 
+// Record a concrete instantiation of generic function `g` if `callee` carries
+// a full set of concrete type arguments. Used by the monomorphisation pass
+// (mono/mono.crl) to discover which specializations must be emitted. Abstract
+// type args (still generic parameters in the current context) are deferred.
+void tryRecordGeneric(Typer* t, ast.Decl* g, ast.Expr* callee)
+{
+    if (g == null || g->ngenerics == 0) return;
+    if (callee->ntargs != g->ngenerics) return;
+    types.CType** resolved = mman.alloc<types.CType*>(callee->ntargs);
+    bool ok = true;
+    for (u32 ti = 0; ti < callee->ntargs; ti++)
+    {
+        types.CType* rt = scopes.resolveTypeExpr(callee->targs[ti], t->top, t->mods, t->gnames, t->ng);
+        if (rt == null) { ok = false; break; }
+        // still an unresolved generic parameter in this context -> defer to
+        // the enclosing generic's own instantiation
+        if (rt->kind == types.TY_UNKNOWN && scopes.isGenericParam(t->gnames, t->ng, rt->name))
+        {
+            ok = false; break;
+        }
+        resolved[ti] = rt;
+    }
+    if (ok)
+    {
+        str.String mn = str.String::new();
+        mn.pushView(g->name);
+        mn.pushChar('<');
+        for (u32 ti = 0; ti < callee->ntargs; ti++)
+        {
+            if (ti > 0) mn.pushChar(',');
+            mn.pushView(types.typeName(resolved[ti]));
+        }
+        mn.pushChar('>');
+        subst.record(g, resolved, callee->ntargs, str.strView::fromParts(mn.ptr, mn.len));
+        mn.free();
+    }
+    else
+    {
+        mman.dealloc<types.CType*>(resolved);
+    }
+}
+
 types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
 {
     // module-qualified function call: mod.fn(...) -> opaque result
@@ -454,6 +500,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                         scopes.symMarkUsed(mf);
                         types.CType* msig = fnSig(t, mf->decl);
                         checkArgs(t, call, msig, mf->decl->ngenerics > 0);
+                        tryRecordGeneric(t, mf->decl, callee);
                         return msig->ret;
                     }
                 }
@@ -480,6 +527,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                 scopes.symMarkUsed(s);
                 types.CType* sig = fnSig(t, s->decl);
                 checkArgs(t, call, sig, s->decl->ngenerics > 0);
+                tryRecordGeneric(t, s->decl, callee);
                 return sig->ret;
             }
             if (s != null)
@@ -516,6 +564,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                         {
                             types.CType* msig = fnSig(t, m);
                             checkArgs(t, call, msig, m->ngenerics > 0);
+                            tryRecordGeneric(t, m, callee);
                             return msig->ret;
                         }
                     }
@@ -542,6 +591,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                     {
                         types.CType* pmsig = fnSig(t, pm);
                         checkArgs(t, call, pmsig, pm->ngenerics > 0);
+                        tryRecordGeneric(t, pm, callee);
                         return pmsig->ret;
                     }
                 }
@@ -624,6 +674,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                 {
                     types.CType* ssig = fnSig(t, sm);
                     checkArgs(t, call, ssig, sm->ngenerics > 0);
+                    tryRecordGeneric(t, sm, callee);
                     return ssig->ret;
                 }
             }
@@ -900,6 +951,7 @@ bool comptimeTypeRef(expr.Typer* t, ast.Expr* e)
     case ast.EX_TYPELIT:
         return true;
     case ast.EX_IDENT:
+        if (subst.lookup(e->text) != null) return true; // bound by mono subst
         if (scopes.isGenericParam(t->gnames, t->ng, e->text)) return true;
         {
             types.CType p;
@@ -1180,7 +1232,7 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
     return target != null ? target : scopes.opaqueType(str.strView::empty(), e->line, e->col);
 }
 
-// ---- statement typing ----------------------------------------------------
+// statement typing
 
 void typeBody(Typer* t, ast.Stmt* body);
 
@@ -1218,17 +1270,198 @@ void declareLocal(Typer* t, str.strView name, types.CType* type, u32 line, u32 c
     }
 }
 
-void typeStmt(Typer* t, ast.Stmt* s)
+// comptime evaluation (for `comptime { }` branch pruning)
+
+bool comptimeTypeEq(types.CType* a, types.CType* b)
 {
+    if (a == null || b == null) return false;
+    str.strView na = types.typeName(a);
+    str.strView nb = types.typeName(b);
+    if (na.len != nb.len) return false;
+    for (u32 i = 0; i < na.len; i++)
+        if (na.ptr[i] != nb.ptr[i]) return false;
+    return true;
+}
+
+// Parse an integer literal's raw text (decimal/hex, ignoring any suffix) to i64.
+bool litToInt(str.strView s, i64* out)
+{
+    if (s.len == 0) return false;
+    u32 i = 0;
+    bool neg = false;
+    if (s.ptr[0] == (u8)'-') { neg = true; i = 1; }
+    i64 v = 0;
+    bool hex = false;
+    if (i + 1 < s.len && s.ptr[i] == (u8)'0' && (s.ptr[i+1] == (u8)'x' || s.ptr[i+1] == (u8)'X'))
+    {
+        hex = true; i += 2;
+    }
+    for (; i < s.len; i++)
+    {
+        u8 c = s.ptr[i];
+        if (c >= (u8)'0' && c <= (u8)'9')
+            v = v * (hex ? 16 : 10) + (i64)(c - (u8)'0');
+        else if (hex && c >= (u8)'a' && c <= (u8)'f')
+            v = v * 16 + (i64)(c - (u8)'a' + 10);
+        else if (hex && c >= (u8)'A' && c <= (u8)'F')
+            v = v * 16 + (i64)(c - (u8)'A' + 10);
+        else break; // trailing suffix (u/i/l/...) or separator
+    }
+    *out = neg ? -v : v;
+    return true;
+}
+
+bool cmpI64(str.strView op, i64 a, i64 b)
+{
+    if (strEq2(op, "==")) return a == b;
+    if (strEq2(op, "!=")) return a != b;
+    if (strEq2(op, "<")) return a < b;
+    if (strEq2(op, "<=")) return a <= b;
+    if (strEq2(op, ">")) return a > b;
+    if (strEq2(op, ">=")) return a >= b;
+    return false;
+}
+
+bool cmpBool(str.strView op, bool a, bool b)
+{
+    if (strEq2(op, "==")) return a == b;
+    if (strEq2(op, "!=")) return a != b;
+    return false;
+}
+
+// Resolve a compile-time TYPE reference expression to its CType.
+types.CType* comptimeTypeCType(Typer* t, ast.Expr* e)
+{
+    if (e == null) return null;
+    switch (e->kind)
+    {
+    case ast.EX_PAREN: return comptimeTypeCType(t, e->a);
+    case ast.EX_TYPELIT: return scopes.resolveTypeExpr(e->type, t->top, t->mods, t->gnames, t->ng);
+    case ast.EX_IDENT:
+    {
+        ast.TypeExpr te;
+        te.kind = ast.TYP_IDENT;
+        te.name = e->text;
+        te.elem = null; te.count = null; te.args = null; te.nargs = 0;
+        te.cargs = null; te.ncargs = 0; te.ret = null; te.isConst = false;
+        te.line = e->line; te.col = e->col;
+        return scopes.resolveTypeExpr(&te, t->top, t->mods, t->gnames, t->ng);
+    }
+    case ast.EX_DOT:
+    {
+        if (e->a != null && e->a->kind == ast.EX_IDENT)
+        {
+            str.String n = str.String::new();
+            n.pushView(e->a->text);
+            n.pushChar('.');
+            n.pushView(e->text);
+            ast.TypeExpr te;
+            te.kind = ast.TYP_IDENT;
+            te.name = str.strView::fromParts(n.ptr, n.len);
+            te.elem = null; te.count = null; te.args = null; te.nargs = 0;
+            te.cargs = null; te.ncargs = 0; te.ret = null; te.isConst = false;
+            te.line = e->line; te.col = e->col;
+            types.CType* r = scopes.resolveTypeExpr(&te, t->top, t->mods, t->gnames, t->ng);
+            n.free();
+            return r;
+        }
+        return null;
+    }
+    default: return null;
+    }
+}
+
+// Evaluate `e` as a compile-time boolean. Returns true if it could be
+// determined; *val holds the result. A condition still depending on an
+// unresolved generic parameter (abstract pass) is left unknown, so pruning is
+// deferred to instantiation where the parameter is bound to a concrete type.
+bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
+{
+    if (e == null) return false;
+    switch (e->kind)
+    {
+    case ast.EX_PAREN:
+        return comptimeEvalCond(t, e->a, val);
+    case ast.EX_BOOL:
+        *val = (e->text.len == 4 && e->text.ptr[0] == (u8)'t');
+        return true;
+    case ast.EX_UNARY:
+        if (e->text.len == 1 && e->text.ptr[0] == (u8)'!')
+        {
+            bool v2;
+            if (comptimeEvalCond(t, e->a, &v2)) { *val = !v2; return true; }
+        }
+        return false;
+    case ast.EX_BINARY:
+    {
+        str.strView op = e->text;
+        // type comparison (e.g. `T == i8`)
+        if ((strEq2(op, "==") || strEq2(op, "!="))
+            && comptimeTypeRef(t, e->a) && comptimeTypeRef(t, e->b))
+        {
+            types.CType* la = comptimeTypeCType(t, e->a);
+            types.CType* lb = comptimeTypeCType(t, e->b);
+            if (la != null && lb != null
+                && !(la->kind == types.TY_UNKNOWN && scopes.isGenericParam(t->gnames, t->ng, la->name))
+                && !(lb->kind == types.TY_UNKNOWN && scopes.isGenericParam(t->gnames, t->ng, lb->name)))
+            {
+                bool eq = comptimeTypeEq(la, lb);
+                *val = strEq2(op, "==") ? eq : !eq;
+                return true;
+            }
+            return false;
+        }
+        // boolean logic
+        if (strEq2(op, "&&") || strEq2(op, "||"))
+        {
+            bool v1, v2;
+            if (comptimeEvalCond(t, e->a, &v1) && comptimeEvalCond(t, e->b, &v2))
+            {
+                *val = strEq2(op, "&&") ? (v1 && v2) : (v1 || v2);
+                return true;
+            }
+            return false;
+        }
+        // integer literal comparison
+        if (e->a->kind == ast.EX_INT && e->b->kind == ast.EX_INT)
+        {
+            i64 la = 0, lb = 0;
+            if (litToInt(e->a->text, &la) && litToInt(e->b->text, &lb))
+            {
+                *val = cmpI64(op, la, lb);
+                return true;
+            }
+            return false;
+        }
+        // boolean literal comparison
+        if (e->a->kind == ast.EX_BOOL && e->b->kind == ast.EX_BOOL)
+        {
+            bool ba = e->a->text.len == 4 && e->a->text.ptr[0] == (u8)'t';
+            bool bb = e->b->text.len == 4 && e->b->text.ptr[0] == (u8)'t';
+            *val = cmpBool(op, ba, bb);
+            return true;
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
+ void typeStmt(Typer* t, ast.Stmt* s)
+ {
     if (s == null) return;
     switch (s->kind)
     {
     case ast.ST_BLOCK:
         {
+            bool prev = t->inComptime;
+            if (s->isComptime) t->inComptime = true;
             bool scoped = !s->synthetic;
             if (scoped) pushBlock(t, str.strView::fromCstr("block"));
             for (u32 i = 0; i < s->nstmts; i++) typeStmt(t, s->stmts[i]);
             if (scoped) popBlock(t, true);
+            t->inComptime = prev;
         }
         break;
 
@@ -1285,6 +1518,18 @@ case ast.ST_VAR:
 
     case ast.ST_IF:
         {
+            // comptime pruning: if the condition is a compile-time constant,
+            // typecheck only the taken branch and erase the dead one.
+            if (s->a != null && t->inComptime)
+            {
+                bool known = false; bool v = false;
+                if (comptimeEvalCond(t, s->a, &v))
+                {
+                    if (v) typeStmt(t, s->body);
+                    else if (s->body2 != null) typeStmt(t, s->body2);
+                    break;
+                }
+            }
             if (s->a != null)
             {
                 types.CType* c = typeExpr(t, s->a);

@@ -9,6 +9,7 @@ mod str = import("std/text/string.crl");
 mod mman = import("std/memory/mman.crl");
 mod libc = import("std/platform/libc.crl");
 mod types = import("typecheck/types.crl");
+mod subst = import("mono/subst.crl");
 
 // Symbol kinds
 pub const u32 SYM_MODULE = 0;     // module alias (opaque)
@@ -308,6 +309,10 @@ types.CType* resolveTypeExpr(ast.TypeExpr* te, Scope* top, ModuleTable* mods,
     if (te->kind == ast.TYP_IDENT)
     {
         str.strView name = te->name;
+        // monomorphisation substitution: a generic parameter bound to a
+        // concrete type for the current instantiation (see mono/subst.crl).
+        types.CType* sub = subst.lookup(name);
+        if (sub != null) return sub;
         // generic type parameter?
         if (isGenericParam(gnames, n, name)) return opaqueType(name, te->line, te->col);
         // primitive?

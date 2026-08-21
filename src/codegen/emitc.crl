@@ -1,0 +1,201 @@
+mod types = import("typecheck/types.crl");
+mod ast = import("ast/ast.crl");
+mod scopes = import("typecheck/scopes.crl");
+mod str = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod libc = import("std/platform/libc.crl");
+
+// emitc.crl: declarative-only C header (src/gen/c/reason.txt). Bodies are never
+// emitted. Generic declarations are skipped (no instantiation info here).
+
+static void pushType(str.String* out, types.CType* ct)
+{
+    if (ct == null) { out.pushCstr("void"); return; }
+    switch (ct->kind)
+    {
+    case types.TY_VOID: out.pushCstr("void"); return;
+    case types.TY_BOOL: out.pushCstr("bool"); return;
+    case types.TY_CHAR: out.pushCstr("char"); return;
+    case types.TY_INT:
+        if (ct->width == 8) out.pushCstr(ct->isSigned ? "int8_t" : "uint8_t");
+        else if (ct->width == 16) out.pushCstr(ct->isSigned ? "int16_t" : "uint16_t");
+        else if (ct->width == 32) out.pushCstr(ct->isSigned ? "int32_t" : "uint32_t");
+        else if (ct->width == 64) out.pushCstr(ct->isSigned ? "int64_t" : "uint64_t");
+        else out.pushCstr(ct->isSigned ? "int" : "unsigned");
+        return;
+    case types.TY_FLOAT:
+        out.pushCstr(ct->width == 32 ? "float" : "double");
+        return;
+    case types.TY_PTR:
+        pushType(out, ct->elem);
+        out.pushCstr(ct->isConstPtr ? " const*" : "*");
+        return;
+    case types.TY_SLICE:
+    case types.TY_ARRAY:
+        pushType(out, ct->elem);
+        if (ct->kind == types.TY_ARRAY && ct->countKnown)
+        {
+            out.pushCstr("[");
+            char num[24];
+            i32 n = libc.snprintf((u8*)num, 24, "%llu", (unsigned long long)ct->count);
+            if (n > 0) out.pushView(str.strView::fromParts(num, (u32)n));
+            out.pushCstr("]");
+        }
+        else
+        {
+            out.pushCstr("*");
+        }
+        return;
+    case types.TY_FUNC:
+        pushType(out, ct->ret);
+        out.pushCstr(" (*)(");
+        for (u32 i = 0; i < ct->nparams; i++)
+        {
+            if (i) out.pushCstr(", ");
+            pushType(out, ct->params[i]);
+        }
+        if (ct->variadic) out.pushCstr(ct->nparams ? ", ..." : "...");
+        out.pushCstr(")");
+        return;
+    case types.TY_NAMED:
+        if (ct->name.len > 0) out.pushView(ct->name);
+        else out.pushCstr("void");
+        return;
+    default:
+        if (ct->name.len > 0) out.pushView(ct->name);
+        else out.pushCstr("void");
+        return;
+    }
+}
+
+static types.CType* resolve(check.Check* ck, ast.TypeExpr* te)
+{
+    if (te == null) return null;
+    return scopes.resolveTypeExpr(te, ck->top, ck->mods, null, 0);
+}
+
+pub void emitH(check.Check* ck, str.strView path, bool debug)
+{
+    str.String out = str.String::new();
+    out.pushCstr("/* Coral C header (declarations only) for: ");
+    out.pushView(path);
+    out.pushCstr(" */\n");
+    out.pushCstr("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n\n");
+    if (debug) out.pushCstr("/* debug build */\n\n");
+
+    for (u32 i = 0; i < ck->prog->ndecls; i++)
+    {
+        ast.Decl* d = ck->prog->decls[i];
+        if (d == null) continue;
+        if (d->ngenerics > 0) continue;
+        switch (d->kind)
+        {
+        case ast.DT_CONST:
+        case ast.DT_VAR:
+        {
+            types.CType* ct = resolve(ck, d->type);
+            out.pushCstr("extern ");
+            pushType(&out, ct);
+            out.pushCstr(" ");
+            out.pushView(d->name);
+            out.pushCstr(";\n");
+            break;
+        }
+        case ast.DT_FUNC:
+        {
+            types.CType* ret = resolve(ck, d->type);
+            pushType(&out, ret);
+            out.pushCstr(" ");
+            out.pushView(d->name);
+            out.pushCstr("(");
+            for (u32 p = 0; p < d->nparams; p++)
+            {
+                if (p) out.pushCstr(", ");
+                types.CType* pt = resolve(ck, d->params[p].type);
+                pushType(&out, pt);
+                if (d->params[p].name.len > 0)
+                {
+                    out.pushCstr(" ");
+                    out.pushView(d->params[p].name);
+                }
+            }
+            if (d->variadic) out.pushCstr(d->nparams ? ", ..." : "...");
+            out.pushCstr(");\n");
+            break;
+        }
+        case ast.DT_EXTERN:
+        {
+            types.CType* ret = resolve(ck, d->type);
+            out.pushCstr("extern ");
+            pushType(&out, ret);
+            out.pushCstr(" ");
+            out.pushView(d->name);
+            out.pushCstr("(");
+            for (u32 p = 0; p < d->nparams; p++)
+            {
+                if (p) out.pushCstr(", ");
+                types.CType* pt = resolve(ck, d->params[p].type);
+                pushType(&out, pt);
+                if (d->params[p].name.len > 0)
+                {
+                    out.pushCstr(" ");
+                    out.pushView(d->params[p].name);
+                }
+            }
+            if (d->variadic) out.pushCstr(d->nparams ? ", ..." : "...");
+            out.pushCstr(");\n");
+            break;
+        }
+        case ast.DT_STRUCT:
+        {
+            out.pushCstr("typedef struct ");
+            out.pushView(d->name);
+            out.pushCstr(" {\n");
+            for (u32 f = 0; f < d->nfields; f++)
+            {
+                types.CType* ft = resolve(ck, d->fields[f].type);
+                out.pushCstr("    ");
+                pushType(&out, ft);
+                out.pushCstr(" ");
+                out.pushView(d->fields[f].name);
+                out.pushCstr(";\n");
+            }
+            out.pushCstr("} ");
+            out.pushView(d->name);
+            out.pushCstr(";\n");
+            break;
+        }
+        case ast.DT_ENUM:
+        {
+            out.pushCstr("typedef enum {\n");
+            for (u32 v = 0; v < d->nvariants; v++)
+            {
+                out.pushCstr("    ");
+                out.pushView(d->variants[v].name);
+                out.pushCstr(",\n");
+            }
+            out.pushCstr("} ");
+            out.pushView(d->name);
+            out.pushCstr(";\n");
+            break;
+        }
+        case ast.DT_TYPEDEF:
+        case ast.DT_DISTINCT:
+        {
+            types.CType* ut = resolve(ck, d->type);
+            out.pushCstr("typedef ");
+            pushType(&out, ut);
+            out.pushCstr(" ");
+            out.pushView(d->name);
+            out.pushCstr(";\n");
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    const char* s = out.asCstr();
+    libc.write(1, (const u8*)s, out.len);
+    out.free();
+}

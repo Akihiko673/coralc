@@ -1,0 +1,34 @@
+// hello_entry.crl — minimal extension entry point.
+//
+// Godot dlopens the .so, looks up the symbol named in the .gdextension file
+// (entry_symbol), and calls it with a function that resolves engine pointers.
+//
+// The 3 modules correspond to the 3 generated files:
+//   types      -> opaques, enums, ABI structs
+//   interface  -> the Interface slot table + init()
+//   classes    -> the generated per-class method bind slots/hashes
+mod typ = import("godot/types");
+mod inf = import("godot/interface");
+
+// The interface table lives here so every later call is api->something().
+inf.Interface g_interface;
+
+// extern ("C") keeps the C ABI so the symbol name is byte-exact in the .so.
+extern ("C") typ.GBool gdextension_entry_point(typ.GetProcAddress getProcAddress,
+    typ.Library library, typ.Initialization* rInitialization)
+{
+    // 1. Resolve all engine function pointers from Godot by name.
+    if (!inf.init(&g_interface, getProcAddress)) return 0;
+
+    // 2. Tell Godot we want the scene level (ready after scene runs).
+    rInitialization->minimumLevel = typ.InitLevel.Scene;
+    rInitialization->userdata = null;
+    rInitialization->initialize = null;
+    rInitialization->deinitialize = null;
+
+    return 1;
+}
+
+// Compile with:
+//   python3 /home/cerie/Projects/coral/py/main.py godot/types.crl godot/interface.crl
+//       godot/classes.crl godot/entry.crl examples/hello_entry.crl -o libmyext.so

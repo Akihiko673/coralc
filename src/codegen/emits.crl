@@ -1,0 +1,8 @@
+mod libc = import("std/platform/libc.crl");
+
+// emits.crl: native assembly emission (not yet implemented).
+
+pub void emitAsm(check.Check* ck, str.strView path, u32 optLevel, bool debug)
+{
+    libc.write(2, (const u8*)"coral: --emit-asm: assembly emission not yet implemented\n", 58);
+}

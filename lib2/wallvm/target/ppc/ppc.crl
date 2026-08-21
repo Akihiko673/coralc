@@ -39,14 +39,49 @@ pub struct PpcCodegen
         if (self.out) { for (u32 i = 0; i < self.outLen; i++) nb[i] = self.out[i]; mman.dealloc<char>(self.out); }
         self.out = nb; self.outCap = nc;
     }
+    
     void c(char ch) { self.grow(1); self.out[self.outLen++] = ch; }
-    void s(const char* p) { if (!p) return; u32 l = 0; while (p[l]) l++; if (!l) return; self.grow(l); for (u32 i = 0; i < l; i++) self.out[self.outLen++] = p[i]; }
-    void u(u64 v) { if (v == 0) { self.c('0'); return; } char b[24]; u32 p = 24; while (v) { b[--p] = (char)('0' + (v % 10)); v /= 10; } while (p < 24) self.c(b[p++]); }
+    
+    void s(const char* p)
+    {
+        if (!p) return;
+        u32 l = 0;
+        while (p[l]) l++;
+        if (!l) return;
+        self.grow(l);
+        for (u32 i = 0; i < l; i++) self.out[self.outLen++] = p[i];
+    }
+    
+    void u(u64 v)
+    {
+        if (v == 0) { self.c('0'); return; }
+        char b[24];
+        u32 p = 24;
+        while (v) { b[--p] = (char)('0' + (v % 10)); v /= 10; }
+        while (p < 24) self.c(b[p++]);
+    }
     void pad() { self.c(' '); self.c(' '); self.c(' '); self.c(' '); }
+    
     void inst0(const char* m) { self.pad(); self.s(m); self.c('\n'); }
+    
     void inst1(const char* m, const char* a) { self.pad(); self.s(m); self.c(' '); self.s(a); self.c('\n'); }
-    void inst2(const char* m, const char* a, const char* b) { self.pad(); self.s(m); self.c(' '); self.s(a); self.s(", "); self.s(b); self.c('\n'); }
-    void inst3(const char* m, const char* a, const char* b, const char* c) { self.pad(); self.s(m); self.c(' '); self.s(a); self.s(", "); self.s(b); self.s(", "); self.s(c); self.c('\n'); }
+    
+    void inst2(const char* m, const char* a, const char* b)
+        { self.pad(); self.s(m); self.c(' '); self.s(a); self.s(", "); self.s(b); self.c('\n'); }
+    
+    void inst3(const char* m, const char* a,
+               const char* b, const char* c)
+    {
+        self.pad();
+        self.s(m);
+        self.c(' ');
+        self.s(a);
+        self.s(", ");
+        self.s(b);
+        self.s(", ");
+        self.s(c);
+        self.c('\n');
+    }
     void emitLabel(const char* n) { self.s(n); self.s(":\n"); }
 
     void ensureSlots(u32 id)
@@ -61,7 +96,18 @@ pub struct PpcCodegen
         self.stackSlots = ns; self.stackSlotsCap = nc;
         if (id >= self.stackSlotsLen) self.stackSlotsLen = id + 1;
     }
-    u32 slot(ir_types.IrValue* v) { if (!v) return 0; u32 id = v->id; if (id >= self.stackSlotsCap) self.ensureSlots(id); if (self.stackSlots[id] == 0) { self.frameSize += 4; self.stackSlots[id] = self.frameSize; } return self.stackSlots[id]; }
+    u32 slot(ir_types.IrValue* v)
+    {
+        if (!v) return 0;
+        u32 id = v->id;
+        if (id >= self.stackSlotsCap) self.ensureSlots(id);
+        if (self.stackSlots[id] == 0)
+        {
+            self.frameSize += 4;
+            self.stackSlots[id] = self.frameSize;
+        }
+        return self.stackSlots[id];
+    }
     bool isConst(ir_types.IrValue* v) { if (!v) return true; ir_types.IrValueKind k = v->kind; return k == ir_types.IrValueKind::ConstInt || k == ir_types.IrValueKind::ConstFloat; }
     void emitSlot(ir_types.IrValue* v) { self.u((u64)self.slot(v)); self.s("(r1)"); }
     void emitImm(ir_types.IrValue* v) { self.u(v->valData); }

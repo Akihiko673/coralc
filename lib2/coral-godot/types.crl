@@ -1,0 +1,629 @@
+// Godot GDExtension C API types, translated to Coral.
+// Field order matches gdextension_interface.h exactly. ABI-compatible.
+// Opaque handles are distinct: same void* underneath, explicit cast to cross.
+
+pub i64 GInt;          // GDExtensionInt (int64_t)
+pub u8 GBool;          // GDExtensionBool (uint8_t)
+pub u64 ObjectId;      // GDObjectInstanceID (uint64_t)
+
+pub distinct VariantPtr = void*;
+pub distinct ConstVariantPtr = const void*;
+pub distinct UninitVariantPtr = void*;
+
+pub distinct StringNamePtr = void*;
+pub distinct ConstStringNamePtr = const void*;
+pub distinct UninitStringNamePtr = void*;
+
+pub distinct StringPtr = void*;
+pub distinct ConstStringPtr = const void*;
+pub distinct UninitStringPtr = void*;
+
+pub distinct ObjectPtr = void*;
+pub distinct ConstObjectPtr = const void*;
+pub distinct UninitObjectPtr = void*;
+
+pub distinct TypePtr = void*;
+pub distinct ConstTypePtr = const void*;
+pub distinct UninitTypePtr = void*;
+
+pub distinct RefPtr = void*;
+pub distinct ConstRefPtr = const void*;
+
+pub distinct MethodBind = const void*;
+pub distinct ClassInstance = void*;
+pub distinct Library = void*;
+pub distinct ScriptData = void*;
+pub distinct ScriptLanguage = void*;
+pub distinct ScriptInstance = void*;
+
+pub enum VariantType
+{
+    Nil = 0,
+    Bool = 1,
+    Int = 2,
+    Float = 3,
+    String = 4,
+    Vector2 = 5,
+    Vector2i = 6,
+    Rect2 = 7,
+    Rect2i = 8,
+    Vector3 = 9,
+    Vector3i = 10,
+    Transform2D = 11,
+    Vector4 = 12,
+    Vector4i = 13,
+    Plane = 14,
+    Quaternion = 15,
+    Aabb = 16,
+    Basis = 17,
+    Transform3D = 18,
+    Projection = 19,
+    Color = 20,
+    StringName = 21,
+    NodePath = 22,
+    Rid = 23,
+    Object = 24,
+    Callable = 25,
+    Signal = 26,
+    Dictionary = 27,
+    Array = 28,
+    PackedByteArray = 29,
+    PackedInt32Array = 30,
+    PackedInt64Array = 31,
+    PackedFloat32Array = 32,
+    PackedFloat64Array = 33,
+    PackedStringArray = 34,
+    PackedVector2Array = 35,
+    PackedVector3Array = 36,
+    PackedColorArray = 37,
+    PackedVector4Array = 38,
+    VariantMax = 39,
+}
+
+pub enum VariantOperator
+{
+    Equal = 0,
+    NotEqual = 1,
+    Less = 2,
+    LessEqual = 3,
+    Greater = 4,
+    GreaterEqual = 5,
+    Add = 6,
+    Subtract = 7,
+    Multiply = 8,
+    Divide = 9,
+    Negate = 10,
+    Positive = 11,
+    Module = 12,
+    Power = 13,
+    ShiftLeft = 14,
+    ShiftRight = 15,
+    BitAnd = 16,
+    BitOr = 17,
+    BitXor = 18,
+    BitNegate = 19,
+    And = 20,
+    Or = 21,
+    Xor = 22,
+    Not = 23,
+    In = 24,
+    Max = 25,
+}
+
+pub enum CallErrorType
+{
+    Ok = 0,
+    InvalidMethod = 1,
+    InvalidArgument = 2,
+    TooManyArguments = 3,
+    TooFewArguments = 4,
+    InstanceIsNull = 5,
+    MethodNotConst = 6,
+}
+
+pub enum InitLevel
+{
+    Core = 0,
+    Servers = 1,
+    Scene = 2,
+    Editor = 3,
+    MaxLevel = 4,
+}
+
+pub enum ArgumentMetadata
+{
+    None = 0,
+    IntIsInt8 = 1,
+    IntIsInt16 = 2,
+    IntIsInt32 = 3,
+    IntIsInt64 = 4,
+    IntIsUint8 = 5,
+    IntIsUint16 = 6,
+    IntIsUint32 = 7,
+    IntIsUint64 = 8,
+    RealIsFloat = 9,
+    RealIsDouble = 10,
+    IntIsChar16 = 11,
+    IntIsChar32 = 12,
+    ObjectIsRequired = 13,
+}
+
+pub const u32 METHOD_FLAG_NORMAL = 1;
+pub const u32 METHOD_FLAG_EDITOR = 2;
+pub const u32 METHOD_FLAG_CONST = 4;
+pub const u32 METHOD_FLAG_VIRTUAL = 8;
+pub const u32 METHOD_FLAG_VARARG = 16;
+pub const u32 METHOD_FLAG_STATIC = 32;
+pub const u32 METHOD_FLAG_VIRTUAL_REQUIRED = 128;
+pub const u32 METHOD_FLAGS_DEFAULT = 1;
+
+pub void(UninitVariantPtr, TypePtr) VariantFromTypeConstructor;
+pub void(UninitTypePtr, VariantPtr) TypeFromVariantConstructor;
+pub void*(VariantPtr) VariantGetInternalPtr;
+pub void(ConstTypePtr, ConstTypePtr, TypePtr) PtrOperatorEvaluator;
+pub void(TypePtr, const ConstTypePtr*, TypePtr, i32) PtrBuiltInMethod;
+pub void(UninitTypePtr, const ConstTypePtr*) PtrConstructor;
+pub void(TypePtr) PtrDestructor;
+pub void(TypePtr, ConstTypePtr) PtrSetter;
+pub void(ConstTypePtr, TypePtr) PtrGetter;
+pub void(TypePtr, GInt, ConstTypePtr) PtrIndexedSetter;
+pub void(ConstTypePtr, GInt, TypePtr) PtrIndexedGetter;
+pub void(TypePtr, ConstTypePtr, ConstTypePtr) PtrKeyedSetter;
+pub void(ConstTypePtr, ConstTypePtr, TypePtr) PtrKeyedGetter;
+pub u32(ConstVariantPtr, ConstVariantPtr) PtrKeyedChecker;
+pub void(TypePtr, const ConstTypePtr*, i32) PtrUtilityFunction;
+
+pub ObjectPtr() ClassConstructor;
+pub void*(void*, void*) InstanceBindingCreateCallback;
+pub void(void*, void*, void*) InstanceBindingFreeCallback;
+pub GBool(void*, void*, GBool) InstanceBindingReferenceCallback;
+
+pub GBool(ClassInstance, ConstStringNamePtr, ConstVariantPtr) ClassSet;
+pub GBool(ClassInstance, ConstStringNamePtr, VariantPtr) ClassGet;
+pub u64(ClassInstance) ClassGetRid;
+pub const PropertyInfo*(ClassInstance, u32*) ClassGetPropertyList;
+pub void(ClassInstance, const PropertyInfo*) ClassFreePropertyList;
+pub void(ClassInstance, const PropertyInfo*, u32) ClassFreePropertyList2;
+pub GBool(ClassInstance, ConstStringNamePtr) ClassPropertyCanRevert;
+pub GBool(ClassInstance, ConstStringNamePtr, VariantPtr) ClassPropertyGetRevert;
+pub GBool(ClassInstance, PropertyInfo*) ClassValidateProperty;
+pub void(ClassInstance, i32) ClassNotification;
+pub void(ClassInstance, i32, GBool) ClassNotification2;
+pub void(ClassInstance, GBool*, StringPtr) ClassToString;
+pub void(ClassInstance) ClassReference;
+pub void(ClassInstance) ClassUnreference;
+pub void(ClassInstance, const ConstTypePtr*, TypePtr) ClassCallVirtual;
+pub ObjectPtr(void*) ClassCreateInstance;
+pub ObjectPtr(void*, GBool) ClassCreateInstance2;
+pub ObjectPtr(void*, GBool) ClassCreateInstance3;
+pub void(void*, ClassInstance) ClassFreeInstance;
+pub ClassInstance(void*, ObjectPtr) ClassRecreateInstance;
+pub ClassCallVirtual(void*, ConstStringNamePtr) ClassGetVirtual;
+pub ClassCallVirtual(void*, ConstStringNamePtr, u32) ClassGetVirtual2;
+pub void*(void*, ConstStringNamePtr) ClassGetVirtualCallData;
+pub void*(void*, ConstStringNamePtr, u32) ClassGetVirtualCallData2;
+pub void(ClassInstance, ConstStringNamePtr, void*, const ConstTypePtr*, TypePtr) ClassCallVirtualWithData;
+
+pub void(void*, ClassInstance, const ConstVariantPtr*, GInt, VariantPtr, CallError*) ClassMethodCall;
+pub void(void*, ClassInstance, const ConstVariantPtr*, VariantPtr) ClassMethodValidatedCall;
+pub void(void*, ClassInstance, const ConstTypePtr*, TypePtr) ClassMethodPtrCall;
+
+pub void(void*, const ConstVariantPtr*, GInt, VariantPtr, CallError*) CallableCustomCall;
+pub GBool(void*) CallableCustomIsValid;
+pub void(void*) CallableCustomFree;
+pub u32(void*) CallableCustomHash;
+pub GBool(void*, void*) CallableCustomEqual;
+pub GBool(void*, void*) CallableCustomLessThan;
+pub void(void*, GBool*, StringPtr) CallableCustomToString;
+pub GInt(void*, GBool*) CallableCustomGetArgumentCount;
+
+pub GBool(ScriptData, ConstStringNamePtr, ConstVariantPtr) ScriptSet;
+pub GBool(ScriptData, ConstStringNamePtr, VariantPtr) ScriptGet;
+pub const PropertyInfo*(ScriptData, u32*) ScriptGetPropertyList;
+pub void(ScriptData, const PropertyInfo*) ScriptFreePropertyList;
+pub void(ScriptData, const PropertyInfo*, u32) ScriptFreePropertyList2;
+pub GBool(ScriptData, PropertyInfo*) ScriptGetClassCategory;
+pub VariantType(ScriptData, ConstStringNamePtr, GBool*) ScriptGetPropertyType;
+pub GBool(ScriptData, PropertyInfo*) ScriptValidateProperty;
+pub GBool(ScriptData, ConstStringNamePtr) ScriptPropertyCanRevert;
+pub GBool(ScriptData, ConstStringNamePtr, VariantPtr) ScriptPropertyGetRevert;
+pub ObjectPtr(ScriptData) ScriptGetOwner;
+pub void(ConstStringNamePtr, ConstVariantPtr, void*) ScriptPropertyStateAdd;
+pub void(ScriptData, ScriptPropertyStateAdd, void*) ScriptGetPropertyState;
+pub const MethodInfo*(ScriptData, u32*) ScriptGetMethodList;
+pub void(ScriptData, const MethodInfo*) ScriptFreeMethodList;
+pub void(ScriptData, const MethodInfo*, u32) ScriptFreeMethodList2;
+pub GBool(ScriptData, ConstStringNamePtr) ScriptHasMethod;
+pub GInt(ScriptData, ConstStringNamePtr, GBool*) ScriptGetMethodArgumentCount;
+pub void(ScriptData, ConstStringNamePtr, const ConstVariantPtr*, GInt, VariantPtr, CallError*) ScriptCall;
+pub void(ScriptData, i32) ScriptNotification;
+pub void(ScriptData, i32, GBool) ScriptNotification2;
+pub void(ScriptData, GBool*, StringPtr) ScriptToString;
+pub void(ScriptData) ScriptRefCountIncremented;
+pub GBool(ScriptData) ScriptRefCountDecremented;
+pub ObjectPtr(ScriptData) ScriptGetScript;
+pub GBool(ScriptData) ScriptIsPlaceholder;
+pub ScriptLanguage(ScriptData) ScriptGetLanguage;
+pub void(ScriptData) ScriptFree;
+
+pub void(TypePtr) EditorGetClassesUsedCallback;
+pub void(void*, u32) WorkerThreadPoolGroupTask;
+pub void(void*) WorkerThreadPoolTask;
+pub void(void*, InitLevel) InitializeCallback;
+pub void(void*, InitLevel) DeinitializeCallback;
+pub void() MainLoopStartupCallback;
+pub void() MainLoopShutdownCallback;
+pub void() MainLoopFrameCallback;
+pub void() InterfaceFn;
+pub InterfaceFn(const char*) GetProcAddress;
+pub GBool(GetProcAddress, Library, Initialization*) EntryPointFn;
+
+pub struct CallError
+{
+    CallErrorType error;
+    i32 argument;
+    i32 expected;
+}
+
+pub struct PropertyInfo
+{
+    VariantType type;
+    StringNamePtr name;
+    StringNamePtr className;
+    u32 hint;
+    StringPtr hintString;
+    u32 usage;
+}
+
+pub struct MethodInfo
+{
+    StringNamePtr name;
+    PropertyInfo returnValue;
+    u32 flags;
+    i32 id;
+    u32 argumentCount;
+    PropertyInfo* arguments;
+    u32 defaultArgumentCount;
+    VariantPtr* defaultArguments;
+}
+
+pub struct ClassMethodInfo
+{
+    StringNamePtr name;
+    void* methodUserdata;
+    ClassMethodCall call;
+    ClassMethodPtrCall ptrcall;
+    u32 methodFlags;
+    GBool hasReturnValue;
+    PropertyInfo* returnValueInfo;
+    ArgumentMetadata returnValueMetadata;
+    u32 argumentCount;
+    PropertyInfo* argumentsInfo;
+    ArgumentMetadata* argumentsMetadata;
+    u32 defaultArgumentCount;
+    VariantPtr* defaultArguments;
+}
+
+pub struct VirtualMethodInfo
+{
+    StringNamePtr name;
+    u32 methodFlags;
+    PropertyInfo returnValue;
+    ArgumentMetadata returnValueMetadata;
+    u32 argumentCount;
+    PropertyInfo* arguments;
+    ArgumentMetadata* argumentsMetadata;
+}
+
+pub struct ClassInfo
+{
+    GBool isVirtual;
+    GBool isAbstract;
+    ClassSet set;
+    ClassGet get;
+    ClassGetPropertyList getPropertyList;
+    ClassFreePropertyList freePropertyList;
+    ClassPropertyCanRevert propertyCanRevert;
+    ClassPropertyGetRevert propertyGetRevert;
+    ClassNotification notification;
+    ClassToString toString;
+    ClassReference reference;
+    ClassUnreference unreference;
+    ClassCreateInstance createInstance;
+    ClassFreeInstance freeInstance;
+    ClassGetVirtual getVirtual;
+    ClassGetRid getRid;
+    void* classUserdata;
+}
+
+pub struct ClassInfo2
+{
+    GBool isVirtual;
+    GBool isAbstract;
+    GBool isExposed;
+    ClassSet set;
+    ClassGet get;
+    ClassGetPropertyList getPropertyList;
+    ClassFreePropertyList freePropertyList;
+    ClassPropertyCanRevert propertyCanRevert;
+    ClassPropertyGetRevert propertyGetRevert;
+    ClassValidateProperty validateProperty;
+    ClassNotification2 notification;
+    ClassToString toString;
+    ClassReference reference;
+    ClassUnreference unreference;
+    ClassCreateInstance createInstance;
+    ClassFreeInstance freeInstance;
+    ClassRecreateInstance recreateInstance;
+    ClassGetVirtual getVirtual;
+    ClassGetVirtualCallData getVirtualCallData;
+    ClassCallVirtualWithData callVirtualWithData;
+    ClassGetRid getRid;
+    void* classUserdata;
+}
+
+pub struct ClassInfo3
+{
+    GBool isVirtual;
+    GBool isAbstract;
+    GBool isExposed;
+    GBool isRuntime;
+    ClassSet set;
+    ClassGet get;
+    ClassGetPropertyList getPropertyList;
+    ClassFreePropertyList2 freePropertyList;
+    ClassPropertyCanRevert propertyCanRevert;
+    ClassPropertyGetRevert propertyGetRevert;
+    ClassValidateProperty validateProperty;
+    ClassNotification2 notification;
+    ClassToString toString;
+    ClassReference reference;
+    ClassUnreference unreference;
+    ClassCreateInstance createInstance;
+    ClassFreeInstance freeInstance;
+    ClassRecreateInstance recreateInstance;
+    ClassGetVirtual getVirtual;
+    ClassGetVirtualCallData getVirtualCallData;
+    ClassCallVirtualWithData callVirtualWithData;
+    ClassGetRid getRid;
+    void* classUserdata;
+}
+
+pub struct ClassInfo4
+{
+    GBool isVirtual;
+    GBool isAbstract;
+    GBool isExposed;
+    GBool isRuntime;
+    ConstStringPtr iconPath;
+    ClassSet set;
+    ClassGet get;
+    ClassGetPropertyList getPropertyList;
+    ClassFreePropertyList2 freePropertyList;
+    ClassPropertyCanRevert propertyCanRevert;
+    ClassPropertyGetRevert propertyGetRevert;
+    ClassValidateProperty validateProperty;
+    ClassNotification2 notification;
+    ClassToString toString;
+    ClassReference reference;
+    ClassUnreference unreference;
+    ClassCreateInstance2 createInstance;
+    ClassFreeInstance freeInstance;
+    ClassRecreateInstance recreateInstance;
+    ClassGetVirtual2 getVirtual;
+    ClassGetVirtualCallData2 getVirtualCallData;
+    ClassCallVirtualWithData callVirtualWithData;
+    void* classUserdata;
+}
+
+pub struct ClassInfo5
+{
+    GBool isVirtual;
+    GBool isAbstract;
+    GBool isExposed;
+    GBool isRuntime;
+    ConstStringPtr iconPath;
+    ClassSet set;
+    ClassGet get;
+    ClassGetPropertyList getPropertyList;
+    ClassFreePropertyList2 freePropertyList;
+    ClassPropertyCanRevert propertyCanRevert;
+    ClassPropertyGetRevert propertyGetRevert;
+    ClassValidateProperty validateProperty;
+    ClassNotification2 notification;
+    ClassToString toString;
+    ClassReference reference;
+    ClassUnreference unreference;
+    ClassCreateInstance2 createInstance;
+    ClassFreeInstance freeInstance;
+    ClassRecreateInstance recreateInstance;
+    ClassGetVirtual2 getVirtual;
+    ClassGetVirtualCallData2 getVirtualCallData;
+    ClassCallVirtualWithData callVirtualWithData;
+    void* classUserdata;
+}
+
+pub struct ClassInfo6
+{
+    GBool isVirtual;
+    GBool isAbstract;
+    GBool isExposed;
+    GBool isRuntime;
+    ConstStringPtr iconPath;
+    ClassSet set;
+    ClassGet get;
+    ClassGetPropertyList getPropertyList;
+    ClassFreePropertyList2 freePropertyList;
+    ClassPropertyCanRevert propertyCanRevert;
+    ClassPropertyGetRevert propertyGetRevert;
+    ClassValidateProperty validateProperty;
+    ClassNotification2 notification;
+    ClassToString toString;
+    ClassReference reference;
+    ClassUnreference unreference;
+    ClassCreateInstance3 createInstance;
+    ClassFreeInstance freeInstance;
+    ClassRecreateInstance recreateInstance;
+    ClassGetVirtual2 getVirtual;
+    ClassGetVirtualCallData2 getVirtualCallData;
+    ClassCallVirtualWithData callVirtualWithData;
+    void* classUserdata;
+}
+
+pub struct CallableInfo
+{
+    void* callableUserdata;
+    void* token;
+    ObjectId objectId;
+    CallableCustomCall call;
+    CallableCustomIsValid isValid;
+    CallableCustomFree free;
+    CallableCustomHash hash;
+    CallableCustomEqual equal;
+    CallableCustomLessThan lessThan;
+    CallableCustomToString toString;
+}
+
+pub struct CallableInfo2
+{
+    void* callableUserdata;
+    void* token;
+    ObjectId objectId;
+    CallableCustomCall call;
+    CallableCustomIsValid isValid;
+    CallableCustomFree free;
+    CallableCustomHash hash;
+    CallableCustomEqual equal;
+    CallableCustomLessThan lessThan;
+    CallableCustomToString toString;
+    CallableCustomGetArgumentCount getArgumentCount;
+}
+
+pub struct ScriptInfo
+{
+    ScriptSet set;
+    ScriptGet get;
+    ScriptGetPropertyList getPropertyList;
+    ScriptFreePropertyList freePropertyList;
+    ScriptPropertyCanRevert propertyCanRevert;
+    ScriptPropertyGetRevert propertyGetRevert;
+    ScriptGetOwner getOwner;
+    ScriptGetPropertyState getPropertyState;
+    ScriptGetMethodList getMethodList;
+    ScriptFreeMethodList freeMethodList;
+    ScriptGetPropertyType getPropertyType;
+    ScriptHasMethod hasMethod;
+    ScriptCall call;
+    ScriptNotification notification;
+    ScriptToString toString;
+    ScriptRefCountIncremented refCountIncremented;
+    ScriptRefCountDecremented refCountDecremented;
+    ScriptGetScript getScript;
+    ScriptIsPlaceholder isPlaceholder;
+    ScriptSet setFallback;
+    ScriptGet getFallback;
+    ScriptGetLanguage getLanguage;
+    ScriptFree free;
+}
+
+pub struct ScriptInfo2
+{
+    ScriptSet set;
+    ScriptGet get;
+    ScriptGetPropertyList getPropertyList;
+    ScriptFreePropertyList freePropertyList;
+    ScriptGetClassCategory getClassCategory;
+    ScriptPropertyCanRevert propertyCanRevert;
+    ScriptPropertyGetRevert propertyGetRevert;
+    ScriptGetOwner getOwner;
+    ScriptGetPropertyState getPropertyState;
+    ScriptGetMethodList getMethodList;
+    ScriptFreeMethodList freeMethodList;
+    ScriptGetPropertyType getPropertyType;
+    ScriptValidateProperty validateProperty;
+    ScriptHasMethod hasMethod;
+    ScriptCall call;
+    ScriptNotification2 notification;
+    ScriptToString toString;
+    ScriptRefCountIncremented refCountIncremented;
+    ScriptRefCountDecremented refCountDecremented;
+    ScriptGetScript getScript;
+    ScriptIsPlaceholder isPlaceholder;
+    ScriptSet setFallback;
+    ScriptGet getFallback;
+    ScriptGetLanguage getLanguage;
+    ScriptFree free;
+}
+
+pub struct ScriptInfo3
+{
+    ScriptSet set;
+    ScriptGet get;
+    ScriptGetPropertyList getPropertyList;
+    ScriptFreePropertyList2 freePropertyList;
+    ScriptGetClassCategory getClassCategory;
+    ScriptPropertyCanRevert propertyCanRevert;
+    ScriptPropertyGetRevert propertyGetRevert;
+    ScriptGetOwner getOwner;
+    ScriptGetPropertyState getPropertyState;
+    ScriptGetMethodList getMethodList;
+    ScriptFreeMethodList2 freeMethodList;
+    ScriptGetPropertyType getPropertyType;
+    ScriptValidateProperty validateProperty;
+    ScriptHasMethod hasMethod;
+    ScriptGetMethodArgumentCount getMethodArgumentCount;
+    ScriptCall call;
+    ScriptNotification2 notification;
+    ScriptToString toString;
+    ScriptRefCountIncremented refCountIncremented;
+    ScriptRefCountDecremented refCountDecremented;
+    ScriptGetScript getScript;
+    ScriptIsPlaceholder isPlaceholder;
+    ScriptSet setFallback;
+    ScriptGet getFallback;
+    ScriptGetLanguage getLanguage;
+    ScriptFree free;
+}
+
+pub struct Initialization
+{
+    InitLevel minimumLevel;
+    void* userdata;
+    InitializeCallback initialize;
+    DeinitializeCallback deinitialize;
+}
+
+pub struct GodotVersion
+{
+    u32 major;
+    u32 minor;
+    u32 patch;
+    const char* string;
+}
+
+pub struct GodotVersion2
+{
+    u32 major;
+    u32 minor;
+    u32 patch;
+    u32 hex;
+    const char* status;
+    const char* build;
+    const char* hash;
+    u64 timestamp;
+    const char* string;
+}
+
+pub struct MainLoopCallbacks
+{
+    MainLoopStartupCallback startup;
+    MainLoopShutdownCallback shutdown;
+    MainLoopFrameCallback frame;
+}
+
+pub struct BindingCallbacks
+{
+    InstanceBindingCreateCallback create;
+    InstanceBindingFreeCallback free;
+    InstanceBindingReferenceCallback reference;
+}

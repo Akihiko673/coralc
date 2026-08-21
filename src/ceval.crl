@@ -1,0 +1,263 @@
+// Compile-time expression evaluation for `constexpr` declarations.
+//
+// A `constexpr` initializer must be a constant expression; this module folds
+// such expressions down to a `ConstVal` (int/float/bool/char/string) and keeps
+// an evaluated-value registry keyed by name so later constexpr initializers
+// may reference earlier ones. The registry is reset per typechecked file.
+//
+// This is the "consexpr eval" stage: it both validates that constexpr
+// initializers are truly constant and produces the values codegen will emit.
+
+mod ast = import("ast/ast.crl");
+mod types = import("typecheck/types.crl");
+mod scopes = import("typecheck/scopes.crl");
+mod str = import("std/text/string.crl");
+mod mman = import("std/memory/mman.crl");
+mod libc = import("std/platform/libc.crl");
+
+pub const u32 CV_INT = 0;
+pub const u32 CV_FLOAT = 1;
+pub const u32 CV_BOOL = 2;
+pub const u32 CV_CHAR = 3;
+pub const u32 CV_STRING = 4;
+pub const u32 CV_AGG = 5;   // struct/array aggregate literal (constant if
+
+pub struct ConstVal
+{
+    u32 kind;
+    bool isSigned;
+    i64 i;    // signed integer / char code point
+    u64 u;    // unsigned integer
+    f64 f;    // floating point
+    bool b;   // boolean
+    str.strView s; // string contents (no quotes)
+}
+
+// evaluated-value registry (name -> ConstVal)
+
+struct Entry
+{
+    str.strView name;
+    ConstVal val;
+    bool ok;
+}
+
+Entry* gEntries = null;
+u32 gNEntries = 0;
+u32 gCap = 0;
+
+pub void reset()
+{
+    gNEntries = 0;
+}
+
+void grow()
+{
+    if (gCap == 0) { gCap = 32; gEntries = mman.alloc<Entry>(gCap); return; }
+    u32 nc = gCap * 2;
+    Entry* na = mman.alloc<Entry>(nc);
+    for (u32 i = 0; i < gNEntries; i++) na[i] = gEntries[i];
+    gEntries = na;
+    gCap = nc;
+}
+
+pub void define(str.strView name, ConstVal v)
+{
+    if (gNEntries >= gCap) grow();
+    Entry* e = &gEntries[gNEntries++];
+    e->name = name;
+    e->val = v;
+    e->ok = true;
+}
+
+pub bool lookup(str.strView name, ConstVal* out)
+{
+    for (u32 i = 0; i < gNEntries; i++)
+    {
+        if (gEntries[i].ok && strEqSV(gEntries[i].name, name))
+        {
+            *out = gEntries[i].val;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool strEqSV(str.strView a, str.strView b)
+{
+    if (a.len != b.len) return false;
+    for (u32 i = 0; i < a.len; i++)
+        if (a.ptr[i] != b.ptr[i]) return false;
+    return true;
+}
+
+str.strView stripQuotes(str.strView s)
+{
+    if (s.len >= 2 && s.ptr[0] == (u8)'"' && s.ptr[s.len - 1] == (u8)'"')
+        return str.strView::fromParts(s.ptr + 1, s.len - 2);
+    return s;
+}
+
+// Evaluate `e` to a compile-time constant. Returns true on success.
+pub bool eval(ast.Expr* e, ConstVal* out)
+{
+    if (e == null) return false;
+    switch (e->kind)
+    {
+    case ast.EX_INT:
+    {
+        u64 mag = 0; bool ln = true; u32 fw = 0; bool uns = false;
+        if (!types.literalIntInfo(e->text, &mag, &ln, &fw, &uns)) return false;
+        out->kind = CV_INT;
+        out->isSigned = ln;
+        out->u = mag;
+        out->i = (i64)mag;
+        return true;
+    }
+    case ast.EX_FLOAT:
+    {
+        // simple decimal parse
+        f64 v = 0.0; f64 frac = 0.0; f64 fscale = 0.1; bool neg = false;
+        u32 i = 0;
+        if (i < e->text.len && e->text.ptr[i] == (u8)'-') { neg = true; i++; }
+        for (; i < e->text.len; i++)
+        {
+            u8 c = e->text.ptr[i];
+            if (c == (u8)'.') { frac = 1.0; continue; }
+            if (c < (u8)'0' || c > (u8)'9') break;
+            if (frac >= 1.0) { v = v + (f64)(c - (u8)'0') * fscale; fscale *= 0.1; }
+            else v = v * 10.0 + (f64)(c - (u8)'0');
+        }
+        out->kind = CV_FLOAT;
+        out->f = neg ? -v : v;
+        return true;
+    }
+    case ast.EX_BOOL:
+        out->kind = CV_BOOL;
+        out->b = (e->text.len == 4 && e->text.ptr[0] == (u8)'t');
+        return true;
+    case ast.EX_CHAR:
+    {
+        str.strView inner = stripQuotes(e->text);
+        out->kind = CV_CHAR;
+        out->i = inner.len > 0 ? (i64)(inner.ptr[0]) : 0;
+        out->u = (u64)out->i;
+        return true;
+    }
+    case ast.EX_STR:
+        out->kind = CV_STRING;
+        out->s = stripQuotes(e->text);
+        return true;
+    case ast.EX_PAREN:
+        return eval(e->a, out);
+    case ast.EX_UNARY:
+    {
+        ConstVal v;
+        if (!eval(e->a, &v)) return false;
+        if (e->text.len == 1 && e->text.ptr[0] == (u8)'!')
+        {
+            if (v.kind != CV_BOOL) return false;
+            out->kind = CV_BOOL; out->b = !v.b; return true;
+        }
+        if (e->text.len == 1 && e->text.ptr[0] == (u8)'-')
+        {
+            if (v.kind == CV_INT) { out->kind = CV_INT; out->isSigned = true; out->i = -v.i; out->u = (u64)(-v.i); return true; }
+            if (v.kind == CV_FLOAT) { out->kind = CV_FLOAT; out->f = -v.f; return true; }
+            return false;
+        }
+        if (e->text.len == 1 && e->text.ptr[0] == (u8)'+')
+        {
+            *out = v; return true;
+        }
+        return false;
+    }
+    case ast.EX_BINARY:
+    {
+        ConstVal l, r;
+        if (!eval(e->a, &l) || !eval(e->b, &r)) return false;
+        // integer arithmetic
+        if (l.kind == CV_INT && r.kind == CV_INT)
+        {
+            i64 a = l.i, b = r.i;
+            bool signedRes = l.isSigned || r.isSigned;
+            if (strEqOp(e->text, "==")) { out->kind = CV_BOOL; out->b = (a == b); return true; }
+            if (strEqOp(e->text, "!=")) { out->kind = CV_BOOL; out->b = (a != b); return true; }
+            if (strEqOp(e->text, "<"))  { out->kind = CV_BOOL; out->b = (a < b); return true; }
+            if (strEqOp(e->text, "<=")) { out->kind = CV_BOOL; out->b = (a <= b); return true; }
+            if (strEqOp(e->text, ">"))  { out->kind = CV_BOOL; out->b = (a > b); return true; }
+            if (strEqOp(e->text, ">=")) { out->kind = CV_BOOL; out->b = (a >= b); return true; }
+            if (strEqOp(e->text, "+")) { out->kind = CV_INT; out->isSigned = signedRes; out->i = a + b; out->u = (u64)(a + b); return true; }
+            if (strEqOp(e->text, "-")) { out->kind = CV_INT; out->isSigned = signedRes; out->i = a - b; out->u = (u64)(a - b); return true; }
+            if (strEqOp(e->text, "*")) { out->kind = CV_INT; out->isSigned = signedRes; out->i = a * b; out->u = (u64)(a * b); return true; }
+            if (strEqOp(e->text, "/")) { if (b == 0) return false; out->kind = CV_INT; out->isSigned = signedRes; out->i = a / b; out->u = (u64)(a / b); return true; }
+            if (strEqOp(e->text, "%")) { if (b == 0) return false; out->kind = CV_INT; out->isSigned = signedRes; out->i = a % b; out->u = (u64)(a % b); return true; }
+            if (strEqOp(e->text, "&&")) { out->kind = CV_BOOL; out->b = (a != 0 && b != 0); return true; }
+            if (strEqOp(e->text, "||")) { out->kind = CV_BOOL; out->b = (a != 0 || b != 0); return true; }
+            return false;
+        }
+        if (l.kind == CV_FLOAT && r.kind == CV_FLOAT)
+        {
+            f64 a = l.f, b = r.f;
+            if (strEqOp(e->text, "==")) { out->kind = CV_BOOL; out->b = (a == b); return true; }
+            if (strEqOp(e->text, "!=")) { out->kind = CV_BOOL; out->b = (a != b); return true; }
+            if (strEqOp(e->text, "<"))  { out->kind = CV_BOOL; out->b = (a < b); return true; }
+            if (strEqOp(e->text, "<=")) { out->kind = CV_BOOL; out->b = (a <= b); return true; }
+            if (strEqOp(e->text, ">"))  { out->kind = CV_BOOL; out->b = (a > b); return true; }
+            if (strEqOp(e->text, ">=")) { out->kind = CV_BOOL; out->b = (a >= b); return true; }
+            if (strEqOp(e->text, "+")) { out->kind = CV_FLOAT; out->f = a + b; return true; }
+            if (strEqOp(e->text, "-")) { out->kind = CV_FLOAT; out->f = a - b; return true; }
+            if (strEqOp(e->text, "*")) { out->kind = CV_FLOAT; out->f = a * b; return true; }
+            if (strEqOp(e->text, "/")) { if (b == 0.0) return false; out->kind = CV_FLOAT; out->f = a / b; return true; }
+            return false;
+        }
+        if (l.kind == CV_BOOL && r.kind == CV_BOOL)
+        {
+            if (strEqOp(e->text, "&&")) { out->kind = CV_BOOL; out->b = (l.b && r.b); return true; }
+            if (strEqOp(e->text, "||")) { out->kind = CV_BOOL; out->b = (l.b || r.b); return true; }
+            if (strEqOp(e->text, "==")) { out->kind = CV_BOOL; out->b = (l.b == r.b); return true; }
+            if (strEqOp(e->text, "!=")) { out->kind = CV_BOOL; out->b = (l.b != r.b); return true; }
+            return false;
+        }
+        return false;
+    }
+    case ast.EX_IDENT:
+    {
+        ConstVal v;
+        if (lookup(e->text, &v)) { *out = v; return true; }
+        return false;
+    }
+    case ast.EX_INIT:
+    {
+        // struct/array aggregate literal: constant when every element is
+        for (u32 i = 0; i < e->nargs; i++)
+            if (e->args[i] != null) { ConstVal v; if (!eval(e->args[i], &v)) return false; }
+        out->kind = CV_AGG;
+        return true;
+    }
+    case ast.EX_CALL:
+    {
+        // string.strView::fromCstr("...") -> string constant
+        str.strView callee = str.strView::empty();
+        if (e->a != null && e->a->kind == ast.EX_DOT)
+            callee = e->a->text;
+        else if (e->a != null && e->a->kind == ast.EX_IDENT)
+            callee = e->a->text;
+        if (strEqSV(callee, str.strView::fromCstr("fromCstr")) && e->nargs == 1 && e->args[0]->kind == ast.EX_STR)
+        {
+            out->kind = CV_STRING;
+            out->s = stripQuotes(e->args[0]->text);
+            return true;
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
+bool strEqOp(str.strView op, const char* b)
+{
+    u64 n = 0; while (b[n] != 0) n++;
+    if (op.len != n) return false;
+    return libc.memcmp((const void*)op.ptr, (const void*)b, n) == 0;
+}

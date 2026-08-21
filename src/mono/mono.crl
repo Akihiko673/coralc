@@ -1,0 +1,45 @@
+// Monomorphisation driver. Consumes the instantiation registry populated by
+// `subst.record` (called from expr.typeCall) and, for each concrete
+// instantiation, re-typechecks the generic declaration with its generic
+// parameters bound to the concrete types (via subst.push). This both validates
+// the specialized body and (later) supplies the concrete function objects that
+// codegen will emit. Comptime branch pruning is layered on top afterwards.
+//
+// Runs unconditionally as part of the typecheck pass: generic code is always
+// specialized so the compiler is ready for codegen.
+
+mod ast = import("ast/ast.crl");
+mod types = import("typecheck/types.crl");
+mod scopes = import("typecheck/scopes.crl");
+mod expr = import("typecheck/expr.crl");
+mod subst = import("mono/subst.crl");
+mod loader = import("typecheck/loader.crl");
+mod mman = import("std/memory/mman.crl");
+mod str = import("std/text/string.crl");
+
+// Process every recorded instantiation to a fixpoint: instantiating a generic
+// may record further (transitive) instantiations through nested generic calls.
+pub void run(expr.Typer* base, scopes.Scope* top, scopes.ModuleTable* mods, loader.Loader* ld)
+{
+    u32 processed = 0;
+    while (processed < subst.gNInsts)
+    {
+        subst.Inst* it = null;
+        for (u32 i = 0; i < subst.gNInsts; i++)
+        {
+            subst.Inst* c = subst.instAt(i);
+            if (c != null && !c->done) { it = c; break; }
+        }
+        if (it == null) break;
+        it->done = true;
+
+        subst.push(it->g->generics, it->targs, it->nt);
+        expr.Typer t = expr.Typer::new(base->prog, base->src, base->filename,
+                                       top, mods, ld, base->nerrors, base->nwarnings,
+                                       base->noWarnUnsafe, base->forcedSkip);
+        t.warnUnused = false; // avoid duplicate unused-var diagnostics
+        expr.typeFunction(&t, it->g);
+        subst.pop();
+        processed++;
+    }
+}

@@ -127,6 +127,9 @@ pub struct Stmt
     StmtCase* defaultCase;
     bool synthetic;     // ST_BLOCK wrapper with no scope of its own
                         // (multi-decl, brace-less bodies)
+    bool isComptime;    // ST_BLOCK produced by `comptime { }`: its statements
+                        // are evaluated at compile time, so `if` conditions that
+                        // resolve to constants are pruned (dead branches erased).
     u32 line;
     u32 col;
 }
@@ -167,6 +170,8 @@ pub struct Decl
     TypeExpr* type;     // const/var/typedef/distinct/extern/func return
     Expr* value;        // const/var initializer
     bool exported;
+    bool isConstExpr;   // DT_CONST declared with `constexpr`: the initializer
+                        // must be a compile-time constant (evaluated by ceval)
     bool isStatic;      // DT_FUNC static
     bool isInline;
     bool isExtern;      // DT_FUNC declared extern (trait methods, compiler_fn)

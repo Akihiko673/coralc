@@ -1,0 +1,124 @@
+// Monomorphisation support: the active generic-parameter substitution table
+// and the instantiation registry.
+//
+// This module is deliberately low-level (depends only on ast/types/mman/str)
+// so that both `scopes` and `expr` can call into it without creating an
+// import cycle.
+//
+// Substitution: when a generic function body is re-typechecked for a concrete
+// instantiation, its generic parameter names (T, U, ...) are bound here to the
+// concrete CTypes. `scopes.resolveTypeExpr` and `expr.comptimeTypeRef` consult
+// `lookup`, so the body sees concrete types instead of opaque params.
+//
+// Registry: every concrete generic call site discovered during typechecking
+// is recorded (deduped by mangled name). `mono.mono::run` later instantiates
+// each entry by re-typechecking the generic Decl with its substitution bound.
+// Comptime branch pruning is layered on top afterwards.
+
+mod ast = import("ast/ast.crl");
+mod types = import("typecheck/types.crl");
+mod mman = import("std/memory/mman.crl");
+mod str = import("std/text/string.crl");
+
+const u32 SUBST_CAP = 16;
+
+struct SubstTable
+{
+    str.strView names[SUBST_CAP];
+    types.CType* types[SUBST_CAP];
+    u32 n;
+}
+SubstTable* gSubst = null;
+
+// Bind generic parameter names to concrete types for the current
+// instantiation. Overwrites any prior binding since instantiations are
+// processed one at a time.
+pub void push(str.strView* names, types.CType** types, u32 n)
+{
+    if (gSubst == null) gSubst = mman.alloc<SubstTable>(1);
+    gSubst->n = n > SUBST_CAP ? SUBST_CAP : n;
+    for (u32 i = 0; i < gSubst->n; i++)
+    {
+        gSubst->names[i] = names[i];
+        gSubst->types[i] = types[i];
+    }
+}
+
+pub void pop()
+{
+    if (gSubst != null) gSubst->n = 0;
+}
+
+// Returns the concrete CType bound to generic parameter `name`, or null.
+pub types.CType* lookup(str.strView name)
+{
+    if (gSubst == null) return null;
+    for (u32 i = 0; i < gSubst->n; i++)
+        if (strEqSV(gSubst->names[i], name)) return gSubst->types[i];
+    return null;
+}
+
+bool strEqSV(str.strView a, str.strView b)
+{
+    if (a.len != b.len) return false;
+    for (u32 i = 0; i < a.len; i++)
+        if (a.ptr[i] != b.ptr[i]) return false;
+    return true;
+}
+
+// instantiation registry
+
+pub struct Inst
+{
+    ast.Decl* g;          // the generic declaration
+    types.CType** targs;  // resolved concrete type args (parallel to g->generics)
+    u32 nt;
+    str.strView mname;    // mangled name, for dedup + later codegen symbol
+    bool done;
+}
+pub Inst* gInsts = null;
+pub u32 gNInsts = 0;
+u32 gCapInsts = 0;
+
+// Record a concrete instantiation of generic `g` with already-resolved type
+// args (`targs` is a heap array now owned by the registry) and a prebuilt
+// mangled `mname`. Deduplicated by (g, mname).
+pub void record(ast.Decl* g, types.CType** targs, u32 nt, str.strView mname)
+{
+    for (u32 i = 0; i < gNInsts; i++)
+    {
+        if (gInsts[i].g == g && strEqSV(gInsts[i].mname, mname))
+            return;
+    }
+    if (gNInsts >= gCapInsts)
+    {
+        u32 ncap = gCapInsts == 0 ? 64 : gCapInsts * 2;
+        Inst* ni = mman.alloc<Inst>(ncap);
+        if (gInsts != null)
+        {
+            for (u32 i = 0; i < gNInsts; i++)
+            {
+                ni[i].g = gInsts[i].g;
+                ni[i].targs = gInsts[i].targs;
+                ni[i].nt = gInsts[i].nt;
+                ni[i].mname = gInsts[i].mname;
+                ni[i].done = gInsts[i].done;
+            }
+            mman.dealloc<Inst>(gInsts);
+        }
+        gInsts = ni;
+        gCapInsts = ncap;
+    }
+    Inst* it = &gInsts[gNInsts++];
+    it->g = g;
+    it->targs = targs;
+    it->nt = nt;
+    it->mname = mname;
+    it->done = false;
+}
+
+pub Inst* instAt(u32 i)
+{
+    if (i >= gNInsts) return null;
+    return &gInsts[i];
+}

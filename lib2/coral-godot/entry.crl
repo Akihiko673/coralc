@@ -1,0 +1,18 @@
+// Entry point of the GDExtension. Godot dlopens the library and calls the
+// symbol named by `entry_symbol` in the .gdextension file.
+mod typ = import("types");
+mod inf = import("interface");
+
+inf.Interface g_interface;
+
+extern ("C") typ.GBool gdextension_entry_point(typ.GetProcAddress getProcAddress,
+    typ.Library library, typ.Initialization* rInitialization)
+{
+    if (!inf.init(&g_interface, getProcAddress)) return 0;
+
+    rInitialization->minimumLevel = typ.InitLevel.Scene;
+    rInitialization->userdata = null;
+    rInitialization->initialize = null;
+    rInitialization->deinitialize = null;
+    return 1;
+}

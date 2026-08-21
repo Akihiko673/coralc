@@ -14,6 +14,8 @@ mod types = import("typecheck/types.crl");
 mod scopes = import("typecheck/scopes.crl");
 mod expr = import("typecheck/expr.crl");
 mod loader = import("typecheck/loader.crl");
+mod mono = import("mono/mono.crl");
+mod ceval = import("ceval.crl");
 
 pub struct Check
 {
@@ -29,6 +31,9 @@ pub struct Check
     str.strView flagNames[16];
     str.strView flagVals[16];
     u32 nflags;
+
+    scopes.Scope* top;       // set during run(); used by codegen (emit)
+    scopes.ModuleTable* mods;
 
     static Check new(ast.Program* prog, str.strView src, str.strView filename, char* exeDir)
     {
@@ -118,6 +123,7 @@ pub struct Check
         // load imported modules so cross-file symbols (String::new,
         // strView::fromParts, ...) resolve against real declarations
         loader.Loader* ld = loader.loaderNew(self.exeDir);
+        ceval.reset();
         for (u32 i = 0; i < self.prog->ndecls && i < 256; i++)
         {
             ast.Decl* d = self.prog->decls[i];
@@ -127,6 +133,8 @@ pub struct Check
         // top-level scope + module table
         scopes.Scope* top = scopes.scopeNew(null, str.strView::fromCstr("file"), 0);
         scopes.ModuleTable* mods = scopes.modsNew();
+        self.top = top;
+        self.mods = mods;
 
         // the file is itself a module named after its basename; register it so
         // self-qualified references (mman.copy<...>) resolve to this file's own
@@ -331,6 +339,24 @@ pub struct Check
                         msg.free();
                     }
                 }
+                // constexpr: the initializer must be a compile-time constant
+                if (d->isConstExpr)
+                {
+                    ceval.ConstVal cv;
+                    if (!ceval.eval(d->value, &cv))
+                    {
+                        self.errDecl(d, str.strView::fromCstr("TC-CONSTEXPR"), str.strView::fromCstr("constexpr initializer for '"), str.strView::empty());
+                        str.String m = str.String::new();
+                        m.pushView(d->name);
+                        m.pushView(str.strView::fromCstr("' is not a compile-time constant expression"));
+                        self.errDecl(d, str.strView::fromCstr("TC-CONSTEXPR"), str.strView::fromParts(m.ptr, m.len), str.strView::empty());
+                        m.free();
+                    }
+                    else
+                    {
+                        ceval.define(d->name, cv);
+                    }
+                }
             }
             else if (d->kind == ast.DT_ENUM)
             {
@@ -371,6 +397,11 @@ pub struct Check
                 }
             }
         }
+
+        // monomorphisation pass: specialize every concrete generic instantiation
+        // discovered during body typing. Each generic Decl is re-typechecked
+        // with its parameters bound to the concrete types (see mono/mono.crl).
+        mono.run(&t3, top, mods, ld);
 
         scopes.scopeFree(top);
     }

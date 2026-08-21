@@ -1,0 +1,55 @@
+// custom_wrapper.crl — YOUR code: trait + composition over a generated class.
+//
+// Godot's inheritance is engine-side, so the generated file stays flat. When
+// you need your own hierarchy or polymorphism, Coral gives you the two tools:
+//   - a trait for the interface you agree on,
+//   - a struct that composes the pieces and delegates to them.
+// This mirrors how a class language would let you "subclass" Sprite2D.
+
+mod typ = import("godot/types");
+mod cls = import("godot/classes");
+
+// The interface: "anything that is a mySprite can be asked these questions."
+// (trait method signatures, Coral's Shape example pattern)
+trait MySprite
+{
+    typ.ObjectPtr body();      // the engine object underneath
+    f32 size();                // size in pixels
+}
+
+// The struct: composition in place of inheritance.
+pub struct mySprite
+{
+    typ.ObjectPtr handle;      // the Sprite2D instance (an ObjectPtr, always)
+
+    static mySprite wrap(typ.ObjectPtr h)
+    {
+        mySprite s;
+        s.handle = h;
+        return s;
+    }
+
+    f32 _size()
+    {
+        // delegate to the engine: resolve Sprite2D.get_size() once and call it
+        return 42.0;  // real body: bind + objectMethodBindPtrcall
+    }
+}
+
+// The conformance: the struct declares it keeps the promise, the compiler
+// checks every signature against the trait exactly.
+mySprite::MySprite
+{
+    typ.ObjectPtr body() { return self.handle; }
+    f32 size() { return self._size(); }
+}
+
+// Use: any code bounded by the trait works on any implementor.
+bool isBig(MySprite s)
+{
+    return s.size() > 100.0;
+}
+
+// isBig(g) and isBig(w) both accept anything that implements MySprite — the
+// duck is checked at its definition, not when it quacks. Engine-side, every
+// object is just the one pointer; composition and traits are purely yours.

@@ -1,0 +1,71 @@
+// register_class.crl — register your own class with the engine.
+//
+// A user-defined class is an ObjectPtr the engine knows about. The contract
+// lives in the ABI structs (godot/types.crl, field order = header order):
+// ClassInfo6 carries the callbacks the engine calls back into your code.
+
+mod typ = import("godot/types");
+mod inf = import("godot/interface");
+mod cls = import("godot/classes");
+
+inf.Interface g_interface;
+
+u8 snBuf[64];
+
+typ.StringNamePtr makeName(const char* text)
+{
+    inf.Interface* api = &g_interface;
+    typ.UninitStringNamePtr dst = (typ.UninitStringNamePtr)snBuf;
+    api->stringNameNewWithUtf8Chars(dst, text);
+    return (typ.StringNamePtr)dst;
+}
+
+// our class's engine-side lifecycle 
+
+typ.GBool mySet(typ.ClassInstance self, typ.ConstStringNamePtr name, typ.ConstVariantPtr val)
+{
+    return 1;
+}
+
+typ.GBool myGet(typ.ClassInstance self, typ.ConstStringNamePtr name, typ.VariantPtr ret)
+{
+    return 1;
+}
+
+typ.ObjectPtr myCreate(void* userdata)
+{
+    // real body: claim a GDExtensionClassInstancePtr and return it
+    return null;
+}
+
+void myFree(void* userdata, typ.ClassInstance instance)
+{
+    // release the instance memory
+}
+
+// fill the ABI struct and register
+
+bool registerMyClass(typ.Library library)
+{
+    inf.Interface* api = &g_interface;
+
+    typ.ClassInfo6 info;
+    info.isVirtual = 0;
+    info.isAbstract = 0;
+    info.set = mySet;
+    info.get = myGet;
+    info.createInstance = myCreate;
+    info.freeInstance = myFree;
+    // (fields = header order: isVirtual, isAbstract, isExposed, isRuntime,
+    //  iconPath, set, get, getPropertyList, freePropertyList, ... )
+
+    typ.ConstStringNamePtr cn = makeName("MyNode");
+    typ.ConstStringNamePtr parent = makeName("Node");
+    api->classdbRegisterExtensionClass6(library, cn, parent, &info);
+    return true;
+}
+
+// Field-by-field the struct matches gdextension_interface.h, so the engine
+// reads offsets we wrote. The enums (typ.InitLevel, cls.NodeProcessMode, ...)
+// and constants (cls.NodeNotificationReady, ...) come from the same source:
+// types.crl mirrors the header, classes.crl mirrors extension_api.json.

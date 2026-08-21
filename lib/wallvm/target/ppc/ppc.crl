@@ -35,7 +35,12 @@ pub struct PpcCodegen
         self.out = nb; self.outCap = nc;
     }
     void c(char ch) { self.grow(1); self.out[self.outLen++] = ch; }
-    void s(const char* p) { if (!p) return; u32 l = 0; while (p[l]) l++; if (!l) return; self.grow(l); for (u32 i = 0; i < l; i++) self.out[self.outLen++] = p[i]; }
+    void s(const char* p)
+    {
+        if (!p) return; u32 l = 0;
+        while (p[l]) l++;
+        if (!l) return;
+        self.grow(l); for (u32 i = 0; i < l; i++) self.out[self.outLen++] = p[i]; }
     void u(u64 v) { if (v == 0) { self.c('0'); return; } char b[24]; u32 p = 24; while (v) { b[--p] = (char)('0' + (v % 10)); v /= 10; } while (p < 24) self.c(b[p++]); }
     void pad() { self.c(' '); self.c(' '); self.c(' '); self.c(' '); }
     void inst0(const char* m) { self.pad(); self.s(m); self.c('\n'); }
