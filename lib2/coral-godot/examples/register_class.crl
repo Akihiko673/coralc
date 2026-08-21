@@ -4,9 +4,9 @@
 // lives in the ABI structs (godot/types.crl, field order = header order):
 // ClassInfo6 carries the callbacks the engine calls back into your code.
 
-mod typ = import("godot/types");
-mod inf = import("godot/interface");
-mod cls = import("godot/classes");
+mod typ = import(lib, "coral-godot/types");
+mod inf = import(lib, "coral-godot/interface");
+mod cls = import(lib, "coral-godot/classes");
 
 inf.Interface g_interface;
 

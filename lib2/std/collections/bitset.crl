@@ -173,12 +173,12 @@ pub struct bitset
 
 trait drop
 {
-    inline void drop();
+    void drop();
 }
 
-vec::drop
+bitset::drop
 {
-    inline void drop()
+    void drop()
     {
         self.dispose();
     }

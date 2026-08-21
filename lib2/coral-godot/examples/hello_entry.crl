@@ -7,8 +7,8 @@
 //   types      -> opaques, enums, ABI structs
 //   interface  -> the Interface slot table + init()
 //   classes    -> the generated per-class method bind slots/hashes
-mod typ = import("godot/types");
-mod inf = import("godot/interface");
+mod typ = import(lib, "coral-godot/types");
+mod inf = import(lib, "coral-godot/interface");
 
 // The interface table lives here so every later call is api->something().
 inf.Interface g_interface;

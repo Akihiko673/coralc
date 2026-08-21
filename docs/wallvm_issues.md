@@ -63,27 +63,6 @@ use `<` immediately after an identifier. The parser cannot tell whether `<` star
 
 ---
 
-### 4. **Inconsistent explicit-`self` method signatures in `lsra.crl`**
-
-Most methods in Coral use implicit `self`, e.g.:
-
-```coral
-void grow(u32 n) { ... self.outCap ... }
-```
-
-But in `lsra.crl`, several methods inside `LinearScanRegAlloc` declare the receiver type as an explicit unnamed parameter:
-
-```coral
-void ensureVregs(LinearScanRegAlloc*, u32 vreg)
-void ensureIntervals(LinearScanRegAlloc*)
-void ensureSlotAllocas(LinearScanRegAlloc*, i32 slot)
-void assignVregs(LinearScanRegAlloc*, ir_types.IrFunc* func)
-```
-
-while other methods in the same struct (like `scanClass`, `linearScan`, `destroy`) do **not** declare it. This inconsistency is either a syntax error or a half-finished migration to explicit receiver parameters.
-
----
-
 ### 5. **Float register allocation bug in `lsra.crl`**
 
 In `linearScan`:

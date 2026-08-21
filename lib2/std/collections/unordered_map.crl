@@ -67,5 +67,13 @@ pub struct unordered_map<K, V>
 
 trait drop
 {
-    inline void drop();
+    void drop();
+}
+
+unordered_map::drop
+{
+    void drop()
+    {
+        self.dispose();
+    }
 }

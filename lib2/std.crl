@@ -10,4 +10,4 @@ pub mod math = import(lib, "std/math/.math.crl");
 pub mod memory = import(lib, "std/memory/.memory.crl");
 pub mod misc = import(lib, "std/misc/.misc.crl");
 pub mod platform = import(lib, "std/platform/.platform.crl");
-pub mod text_ = import(lib, "std/text/.text.crl");
+pub mod text = import(lib, "std/text/.text.crl");

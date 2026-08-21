@@ -6,8 +6,8 @@
 //   - a struct that composes the pieces and delegates to them.
 // This mirrors how a class language would let you "subclass" Sprite2D.
 
-mod typ = import("godot/types");
-mod cls = import("godot/classes");
+mod typ = import(lib, "coral-godot/types");
+mod cls = import(lib, "coral-godot/classes");
 
 // The interface: "anything that is a mySprite can be asked these questions."
 // (trait method signatures, Coral's Shape example pattern)

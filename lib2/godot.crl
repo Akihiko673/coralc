@@ -3,11 +3,5 @@
 
 pub mod classes = import(lib, "coral-godot/classes.crl");
 pub mod entry = import(lib, "coral-godot/entry.crl");
-/*pub mod examples_custom_wrapper = import(lib, "coral-godot/examples/custom_wrapper.crl");
-pub mod examples_hello_entry = import(lib, "coral-godot/examples/hello_entry.crl");
-pub mod examples_method_call = import(lib, "coral-godot/examples/method_call.crl");
-pub mod examples_register_class = import(lib, "coral-godot/examples/register_class.crl");
-pub mod examples_singleton = import(lib, "coral-godot/examples/singleton.crl");
-*/
 pub mod interface = import(lib, "coral-godot/interface.crl");
 pub mod types = import(lib, "coral-godot/types.crl");

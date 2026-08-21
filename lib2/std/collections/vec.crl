@@ -254,14 +254,14 @@ pub struct vec<T>
     }
 }
 
-trait drop()
+trait drop
 {
-    inline void drop();
+    void drop();
 }
 
 vec::drop
 {
-    inline void drop()
+    void drop()
     {
         self.dispose();
     }

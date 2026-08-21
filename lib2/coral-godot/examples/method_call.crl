@@ -4,9 +4,9 @@
 // Resolve it once at load time with classdb_get_method_bind using the
 // generated hash, keep it, and call it on any object of that class.
 
-mod typ = import("godot/types");
-mod inf = import("godot/interface");
-mod cls = import("godot/classes");
+mod typ = import(lib, "coral-godot/types");
+mod inf = import(lib, "coral-godot/interface");
+mod cls = import(lib, "coral-godot/classes");
 
 inf.Interface g_interface;
 

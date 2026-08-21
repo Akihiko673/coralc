@@ -4,9 +4,9 @@
 // creates itself. Their typed slots plus hashes are in godot/classes.crl, so
 // you only need global_get_singleton(name) and the usual bind resolution.
 
-mod typ = import("godot/types");
-mod inf = import("godot/interface");
-mod cls = import("godot/classes");
+mod typ = import(lib, "coral-godot/types");
+mod inf = import(lib, "coral-godot/interface");
+mod cls = import(lib, "coral-godot/classes");
 
 inf.Interface g_interface;
 
