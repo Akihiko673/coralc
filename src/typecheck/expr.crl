@@ -17,6 +17,12 @@ mod scopes = import("typecheck/scopes.crl");
 mod loader = import("typecheck/loader.crl");
 mod subst = import("mono/subst.crl");
 
+pub types.CType* inferredType(ast.Expr* e)
+{
+    if (e == null) return null;
+    return (types.CType*)e->inferredTy;
+}
+
 pub struct Typer
 {
     ast.Program* prog;
@@ -802,7 +808,16 @@ bool indexPathInBounds(Typer* t, ast.Expr* idx, types.CType* arr)
     return true;
 }
 
-types.CType* typeExpr(Typer* t, ast.Expr* e)
+types.CType* typeExprImpl(Typer* t, ast.Expr* e);
+pub types.CType* typeExpr(Typer* t, ast.Expr* e)
+{
+    if (e == null) return scopes.opaqueType(str.strView::empty(), 0, 0);
+    if (e->inferredTy != null && t->ng == 0 && t->gnames == null) return (types.CType*)e->inferredTy;
+    types.CType* _r = typeExprImpl(t, e);
+    if (t->ng == 0) e->inferredTy = (void*)_r;
+    return _r;
+}
+types.CType* typeExprImpl(Typer* t, ast.Expr* e)
 {
     if (e == null) return scopes.opaqueType(str.strView::empty(), 0, 0);
     switch (e->kind)
@@ -1827,7 +1842,7 @@ types.CType* selfElemType(Typer* t, ast.Decl* sd, str.strView name, u32 line, u3
     return scopes.namedType(sd, name, line, col);
 }
 
- void typeFunction(Typer* t, ast.Decl* d)
+pub void typeFunction(Typer* t, ast.Decl* d)
 {
     if (d == null || d->body == null) return;
     t->curFn = d;

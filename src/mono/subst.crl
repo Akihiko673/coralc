@@ -68,7 +68,7 @@ bool strEqSV(str.strView a, str.strView b)
 
 // instantiation registry
 
-pub struct Inst
+pub struct MonoInst
 {
     ast.Decl* g;          // the generic declaration
     types.CType** targs;  // resolved concrete type args (parallel to g->generics)
@@ -76,7 +76,7 @@ pub struct Inst
     str.strView mname;    // mangled name, for dedup + later codegen symbol
     bool done;
 }
-pub Inst* gInsts = null;
+pub MonoInst* gInsts = null;
 pub u32 gNInsts = 0;
 u32 gCapInsts = 0;
 
@@ -93,7 +93,7 @@ pub void record(ast.Decl* g, types.CType** targs, u32 nt, str.strView mname)
     if (gNInsts >= gCapInsts)
     {
         u32 ncap = gCapInsts == 0 ? 64 : gCapInsts * 2;
-        Inst* ni = mman.alloc<Inst>(ncap);
+        MonoInst* ni = mman.alloc<MonoInst>(ncap);
         if (gInsts != null)
         {
             for (u32 i = 0; i < gNInsts; i++)
@@ -104,12 +104,12 @@ pub void record(ast.Decl* g, types.CType** targs, u32 nt, str.strView mname)
                 ni[i].mname = gInsts[i].mname;
                 ni[i].done = gInsts[i].done;
             }
-            mman.dealloc<Inst>(gInsts);
+            mman.dealloc<MonoInst>(gInsts);
         }
         gInsts = ni;
         gCapInsts = ncap;
     }
-    Inst* it = &gInsts[gNInsts++];
+    MonoInst* it = &gInsts[gNInsts++];
     it->g = g;
     it->targs = targs;
     it->nt = nt;
@@ -117,7 +117,7 @@ pub void record(ast.Decl* g, types.CType** targs, u32 nt, str.strView mname)
     it->done = false;
 }
 
-pub Inst* instAt(u32 i)
+pub MonoInst* instAt(u32 i)
 {
     if (i >= gNInsts) return null;
     return &gInsts[i];

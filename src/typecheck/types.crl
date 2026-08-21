@@ -12,7 +12,7 @@ mod libc = import("std/platform/libc.crl");
 // assignable to every target type). Set only by the explicit `--fcast` CLI
 // flag; the strict no-implicit-conversion rules otherwise apply. This is an
 // escape hatch for code that genuinely needs unchecked conversion.
-bool gForceCast = false;
+pub bool gForceCast = false;
 
 pub const u32 TY_UNKNOWN = 0;   // unresolved / poison / opaque module escape
 pub const u32 TY_VOID = 1;

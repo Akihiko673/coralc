@@ -77,6 +77,7 @@ pub struct Expr
     bool post;          // EX_UNARY postfix ++/--
     u32 line;
     u32 col;
+    void* inferredTy;
 }
 
 pub const u32 ST_BLOCK = 0;

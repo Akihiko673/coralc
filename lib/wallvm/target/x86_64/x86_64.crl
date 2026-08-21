@@ -10,8 +10,8 @@ mod mman = import("std/memory/mman.crl");
 
 // Scratch registers the backend itself needs (rax/rcx/rdx for arithmetic,
 // div/shift/call; xmm0-2 for float temps, fma). Never allocated to vregs.
-pub const char* X86_64_RESERVED_INT[] = { "rax", "rcx", "rdx" };
-pub const char* X86_64_RESERVED_FLOAT[] = { "xmm0", "xmm1", "xmm2" };
+pub char* X86_64_RESERVED_INT[] = { "rax", "rcx", "rdx" };
+pub char* X86_64_RESERVED_FLOAT[] = { "xmm0", "xmm1", "xmm2" };
 
 pub struct X86_64Codegen
 {
@@ -36,9 +36,9 @@ pub struct X86_64Codegen
     // collision between functions.
     u32 labelSeq;
     bool unsupported;
-    const char** allocIntNames;
+    char** allocIntNames;
     u32 numAllocInt;
-    const char** allocFloatNames;
+    char** allocFloatNames;
     u32 numAllocFloat;
     // Register-content tracking for copy elimination: holds[ai] = value id
     // (+1, 0 = unknown) known to live in allocated reg ai. Cleared on calls.
@@ -48,7 +48,7 @@ pub struct X86_64Codegen
     u32 floatHoldsCap;
     // Extern call targets: emitted as `extern` lines after the functions
     // (nasm requires them; gas resolves undefined symbols itself).
-    const char** externNames;
+    char** externNames;
     u32 externNamesLen;
     u32 externNamesCap;
 
@@ -143,9 +143,9 @@ pub struct X86_64Codegen
         if (self.externNamesLen == self.externNamesCap)
         {
             u32 nc = self.externNamesCap == 0 ? 8u : self.externNamesCap * 2u;
-            const char** nb = mman.alloc<const char*>(nc);
+            char** nb = mman.alloc<char*>(nc);
             for (u32 i = 0; i < self.externNamesLen; i++) nb[i] = self.externNames[i];
-            if (self.externNames) mman.dealloc<const char*>(self.externNames);
+            if (self.externNames) mman.dealloc<char*>(self.externNames);
             self.externNames = nb;
             self.externNamesCap = nc;
         }

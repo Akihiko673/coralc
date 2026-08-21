@@ -132,7 +132,7 @@ i32 main(u32 argc, char** argv)
 
     str.strView path = str.strView::fromCstr(argv[1]);
     u32 len = 0;
-    const u8* src = readFile(path, &len);
+    const u8* src = readFile(path, cast<u32*>(&len));
     if (src == null)
     {
         libc.write(2, (const u8*)"cannot read input file\n", 22);

@@ -46,7 +46,7 @@ pub typedef PassFn = bool(IrFunc*, void*);
 pub struct PassPipeline
 {
     PassFn** passes;
-    const char** names;
+    char** names;
     u32 count;
     u32 capacity;
 
@@ -66,14 +66,14 @@ pub struct PassPipeline
         {
             u32 nc = self.capacity ? self.capacity * 2 : 8;
             PassFn** np = mman.alloc<PassFn*>(nc);
-            const char** nn = mman.alloc<const char*>(nc);
+            char** nn = mman.alloc<char*>(nc);
             for (u32 i = 0; i < self.count; i++)
             {
                 np[i] = self.passes[i];
                 nn[i] = self.names[i];
             }
             if (self.passes) mman.dealloc<PassFn*>(self.passes);
-            if (self.names) mman.dealloc<const char*>(self.names);
+            if (self.names) mman.dealloc<char*>(self.names);
             self.passes = np;
             self.names = nn;
             self.capacity = nc;
@@ -86,7 +86,7 @@ pub struct PassPipeline
     void clear()
     {
         if (self.passes) mman.dealloc<PassFn*>(self.passes);
-        if (self.names) mman.dealloc<const char*>(self.names);
+        if (self.names) mman.dealloc<char*>(self.names);
         self.passes = null;
         self.names = null;
         self.count = 0;

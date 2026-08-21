@@ -822,8 +822,9 @@ pub struct IrContext
         for (u32 i = 0; i < nameLen; i++) nameCopy[i] = name[i];
         nameCopy[nameLen] = 0;
 
+        IrType* ft = self.tyFunc(ret, params, nparams, false);
         *f = (IrFunc){
-            { IrValueKind::Func, null, self.nextValueId(), 0, nameCopy, null, 0, 0 },
+            { IrValueKind::Func, ft, self.nextValueId(), 0, nameCopy, null, 0, 0 },
             null, null, 0, 0, ret, params, nparams,
             false, null, null
         };

@@ -15,9 +15,9 @@ pub struct RegAllocConfig
 {
     bool useCalleeSave; // false, caller-save regs only (no prologue/epilogue needed)
     bool backendHandlesSpills; // true, backend decodes SPILL_BIT, no IR spill rewriting
-    const char** reservedIntRegs;
+    char** reservedIntRegs;
     u32 numReservedIntRegs;
-    const char** reservedFloatRegs;
+    char** reservedFloatRegs;
     u32 numReservedFloatRegs;
 }
 
@@ -33,7 +33,7 @@ pub RegAllocConfig defaultRegAllocConfig()
     return c;
 }
 
-static bool isReservedName(const char* name, const char** reserved, u32 n)
+static bool isReservedName(const char* name, char** reserved, u32 n)
 {
     if (!name || !reserved) return false;
     for (u32 i = 0; i < n; i++)
@@ -64,8 +64,8 @@ pub struct LinearScanRegAlloc
     u32 numRegs;
     u32 numFloatRegs;
     u32 numCallerSave;
-    const char** intRegNames;
-    const char** floatRegNames;
+    char** intRegNames;
+    char** floatRegNames;
     bool useCalleeSave;
     bool backendHandlesSpills;
 
@@ -145,7 +145,7 @@ pub struct LinearScanRegAlloc
             r.numCallerSave = keptCaller;
             if (r.numRegs > 0)
             {
-                r.intRegNames = mman.alloc<const char*>(r.numRegs);
+                r.intRegNames = mman.alloc<char*>(r.numRegs);
                 u32 k = 0;
                 for (u32 i = 0; i < callerCount; i++)
                     if (!isReservedName(abi->callerSaveRegs[i], cfg ? cfg->reservedIntRegs : null, cfg ? cfg->numReservedIntRegs : 0))
@@ -156,7 +156,7 @@ pub struct LinearScanRegAlloc
             }
             if (r.numFloatRegs > 0)
             {
-                r.floatRegNames = mman.alloc<const char*>(r.numFloatRegs);
+                r.floatRegNames = mman.alloc<char*>(r.numFloatRegs);
                 u32 k = 0;
                 for (u32 i = 0; i < fcount; i++)
                     if (!isReservedName(abi->floatArgRegs[i], cfg ? cfg->reservedFloatRegs : null, cfg ? cfg->numReservedFloatRegs : 0))
@@ -825,8 +825,8 @@ pub struct LinearScanRegAlloc
         if (self.regForVreg) mman.dealloc<u32>(self.regForVreg);
         if (self.slotForVreg) mman.dealloc<i32>(self.slotForVreg);
         if (self.intervals) mman.dealloc<LiveInterval>(self.intervals);
-        if (self.intRegNames) mman.dealloc<const char*>(self.intRegNames);
-        if (self.floatRegNames) mman.dealloc<const char*>(self.floatRegNames);
+        if (self.intRegNames) mman.dealloc<char*>(self.intRegNames);
+        if (self.floatRegNames) mman.dealloc<char*>(self.floatRegNames);
     }
 }
 

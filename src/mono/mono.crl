@@ -24,10 +24,10 @@ pub void run(expr.Typer* base, scopes.Scope* top, scopes.ModuleTable* mods, load
     u32 processed = 0;
     while (processed < subst.gNInsts)
     {
-        subst.Inst* it = null;
+        subst.MonoInst* it = null;
         for (u32 i = 0; i < subst.gNInsts; i++)
         {
-            subst.Inst* c = subst.instAt(i);
+            subst.MonoInst* c = subst.instAt(i);
             if (c != null && !c->done) { it = c; break; }
         }
         if (it == null) break;

@@ -953,5 +953,5 @@ pub bool irCodegenX86(ir_types.IrModule* mod_, void* userdata)
 }
 
 // Scratch registers the backend itself needs. Never allocated to vregs.
-pub const char* X86_RESERVED_INT[] = { "eax", "ecx", "edx", "ebp" };
-pub const char* X86_RESERVED_FLOAT[] = { "xmm0", "xmm1", "xmm2" };
+pub char* X86_RESERVED_INT[] = { "eax", "ecx", "edx", "ebp" };
+pub char* X86_RESERVED_FLOAT[] = { "xmm0", "xmm1", "xmm2" };

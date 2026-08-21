@@ -679,6 +679,7 @@ pub struct Parser
         e->post = false;
         e->line = line;
         e->col = col;
+        e->inferredTy = null;
         return e;
     }
 
@@ -1990,12 +1991,16 @@ pub struct Parser
         if (self.check(tok.T_TRUE))
         {
             self.advance();
-            return self.exprBase(ast.EX_BOOL, t->row, t->col);
+            ast.Expr* e = self.exprBase(ast.EX_BOOL, t->row, t->col);
+            e->text = str.strView::fromCstr("true");
+            return e;
         }
         if (self.check(tok.T_FALSE))
         {
             self.advance();
-            return self.exprBase(ast.EX_BOOL, t->row, t->col);
+            ast.Expr* e = self.exprBase(ast.EX_BOOL, t->row, t->col);
+            e->text = str.strView::fromCstr("false");
+            return e;
         }
         if (self.check(tok.T_NULL))
         {
