@@ -564,7 +564,7 @@ pub struct LinearScanRegAlloc
         {
             LiveInterval* cur = &self.intervals[i];
             if (cur->isFloat)
-                self.scanClass(cur, self.floatRegIsFree, self.floatActive, &self.numFloatActive, self.numFloatRegs, self.numFloatRegs);
+                self.scanClass(cur, self.floatRegIsFree, self.floatActive, &self.numFloatActive, self.numFloatRegs, 0);
             else
                 self.scanClass(cur, self.regIsFree, self.active, &self.numActive, self.numRegs, self.numCallerSave);
         }

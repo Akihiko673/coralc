@@ -78,15 +78,15 @@ Coral uses explicit error values. A function that can fail returns a Result, a t
 
 The shape of this pattern matches what you actually get from the standard library. With the book's usual `mod std = import("std*")` in effect, parsing text is done the way the std does it — the library provides parse functions that take a string view and an "did it work?" pointer. Let's wrap one in our own Result-returning helper:
 
-    pub std.Result<u64, std.strView> parse_count(std.strView text)
+    pub std.data.result.Result<u64, std.text.string.strView> parse_count(std.text.string.strView text)
     {
         bool ok = false;
         u64 value = std.parseU64(text, &ok);
         if (!ok)
         {
-            return std.Result<u64, std.strView>::err("the text is not a number");
+            return std.data.result.Result<u64, std.text.string.strView>::err("the text is not a number");
         }
-        return std.Result<u64, std.strView>::ok(value);
+        return std.data.result.Result<u64, std.text.string.strView>::ok(value);
     }
 
 And here is the call site, where the failure is handled visibly, at the point where the program can actually respond to it:
@@ -94,11 +94,11 @@ And here is the call site, where the failure is handled visibly, at the point wh
     var result = parse_count("42");
     if (result.isOk())
     {
-        std.print("parsed the count\n");
+        std.io.ios.print("parsed the count\n");
     }
     else
     {
-        std.print("the count was invalid\n");
+        std.io.ios.print("the count was invalid\n");
     }
 
 The failure is not a side channel. It is a value that flows through the same type system as everything else, and the if statement (or a switch, or a chained map) is the place where the program chooses what each outcome means. The reader of this code can see every path, because every path is written.
@@ -169,13 +169,13 @@ Time to see what Coral actually looks like. The smallest complete program, the h
 
     i32 main()
     {
-        std.print("Hello from Coral.\n");
+        std.io.ios.print("Hello from Coral.\n");
         return 0;
     }
 
 Let's read it the way the language wants to be read.
 
-The first line imports the standard library. `mod std = import("std*")` brings the whole of it in under the single name `std` — `print` included — so the call is `std.print`. Coral has no magical built-in print; printing is a function in the standard library's I/O module, imported like any other module and called like any other function. The string carries its own newline in the examples here; the library also offers newline-suffixed variants, and we will meet them, plus the stderr versions, in the standard library chapter.
+The first line imports the standard library. `mod std = import("std*")` brings the whole of it in under the single name `std` — `print` included — so the call is `std.io.ios.print`. Coral has no magical built-in print; printing is a function in the standard library's I/O module, imported like any other module and called like any other function. The string carries its own newline in the examples here; the library also offers newline-suffixed variants, and we will meet them, plus the stderr versions, in the standard library chapter.
 
 i32 is the return type: this program produces a 32-bit signed integer. main is the name — the entry point the system starts with when the program runs. The parentheses are empty; this main takes no arguments. (The startup code that calls main actually passes argc and argv, and Coral tolerates a main that ignores them.) The body is a block. The program returns 0, and the operating system reads that as the exit status: zero means "everything went fine."
 
@@ -216,7 +216,7 @@ A main function can call it:
     i32 main()
     {
         i32 result = sum_to(100);
-        std.print("the sum is", result, "\n");
+        std.io.ios.print("the sum is", result, "\n");
         return 0;
     }
 
@@ -432,11 +432,11 @@ Conditional compilation is a language feature, expressed with flag blocks. A blo
     flag (platform)
     {
     LINUX:
-        std.print("building for Linux\n");
+        std.io.ios.print("building for Linux\n");
     WINDOWS:
-        std.print("building for Windows\n");
+        std.io.ios.print("building for Windows\n");
     default:
-        std.print("building for something else\n");
+        std.io.ios.print("building for something else\n");
     }
 
 The flag block is not a text-replacement hack. It is parsed by the compiler and evaluated against the target platform and the build flags you pass on the command line. Code inside a false branch is not merely skipped; it is compiled out, and the reader can see exactly the conditions under which each line of the program exists. The startup code in lib/start is a tour de force of this style — dozens of nested flag blocks selecting the right boot sequence for each platform and architecture.

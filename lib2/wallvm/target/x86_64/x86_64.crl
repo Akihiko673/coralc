@@ -149,6 +149,7 @@ pub struct X86_64Codegen
             u32 nc = self.externNamesCap == 0 ? 8u : self.externNamesCap * 2u;
             const char** nb = mman.alloc<const char*>(nc);
             for (u32 i = 0; i < self.externNamesLen; i++) nb[i] = self.externNames[i];
+            if (self.externNames) mman.dealloc<const char*>(self.externNames);
             self.externNames = nb;
             self.externNamesCap = nc;
         }

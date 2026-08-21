@@ -1,4 +1,4 @@
-@[[no_warn_unsafe]]
+@[no_warn_unsafe]
 
 mod ir_types = import("wallvm/ir_types.crl");
 mod ir_opcodes = import("wallvm/ir_opcodes.crl");
