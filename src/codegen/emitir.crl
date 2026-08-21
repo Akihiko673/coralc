@@ -79,6 +79,14 @@ ir_types.IrType* mapCType(FuncGen* fg, types.CType* t)
         for (u32 i = 0; i < t->nparams; i++) ps[i] = t->params[i] ? mapCType(fg, t->params[i]) : fg.ctx.tyInt(64);
         return fg.ctx.tyFunc(rt, ps, t->nparams, t->variadic);
     }
+    // structs/enums: opaque byte blocks sized by the layout calc so alloca
+    // reserves the full storage; field access goes through byte-offset GEPs.
+    if (t->kind == types.TY_NAMED)
+    {
+        u32 sz = cSize(t, fg.top);
+        if (sz == 0) sz = 8;
+        return fg.ctx.tyArray(fg.ctx.tyInt(8), sz);
+    }
     return fg.ctx.tyInt(64);
 }
 
@@ -207,6 +215,164 @@ u64 parseIntLit(str.strView s)
 
 ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e);
 
+// storeToLhs: emit the store half of an assignment for any lvalue form:
+// plain locals, derefs (*p / p[0] handled by caller), and struct fields.
+void storeToLhs(FuncGen* fg, ast.Expr* a, ir_types.IrValue* rv)
+{
+    if (a == null || rv == null) return;
+    if (a->kind == ast.EX_IDENT)
+    {
+        ir_types.IrValue* ptr = findLocal(fg, a->text);
+        if (ptr != null) { fg.bd.store(rv, ptr); return; }
+        return;
+    }
+    if (a->kind == ast.EX_DOT || a->kind == ast.EX_ARROW)
+    {
+        ir_types.IrValue* fp = fieldAddress(fg, a);
+        if (fp != null) { fg.bd.store(rv, fp); return; }
+        return;
+    }
+    if (a->kind == ast.EX_UNARY && opEq(a->text, "*"))
+    {
+        ir_types.IrValue* ptr = genExpr(fg, a->a);
+        if (ptr != null) fg.bd.store(rv, ptr);
+        return;
+    }
+    if (a->kind == ast.EX_DEREF)
+    {
+        ir_types.IrValue* ptr = genExpr(fg, a->a);
+        if (ptr != null) fg.bd.store(rv, ptr);
+        return;
+    }
+    if (a->kind == ast.EX_INDEX)
+    {
+        // arr[i] = v / p[i] = v
+        ir_types.IrValue* basePtr = null;
+        if (a->a->kind == ast.EX_IDENT) basePtr = findLocal(fg, a->a->text);
+        if (basePtr == null) basePtr = genExpr(fg, a->a);
+        if (basePtr == null) return;
+        // local array alloca: gep on element index directly
+        bool isArraySlot = basePtr->type != null && basePtr->type->kind == ir_types.IrTypeKind::Ptr
+            && basePtr->type->elem != null && basePtr->type->elem->kind == ir_types.IrTypeKind::Array;
+        ir_types.IrValue* idxs[1];
+        idxs[0] = genExpr(fg, a->b);
+        if (idxs[0] == null) return;
+        ir_types.IrInst* gp = fg.bd.gep(basePtr, idxs, 1);
+        fg.bd.store(rv, &gp->base);
+        (void)isArraySlot;
+        return;
+    }
+}
+
+// structFieldOffset: byte offset of field `name` in `sd` honouring
+// reorder/packed layout modes. Returns false when the field is absent.
+bool structFieldOffset(FuncGen* fg, ast.Decl* sd, str.strView name, u32* outOff)
+{
+    u32 fieldIdx = (u32)-1;
+    for (u32 fi = 0; fi < sd->nfields; fi++)
+        if (strEq(sd->fields[fi].name, name)) { fieldIdx = fi; break; }
+    if (fieldIdx == (u32)-1) return false;
+    bool isPacked = sd->layoutMode == 2 || sd->layoutMode == 3;
+    bool isReorder = sd->layoutMode == 1 || sd->layoutMode == 3;
+    u32 nf = sd->nfields;
+    u32 orderArr[64];
+    u32* order = orderArr;
+    bool heapOrder = nf > 64;
+    if (heapOrder) order = mman.alloc<u32>(nf);
+    for (u32 f = 0; f < nf; f++) order[f] = f;
+    if (isReorder && nf > 1)
+    {
+        for (u32 i = 0; i < nf; i++)
+            for (u32 j = i+1; j < nf; j++)
+            {
+                types.CType* ti = scopes.resolveTypeExpr(sd->fields[order[i]].type, fg.top, fg.mods, null, 0);
+                types.CType* tj = scopes.resolveTypeExpr(sd->fields[order[j]].type, fg.top, fg.mods, null, 0);
+                u32 si = cSize(ti, fg.top);
+                u32 sj = cSize(tj, fg.top);
+                u32 ai = cAlign(ti, fg.top);
+                u32 aj = cAlign(tj, fg.top);
+                bool swap = false;
+                if (ai != aj) swap = aj > ai;
+                else swap = sj > si;
+                if (swap) { u32 tmp = order[i]; order[i]=order[j]; order[j]=tmp; }
+            }
+    }
+    u32 cur = 0;
+    bool found = false;
+    for (u32 idx = 0; idx < nf; idx++)
+    {
+        u32 f = order[idx];
+        types.CType* ft = scopes.resolveTypeExpr(sd->fields[f].type, fg.top, fg.mods, null, 0);
+        u32 al = cAlign(ft, fg.top);
+        u32 sz = cSize(ft, fg.top);
+        if (!isPacked && al > 0) { u32 pad = (al - (cur % al)) % al; cur += pad; }
+        if (f == fieldIdx) { *outOff = cur; found = true; break; }
+        cur += sz;
+    }
+    if (heapOrder) mman.dealloc<u32>(order);
+    return found;
+}
+
+// fieldAddress: IR pointer to the member of a DOT/ARROW expression, or null.
+// Handles `v.field` (local alloca base), `p->field` / `p.field` (pointer
+// base), and nested chains. honours reorder/packed layouts.
+ir_types.IrValue* fieldAddress(FuncGen* fg, ast.Expr* e)
+{
+    types.CType* baseTy = expr.inferredType(e->a);
+    if (baseTy != null) baseTy = types.effective(baseTy);
+    ast.Decl* structDecl = null;
+    if (baseTy != null && baseTy->kind == types.TY_NAMED && baseTy->decl != null && baseTy->decl->kind == ast.DT_STRUCT)
+    {
+        // value receiver: `.` on a struct value -> use its alloca directly
+        structDecl = baseTy->decl;
+    }
+    else if (baseTy != null && (baseTy->kind == types.TY_PTR || baseTy->kind == types.TY_SLICE)
+             && baseTy->elem != null && baseTy->elem->kind == types.TY_NAMED
+             && baseTy->elem->decl != null && baseTy->elem->decl->kind == ast.DT_STRUCT)
+    {
+        // pointer receiver: `.` or `->` on a pointer derefs implicitly here
+        // because genExpr on the ident already loaded; we need the ADDRESS,
+        // so re-derive it from the local alloca when possible.
+        structDecl = baseTy->elem->decl;
+    }
+    if (structDecl == null) return null;
+    u32 off = 0;
+    if (!structFieldOffset(fg, structDecl, e->text, &off)) return null;
+
+    ir_types.IrValue* basePtr = null;
+    if (e->a->kind == ast.EX_IDENT)
+        basePtr = findLocal(fg, e->a->text);
+    if (basePtr == null)
+    {
+        // chained access (a.b.c): recurse for the inner address
+        if ((e->a->kind == ast.EX_DOT || e->a->kind == ast.EX_ARROW))
+            basePtr = fieldAddress(fg, e->a);
+        else
+            basePtr = genExpr(fg, e->a);
+    }
+    if (basePtr == null) return null;
+
+    ir_types.IrType* i8Ptr = fg.ctx.tyPtr(fg.ctx.tyInt(8));
+    ir_types.IrValue* casted = basePtr;
+    if (basePtr->type != i8Ptr)
+    {
+        ir_types.IrInst* bc = fg.bd.bitcast(basePtr, i8Ptr);
+        casted = &bc->base;
+    }
+    ir_types.IrValue* offVal = fg.ctx.constInt(fg.ctx.tyInt(64), off);
+    ir_types.IrValue* idxs[1]; idxs[0] = offVal;
+    ir_types.IrInst* gep = fg.bd.gep(casted, idxs, 1);
+
+    ast.StructField* sf = null;
+    for (u32 fi = 0; fi < structDecl->nfields; fi++)
+        if (strEq(structDecl->fields[fi].name, e->text)) { sf = &structDecl->fields[fi]; break; }
+    types.CType* fct = sf != null ? scopes.resolveTypeExpr(sf->type, fg.top, fg.mods, null, 0) : null;
+    ir_types.IrType* fieldIrTy = fct ? mapCType(fg, fct) : fg.ctx.tyInt(64);
+    ir_types.IrType* fieldPtrTy = fg.ctx.tyPtr(fieldIrTy);
+    ir_types.IrInst* bc2 = fg.bd.bitcast(&gep->base, fieldPtrTy);
+    return &bc2->base;
+}
+
 ir_types.IrValue* genBinary(FuncGen* fg, ast.Expr* e)
 {
     str.strView op = e->text;
@@ -214,24 +380,42 @@ ir_types.IrValue* genBinary(FuncGen* fg, ast.Expr* e)
     ast.Expr* b = e->b;
     if (opEq(op, "="))
     {
+        // compound-assign desugar: a op= b -> a = a op b
+        if (op.len >= 2 && op.ptr[op.len-1] == (u8)'=' && op.ptr[op.len-2] != (u8)'='
+            && op.ptr[op.len-2] != (u8)'!' && op.ptr[op.len-2] != (u8)'<'
+            && op.ptr[op.len-2] != (u8)'>')
+        {
+            char binOp[4]; u32 bo = 0;
+            for (u32 i = 0; i + 1 < op.len; i++) binOp[bo++] = (char)op.ptr[i];
+            binOp[bo] = 0;
+            ast.Expr lhsCopy = *a;
+            ir_types.IrValue* cur = genExpr(fg, &lhsCopy);
+            ir_types.IrValue* rv = genExpr(fg, b);
+            if (cur == null) return rv;
+            if (rv == null) return cur;
+            ir_types.IrInst* t = null;
+            bool flt = (cur->type && cur->type->kind == ir_types.IrTypeKind::Float);
+            if (bo == 1 && binOp[0] == '+') t = flt ? fg.bd.fadd(cur, rv) : fg.bd.add(cur, rv);
+            else if (bo == 1 && binOp[0] == '-') t = flt ? fg.bd.fsub(cur, rv) : fg.bd.sub(cur, rv);
+            else if (bo == 1 && binOp[0] == '*') t = flt ? fg.bd.fmul(cur, rv) : fg.bd.mul(cur, rv);
+            else if (bo == 1 && binOp[0] == '/') t = flt ? fg.bd.fdiv(cur, rv) : fg.bd.sdiv(cur, rv);
+            else if (bo == 1 && binOp[0] == '%') t = fg.bd.srem(cur, rv);
+            else if (bo == 1 && binOp[0] == '&') t = fg.bd.andOp(cur, rv);
+            else if (bo == 1 && binOp[0] == '|') t = fg.bd.orOp(cur, rv);
+            else if (bo == 1 && binOp[0] == '^') t = fg.bd.xorOp(cur, rv);
+            else if (bo == 2 && binOp[0] == '<' && binOp[1] == '<') t = fg.bd.shl(cur, rv);
+            else if (bo == 2 && binOp[0] == '>' && binOp[1] == '>') t = fg.bd.ashr(cur, rv);
+            if (t != null)
+            {
+                setDbgExpr(fg, t, e);
+                ir_types.IrValue* res = &t->base;
+                storeToLhs(fg, a, res);
+                return res;
+            }
+            return rv;
+        }
         ir_types.IrValue* rv = genExpr(fg, b);
-        if (a && a->kind == ast.EX_IDENT)
-        {
-            ir_types.IrValue* ptr = findLocal(fg, a->text);
-            if (ptr != null) { fg.bd.store(rv, ptr); return rv; }
-        }
-        if (a && a->kind == ast.EX_UNARY && opEq(a->text, "*"))
-        {
-            ir_types.IrValue* ptr = genExpr(fg, a->a);
-            fg.bd.store(rv, ptr);
-            return rv;
-        }
-        if (a && a->kind == ast.EX_DEREF)
-        {
-            ir_types.IrValue* ptr = genExpr(fg, a->a);
-            fg.bd.store(rv, ptr);
-            return rv;
-        }
+        storeToLhs(fg, a, rv);
         return rv;
     }
     ir_types.IrValue* l = genExpr(fg, a);
@@ -518,104 +702,12 @@ ir_types.IrValue* genExpr(FuncGen* fg, ast.Expr* e)
     case ast.EX_DOT:
     case ast.EX_ARROW:
         {
-            bool isArrow = e->kind == ast.EX_ARROW;
-            types.CType* baseTy = expr.inferredType(e->a);
-            if (baseTy != null) baseTy = types.effective(baseTy);
-            ast.Decl* structDecl = null;
-            if (baseTy != null && baseTy->kind == types.TY_NAMED && baseTy->decl != null && baseTy->decl->kind == ast.DT_STRUCT) structDecl = baseTy->decl;
-            else if (baseTy != null && baseTy->kind == types.TY_PTR && baseTy->elem != null && baseTy->elem->kind == types.TY_NAMED && baseTy->elem->decl != null && baseTy->elem->decl->kind == ast.DT_STRUCT) structDecl = baseTy->elem->decl;
-            if (structDecl != null)
+            ir_types.IrValue* fp = fieldAddress(fg, e);
+            if (fp != null)
             {
-                u32 fieldIdx = (u32)-1;
-                for (u32 fi = 0; fi < structDecl->nfields; fi++) if (strEq(structDecl->fields[fi].name, e->text)) { fieldIdx = fi; break; }
-                if (fieldIdx != (u32)-1)
-                {
-                    u32 off = 0;
-                    bool isPacked = structDecl->layoutMode == 2 || structDecl->layoutMode == 3;
-                    bool isReorder = structDecl->layoutMode == 1 || structDecl->layoutMode == 3;
-                    if (isReorder && structDecl->nfields > 1)
-                    {
-                        u32* order = mman.alloc<u32>(structDecl->nfields);
-                        for (u32 f = 0; f < structDecl->nfields; f++) order[f] = f;
-                        for (u32 i = 0; i < structDecl->nfields; i++)
-                            for (u32 j = i+1; j < structDecl->nfields; j++)
-                            {
-                                types.CType* ti = scopes.resolveTypeExpr(structDecl->fields[order[i]].type, fg.top, fg.mods, null, 0);
-                                types.CType* tj = scopes.resolveTypeExpr(structDecl->fields[order[j]].type, fg.top, fg.mods, null, 0);
-                                u32 si = cSize(ti, fg.top);
-                                u32 sj = cSize(tj, fg.top);
-                                u32 ai = cAlign(ti, fg.top);
-                                u32 aj = cAlign(tj, fg.top);
-                                bool swap = false;
-                                if (ai != aj) swap = aj > ai;
-                                else swap = sj > si;
-                                if (swap) { u32 tmp = order[i]; order[i]=order[j]; order[j]=tmp; }
-                            }
-                        u32 cur = 0;
-                        for (u32 idx = 0; idx < structDecl->nfields; idx++)
-                        {
-                            u32 f = order[idx];
-                            types.CType* ft = scopes.resolveTypeExpr(structDecl->fields[f].type, fg.top, fg.mods, null, 0);
-                            u32 al = cAlign(ft, fg.top);
-                            u32 sz = cSize(ft, fg.top);
-                            if (!isPacked) { u32 pad = (al - (cur % al)) % al; cur += pad; }
-                            if (f == fieldIdx) { off = cur; break; }
-                            cur += sz;
-                        }
-                        mman.dealloc<u32>(order);
-                    } else
-                    {
-                        u32 cur = 0;
-                        for (u32 f = 0; f < structDecl->nfields; f++)
-                        {
-                            types.CType* ft = scopes.resolveTypeExpr(structDecl->fields[f].type, fg.top, fg.mods, null, 0);
-                            u32 al = cAlign(ft, fg.top);
-                            u32 sz = cSize(ft, fg.top);
-                            if (!isPacked) { u32 pad = (al - (cur % al)) % al; cur += pad; }
-                            if (f == fieldIdx) { off = cur; break; }
-                            cur += sz;
-                        }
-                    }
-                    ir_types.IrValue* basePtr = null;
-                    if (!isArrow && e->a->kind == ast.EX_IDENT)
-                    {
-                        basePtr = findLocal(fg, e->a->text);
-                    }
-                    if (basePtr == null) basePtr = genExpr(fg, e->a);
-                    if (basePtr != null && basePtr->type != null && basePtr->type->kind != ir_types.IrTypeKind::Ptr)
-                    {
-                        // base is struct value, need its address: if it was loaded, we need alloca ptr
-                        // For now, if base is struct value (loaded), we can't GEP; fallback to loaded value
-                        // Try to get alloca for ident
-                        if (e->a->kind == ast.EX_IDENT)
-                        {
-                            ir_types.IrValue* ptr = findLocal(fg, e->a->text);
-                            if (ptr != null) basePtr = ptr;
-                        }
-                    }
-                    if (basePtr != null)
-                    {
-                        ir_types.IrType* fieldIrTy = null;
-                        ast.StructField* sf = &structDecl->fields[fieldIdx];
-                        types.CType* fct = scopes.resolveTypeExpr(sf->type, fg.top, fg.mods, null, 0);
-                        fieldIrTy = fct ? mapCType(fg, fct) : fg.ctx.tyInt(64);
-                        // GEP with byte offset
-                        ir_types.IrValue* offVal = fg.ctx.constInt(fg.ctx.tyInt(64), off);
-                        ir_types.IrValue* idxs[1]; idxs[0] = offVal;
-                        // For struct, GEP with byte offset: need to bitcast to i8* then gep
-                        ir_types.IrType* i8Ptr = fg.ctx.tyPtr(fg.ctx.tyInt(8));
-                        ir_types.IrValue* casted = basePtr;
-                        if (basePtr->type != i8Ptr)
-                        {
-                            ir_types.IrInst* bc = fg.bd.bitcast(basePtr, i8Ptr);
-                            casted = &bc->base;
-                        }
-                        ir_types.IrInst* gep = fg.bd.gep(casted, idxs, 1);
-                        ir_types.IrType* fieldPtrTy = fg.ctx.tyPtr(fieldIrTy);
-                        ir_types.IrInst* bc2 = fg.bd.bitcast(&gep->base, fieldPtrTy);
-                        return dbgVal(fg, e, fg.bd.load(fieldIrTy, &bc2->base));
-                    }
-                }
+                ir_types.IrType* ft = fp->type;
+                ir_types.IrType* et2 = ft && ft->kind == ir_types.IrTypeKind::Ptr && ft->elem ? ft->elem : fg.ctx.tyInt(64);
+                return dbgVal(fg, e, fg.bd.load(et2, fp));
             }
             return genExpr(fg, e->a);
         }
@@ -794,74 +886,74 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
         break;
     }
     case ast.ST_FLAG:
+    {
+        str.strView sel = flagValueEmit(fg, s->text);
+        bool handled = false;
+        for (u32 ci = 0; ci < s->ncases; ci++)
         {
-            str.strView sel = flagValueEmit(fg, s->text);
-            bool handled = false;
-            for (u32 ci = 0; ci < s->ncases; ci++)
+            ast.StmtCase* sc = s->cases[ci];
+            if (sc == null || sc->value == null) continue;
+            if (strEq(sc->value->text, sel))
             {
-                ast.StmtCase* sc = s->cases[ci];
-                if (sc == null || sc->value == null) continue;
-                if (strEq(sc->value->text, sel))
-                {
-                    for (u32 k = 0; k < sc->nbody; k++) genStmt(fg, sc->body[k]);
-                    handled = true;
-                    break;
-                }
+                for (u32 k = 0; k < sc->nbody; k++) genStmt(fg, sc->body[k]);
+                handled = true;
+                break;
             }
-            if (!handled && s->defaultCase != null)
-                for (u32 k = 0; k < s->defaultCase->nbody; k++) genStmt(fg, s->defaultCase->body[k]);
-            break;
         }
+        if (!handled && s->defaultCase != null)
+            for (u32 k = 0; k < s->defaultCase->nbody; k++) genStmt(fg, s->defaultCase->body[k]);
+        break;
+    }
     case ast.ST_FORIN:
+    {
+        types.CType* itTy = s->a ? expr.inferredType(s->a) : null;
+        types.CType* elemTy = itTy ? itTy->elem : null;
+        if (elemTy == null && itTy != null && itTy->kind == types.TY_SLICE) elemTy = itTy->elem;
+        if (elemTy == null) elemTy = s->type ? scopes.resolveTypeExpr(s->type, fg.top, fg.mods, null, 0) : null;
+        ir_types.IrType* elemIrTy = elemTy ? mapCType(fg, elemTy) : fg.ctx.tyInt(64);
+        ir_types.IrValue* container = s->a ? genExpr(fg, s->a) : null;
+        if (container == null) break;
+        ir_types.IrType* containerTy = container->type;
+        ir_types.IrValue* lenVal = null;
+        ir_types.IrValue* ptrVal = container;
+        if (itTy != null && itTy->kind == types.TY_ARRAY && itTy->countKnown) lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), itTy->count);
+        else if (containerTy != null && containerTy->kind == ir_types.IrTypeKind::Ptr) lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
+        else lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
+        // handle slice-like container where len is field
+        if (itTy != null && (itTy->kind == types.TY_SLICE || itTy->kind == types.TY_ARRAY))
         {
-            types.CType* itTy = s->a ? expr.inferredType(s->a) : null;
-            types.CType* elemTy = itTy ? itTy->elem : null;
-            if (elemTy == null && itTy != null && itTy->kind == types.TY_SLICE) elemTy = itTy->elem;
-            if (elemTy == null) elemTy = s->type ? scopes.resolveTypeExpr(s->type, fg.top, fg.mods, null, 0) : null;
-            ir_types.IrType* elemIrTy = elemTy ? mapCType(fg, elemTy) : fg.ctx.tyInt(64);
-            ir_types.IrValue* container = s->a ? genExpr(fg, s->a) : null;
-            if (container == null) break;
-            ir_types.IrType* containerTy = container->type;
-            ir_types.IrValue* lenVal = null;
-            ir_types.IrValue* ptrVal = container;
-            if (itTy != null && itTy->kind == types.TY_ARRAY && itTy->countKnown) lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), itTy->count);
-            else if (containerTy != null && containerTy->kind == ir_types.IrTypeKind::Ptr) lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
-            else lenVal = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
-            // handle slice-like container where len is field
-            if (itTy != null && (itTy->kind == types.TY_SLICE || itTy->kind == types.TY_ARRAY))
-            {
                 // for slice, need len from struct; for now use 0
-            }
-            ir_types.IrInst* idxAlloca = fg.bd.alloca(fg.ctx.tyInt(64));
-            fg.bd.store(fg.ctx.constInt(fg.ctx.tyInt(64), 0), &idxAlloca->base);
-            ir_types.IrInst* varAlloca = fg.bd.alloca(elemIrTy);
-            addLocal(fg, s->text, &varAlloca->base);
-            ir_types.IrBlock* head = fg.ctx.createBlock("forin.head");
-            ir_types.IrBlock* body = fg.ctx.createBlock("forin.body");
-            ir_types.IrBlock* exit = fg.ctx.createBlock("forin.exit");
-            fg.func.addBlock(head); fg.func.addBlock(body); fg.func.addBlock(exit);
-            fg.bd.br(head);
-            fg.bd.pos(head, null);
-            ir_types.IrValue* idxVal = dbgVal(fg, s->a, fg.bd.load(fg.ctx.tyInt(64), &idxAlloca->base));
-            ir_types.IrValue* cond = dbgVal(fg, s->a, fg.bd.icmp(ir_opcodes.IrICmpPred::Ult, idxVal, lenVal));
-            fg.bd.condBr(cond, body, exit);
-            fg.bd.pos(body, null); fg.terminated = false;
-            ir_types.IrValue* idxs[1]; idxs[0] = idxVal;
-            ir_types.IrInst* gep = fg.bd.gep(ptrVal, idxs, 1);
-            ir_types.IrValue* elem = dbgVal(fg, s->a, fg.bd.load(elemIrTy, &gep->base));
-            fg.bd.store(elem, &varAlloca->base);
-            genBlockStmts(fg, s->body);
-            if (!fg.terminated)
-            {
-                ir_types.IrValue* cur = dbgVal(fg, s->a, fg.bd.load(fg.ctx.tyInt(64), &idxAlloca->base));
-                ir_types.IrValue* one = fg.ctx.constInt(fg.ctx.tyInt(64), 1);
-                ir_types.IrValue* nxt = dbgVal(fg, s->a, fg.bd.add(cur, one));
-                fg.bd.store(nxt, &idxAlloca->base);
-                fg.bd.br(head);
-            }
-            fg.bd.pos(exit, null); fg.terminated = false;
-            break;
         }
+        ir_types.IrInst* idxAlloca = fg.bd.alloca(fg.ctx.tyInt(64));
+        fg.bd.store(fg.ctx.constInt(fg.ctx.tyInt(64), 0), &idxAlloca->base);
+        ir_types.IrInst* varAlloca = fg.bd.alloca(elemIrTy);
+        addLocal(fg, s->text, &varAlloca->base);
+        ir_types.IrBlock* head = fg.ctx.createBlock("forin.head");
+        ir_types.IrBlock* body = fg.ctx.createBlock("forin.body");
+        ir_types.IrBlock* exit = fg.ctx.createBlock("forin.exit");
+        fg.func.addBlock(head); fg.func.addBlock(body); fg.func.addBlock(exit);
+        fg.bd.br(head);
+        fg.bd.pos(head, null);
+        ir_types.IrValue* idxVal = dbgVal(fg, s->a, fg.bd.load(fg.ctx.tyInt(64), &idxAlloca->base));
+        ir_types.IrValue* cond = dbgVal(fg, s->a, fg.bd.icmp(ir_opcodes.IrICmpPred::Ult, idxVal, lenVal));
+        fg.bd.condBr(cond, body, exit);
+        fg.bd.pos(body, null); fg.terminated = false;
+        ir_types.IrValue* idxs[1]; idxs[0] = idxVal;
+        ir_types.IrInst* gep = fg.bd.gep(ptrVal, idxs, 1);
+        ir_types.IrValue* elem = dbgVal(fg, s->a, fg.bd.load(elemIrTy, &gep->base));
+        fg.bd.store(elem, &varAlloca->base);
+        genBlockStmts(fg, s->body);
+        if (!fg.terminated)
+        {
+            ir_types.IrValue* cur = dbgVal(fg, s->a, fg.bd.load(fg.ctx.tyInt(64), &idxAlloca->base));
+            ir_types.IrValue* one = fg.ctx.constInt(fg.ctx.tyInt(64), 1);
+            ir_types.IrValue* nxt = dbgVal(fg, s->a, fg.bd.add(cur, one));
+            fg.bd.store(nxt, &idxAlloca->base);
+            fg.bd.br(head);
+        }
+        fg.bd.pos(exit, null); fg.terminated = false;
+        break;
+    }
     case ast.ST_BREAK:
     case ast.ST_CONTINUE:
         break;
@@ -871,6 +963,11 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
     case ast.ST_DEFER:
         if (s->body) genBlockStmts(fg, s->body);
         break;
+    case ast.ST_ASM:
+    {
+        genAsm(fg, s);
+        break;
+    }
     default:
         break;
     }
@@ -921,15 +1018,33 @@ void dumpIR(ir_types.IrModule* irMod, void* f)
                         if (v == null) { libc.fwrite((u8*)"null",1,4,f); continue; }
                         if (v->kind == ir_types.IrValueKind::ConstInt)
                         {
-                            u8 nb[32]; i32 nn = libc.snprintf(nb,32,"%lu", v.valData);
-                            if (nn>0) libc.fwrite(nb,1,(u64)nn,f);
+                            // InlineAsm's first operand carries the asm text as
+                            // a pointer constant; render the string itself.
+                            if (ins.opcode == ir_opcodes.IrOpcode::InlineAsm && o == 0 && v.valData != 0)
+                            {
+                                const char* astr = (const char*)(u64)v.valData;
+                                libc.fwrite((u8*)"\"",1,1,f);
+                                u64 al = 0; while (astr[al]) al++;
+                                libc.fwrite((u8*)astr,1,al,f);
+                                libc.fwrite((u8*)"\"",1,1,f);
+                            }
+                            else
+                            {
+                                u8 nb[32]; i32 nn = libc.snprintf(nb,32,"%lu", v.valData);
+                                if (nn>0) libc.fwrite(nb,1,(u64)nn,f);
+                            }
                         } else if (v->kind == ir_types.IrValueKind::ConstFloat)
                         {
                             libc.fwrite((u8*)"float",1,5,f);
                         } else {
                             u8 nb[32]; i32 nn = libc.snprintf(nb,32,"%%%u", v.id);
                             if (nn>0) libc.fwrite(nb,1,(u64)nn,f);
-                            if (v->name) { libc.fwrite((u8*)"(",1,1,f); u64 vl=0; while(v->name[vl]) vl++; libc.fwrite((u8*)v->name,1,vl,f); libc.fwrite((u8*)")",1,1,f); }
+                            if (v->name) { libc.fwrite((u8*)"(",1,1,f);
+                                u64 vl=0;
+                                while(v->name[vl]) vl++;
+                                libc.fwrite((u8*)v->name,1,vl,f);
+                                libc.fwrite((u8*)")",1,1,f);
+                            }
                         }
                     }
                     libc.fwrite((u8*)"]",1,1,f);
@@ -937,11 +1052,14 @@ void dumpIR(ir_types.IrModule* irMod, void* f)
                 libc.fwrite((u8*)"\n",1,1,f);
             }
         }
-        libc.fwrite((u8*)"}\n",1,2,f);
+        libc.fwrite((u8*)"}\n\n",1,2,f);
     }
 }
 
-pub ir_types.IrModule* buildModule(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug, ir_types.IrContext** outCtx)
+pub ir_types.IrModule* buildModule(ast.Program* prog, scopes.Scope* top,
+                                    scopes.ModuleTable* mods, str.strView path,
+                                    u32 optLevel, bool debug,
+                                    ir_types.IrContext** outCtx)
 {
     ir_types.IrContext* ctx = ir_types.irCtxCreate();
     char mn[256]; u32 ml = 0;
@@ -1115,7 +1233,18 @@ pub ir_types.IrModule* buildModule(ast.Program* prog, scopes.Scope* top, scopes.
         if (fg.localPtrs) mman.dealloc<ir_types.IrValue*>(fg.localPtrs);
         if (pTys) mman.dealloc<ir_types.IrType*>(pTys);
     }
-
+    return irMod;
+}
+pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
+{
+    str.String opath = str.String::new();
+    u32 lastDot = 0; bool dot = false;
+    for (u32 k = 0; k < path.len; k++) if (path.ptr[k] == (u8)'.') { lastDot = k; dot = true; }
+    if (dot) opath.pushView(str.strView::fromParts(path.ptr, lastDot));
+    else opath.pushView(path);
+    opath.pushCstr(".wir");
+    ir_types.IrContext* ctx = null;
+    ir_types.IrModule* irMod = buildModule(prog, top, mods, path, optLevel, debug, &ctx);
     void* f = libc.fopen(opath.asCstr(), (const u8*)"wb");
     if (f != null)
     {

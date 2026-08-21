@@ -1236,9 +1236,11 @@ pub struct X86_64Codegen
         u32 sz = 8;
         if (res->type && res->type->kind == ir_types.IrTypeKind::Ptr && res->type->elem)
         {
-            u32 ew = res->type->elem->width;
-            if (ew == 0) ew = 8;
-            sz = ((ew + 7) / 8) * 8;
+            // Full element size: arrays (and struct byte-blocks mapped to
+            // array(i8,N)) reserve N bytes, scalars round up to 8.
+            u32 es = self.ctx.irTypeSizeOf(res->type.elem);
+            if (es == 0) es = 8;
+            sz = ((es + 7) / 8) * 8;
         }
         self.subRsp((u64)sz);
         const char* dreg = self.destReg(res);

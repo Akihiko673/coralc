@@ -4,6 +4,7 @@ mod str = import("std/text/string.crl");
 mod emitc = import("emitc");
 mod emitir = import("emitir");
 mod emits = import("emits");
+mod loader = import("typecheck/loader.crl");
 
 // emit.crl: codegen dispatch. Each target lives in its own module:
 //   emitc.crl  - C header (declarations only)

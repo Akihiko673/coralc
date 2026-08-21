@@ -2,10 +2,11 @@ mod libc = import("std/platform/libc.crl");
 mod ast = import("ast/ast.crl");
 mod scopes = import("typecheck/scopes.crl");
 mod str = import("std/text/string.crl");
-
-// emits.crl: native assembly emission (not yet implemented). Writes a
-// placeholder to the sibling .s file. Real lowering uses lib/wallvm's
-// irCompile/irCompileAsm once the Coral->IR pass lands.
+mod mman = import("std/memory/mman.crl");
+mod emitir = import("emitir");
+mod wallvm = import("lib/wallvm/wallvm.crl");
+mod ir_types = import("lib/wallvm/ir_types.crl");
+mod asm_rules = import("lib/wallvm/rules/asm_rules.crl");
 
 pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
 {
@@ -16,13 +17,23 @@ pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods,
     if (dot) opath.pushView(str.strView::fromParts(path.ptr, lastDot));
     else opath.pushView(path);
     opath.pushCstr(".s");
-
+    ir_types.IrContext* ctx = null;
+    ir_types.IrModule* irMod = emitir.buildModule(prog, top, mods, path, optLevel, debug, &ctx);
+    u32 cc = (u32)asm_rules.CallingConvention::SystemV;
+    const char* asmText = wallvm.irCompileAsm(irMod, ctx, (asm_rules.CallingConvention)cc, optLevel);
     void* f = libc.fopen(opath.asCstr(), (const u8*)"wb");
     if (f != null)
     {
-        const char* msg = "; assembly emission not yet implemented (coralc)\n";
-        u32 n = 0; while (msg[n]) n++;
-        libc.fwrite((const u8*)msg, 1, n, f);
+        if (asmText != null)
+        {
+            u64 n = 0; while (asmText[n]) n++;
+            libc.fwrite((u8*)asmText, 1, n, f);
+        } else
+        {
+            const char* msg = "; wallvm irCompileAsm failed\n";
+            u64 n = 0; while (msg[n]) n++;
+            libc.fwrite((u8*)msg, 1, n, f);
+        }
         libc.fclose(f);
         libc.write(1, (const u8*)"wrote ", 6);
         libc.write(1, (const u8*)opath.asCstr(), opath.len);
@@ -30,7 +41,7 @@ pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods,
     }
     else
     {
-        libc.write(2, (const u8*)"coral: cannot open output .s for writing\n", 41);
+        libc.write(2, (const u8*)"coralc: cannot open output .s for writing\n", 41);
     }
     opath.free();
 }

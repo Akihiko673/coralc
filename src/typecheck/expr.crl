@@ -1570,7 +1570,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
     if (s == null) return;
     switch (s->kind)
     {
-    case ast.ST_BLOCK:
+        case ast.ST_BLOCK:
         {
             bool prev = t->inComptime;
             if (s->isComptime) t->inComptime = true;
@@ -1582,7 +1582,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
         }
         break;
 
-case ast.ST_VAR:
+        case ast.ST_VAR:
         {
             types.CType* at = null;
             if (s->type != null)
@@ -1602,7 +1602,7 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_RETURN:
+        case ast.ST_RETURN:
         {
             if (s->a != null)
             {
@@ -1633,7 +1633,7 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_IF:
+        case ast.ST_IF:
         {
             // comptime pruning: if the condition is a compile-time constant,
             // typecheck only the taken branch and erase the dead one.
@@ -1660,8 +1660,8 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_WHILE:
-    case ast.ST_LOOP:
+        case ast.ST_WHILE:
+        case ast.ST_LOOP:
         {
             if (s->kind == ast.ST_WHILE && s->a != null)
             {
@@ -1677,7 +1677,7 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_FOR:
+        case ast.ST_FOR:
         {
             pushBlock(t, str.strView::fromCstr("for"));
             typeStmt(t, s->init);
@@ -1695,7 +1695,7 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_FORIN:
+        case ast.ST_FORIN:
         {
             types.CType* it = typeExpr(t, s->a);
             types.CType* elem = scopes.opaqueType(str.strView::empty(), s->line, s->col);
@@ -1717,11 +1717,11 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_EXPR:
+        case ast.ST_EXPR:
         typeExpr(t, s->a);
         break;
 
-    case ast.ST_ASSERT:
+        case ast.ST_ASSERT:
         {
             types.CType* c = typeExpr(t, s->a);
             if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
@@ -1731,7 +1731,7 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_SWITCH:
+        case ast.ST_SWITCH:
         {
             types.CType* subj = typeExpr(t, s->a);
             subj = effective(subj);
@@ -1764,59 +1764,60 @@ case ast.ST_VAR:
             break;
         }
 
-    case ast.ST_BREAK:
-    case ast.ST_CONTINUE:
+        case ast.ST_BREAK:
+        case ast.ST_CONTINUE:
         break;
 
-    case ast.ST_ASM:
-        break;
-
-    case ast.ST_DEFER:
-        pushBlock(t, str.strView::fromCstr("defer"));
-        typeStmt(t, s->body);
-        popBlock(t, true);
-        break;
-
-    case ast.ST_FLAG:
-    {
-        str.strView sel = typerFlagValue(t, s->text);
-        Stmt* chosen = null;
-        u32 nchosen = 0;
-        if (sel.len > 0)
+        case ast.ST_ASM:
         {
-            for (u32 ci = 0; ci < s->ncases; ci++)
-                if (s->cases[ci] != null && s->cases[ci]->value != null && strEq2(s->cases[ci]->value->text, sel))
-                    { chosen = s->cases[ci]->body[0]; nchosen = s->cases[ci]->nbody; break; }
-            }
-            else if (s->defaultCase != null) { chosen = s->defaultCase->body[0]; nchosen = s->defaultCase->nbody; }
-            if (chosen != null) for (u32 k = 0; k < nchosen; k++) typeStmt(t, chosen);
-            break;
-        }
-    case ast.ST_FORIN:
-        {
-            types.CType* itTy = typeExpr(t, s->a);
-            if (s->type != null)
+            // identifiers appearing inside an inline-asm block count as uses
+            // of the matching locals/params (the asm text is opaque to the
+            // type checker but may reference them by name).
+            if (s->text.len > 0 && t->fnScope != null)
             {
-                types.CType* varTy = scopes.resolveTypeExpr(s->type, t->top, t->mods, t->gnames, t->ng);
-                if (varTy != null && itTy != null && itTy->elem != null)
+                u32 i = 0;
+                while (i < s->text.len)
                 {
-                    // var type should be element type of iterable
+                    u8 c = s->text.ptr[i];
+                    bool idStart = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+                    if (!idStart) { i++; continue; }
+                    u32 j = i + 1;
+                    while (j < s->text.len)
+                    {
+                        u8 d = s->text.ptr[j];
+                        bool idChar = (d >= 'a' && d <= 'z') || (d >= 'A' && d <= 'Z') || (d >= '0' && d <= '9') || d == '_';
+                        if (!idChar) break;
+                        j++;
+                    }
+                    str.strView word = str.strView::fromParts(s->text.ptr + i, j - i);
+                    Sym* sm = scopes.scopeLookup(t->fnScope, word);
+                    if (sm != null) scopes.symMarkUsed(sm);
+                    i = j;
                 }
             }
-            // create loop var scope
-            pushBlock(t, s->text);
-            if (s->text.len > 0)
-            {
-                types.CType* varCt = null;
-                if (s->type != null) varCt = scopes.resolveTypeExpr(s->type, t->top, t->mods, t->gnames, t->ng);
-                else if (itTy != null && itTy->elem != null) varCt = itTy->elem;
-                else if (itTy != null && itTy->kind == types.TY_SLICE) varCt = itTy->elem;
-                scopes.Sym* vs = scopes.symNew(s->text, scopes.SYM_LOCAL, null, s->line, s->col);
-                vs->type = varCt;
-                scopes.scopeDeclare(t->fnScope, vs);
-            }
-            typeBody(t, s->body);
+            break;
+        }
+
+        case ast.ST_DEFER:
+            pushBlock(t, str.strView::fromCstr("defer"));
+            typeStmt(t, s->body);
             popBlock(t, true);
+        break;
+
+        case ast.ST_FLAG:
+        {
+            str.strView sel = typerFlagValue(t, s->text);
+            Stmt* chosen = null;
+            u32 nchosen = 0;
+            bool found = false;
+            if (sel.len > 0)
+            {
+                for (u32 ci = 0; ci < s->ncases; ci++)
+                    if (s->cases[ci] != null && s->cases[ci]->value != null && scopes.sEq(s->cases[ci]->value->text, sel))
+                    { chosen = s->cases[ci]->body[0]; nchosen = s->cases[ci]->nbody; found = true; break; }
+            }
+            if (!found && s->defaultCase != null) { chosen = s->defaultCase->body[0]; nchosen = s->defaultCase->nbody; }
+            if (chosen != null) for (u32 k = 0; k < nchosen; k++) typeStmt(t, chosen);
             break;
         }
     }

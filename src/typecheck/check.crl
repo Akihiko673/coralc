@@ -130,7 +130,7 @@ pub struct Check
         return t;
     }
 
-    void expandStmtFlags(ast.Stmt* s, Check* self)
+    void expandStmtFlags(ast.Stmt* s)
     {
         if (s == null) return;
         if (s->kind == ast.ST_BLOCK)
@@ -154,27 +154,27 @@ pub struct Check
                         for (u32 k = 0; k < chosenCase->nbody; k++)
                         {
                             ast.Stmt* inner = chosenCase->body[k];
-                            expandStmtFlags(inner, self);
+                            self.expandStmtFlags(inner);
                             s->stmts[write++] = inner;
                         }
                     }
                     continue;
                 }
-                expandStmtFlags(cur, self);
+                self.expandStmtFlags(cur);
                 s->stmts[write++] = cur;
             }
             s->nstmts = write;
         } else if (s->kind == ast.ST_IF)
         {
-            expandStmtFlags(s->body, self);
-            expandStmtFlags(s->body2, self);
-        } else if (s->kind == ast.ST_FOR) { expandStmtFlags(s->body, self); expandStmtFlags(s->init, self); }
-        else if (s->kind == ast.ST_FORIN) expandStmtFlags(s->body, self);
-        else if (s->kind == ast.ST_WHILE) expandStmtFlags(s->body, self);
-        else if (s->kind == ast.ST_LOOP) expandStmtFlags(s->body, self);
+            self.expandStmtFlags(s->body);
+            self.expandStmtFlags(s->body2);
+        } else if (s->kind == ast.ST_FOR) { self.expandStmtFlags(s->body); self.expandStmtFlags(s->init); }
+        else if (s->kind == ast.ST_FORIN) self.expandStmtFlags(s->body);
+        else if (s->kind == ast.ST_WHILE) self.expandStmtFlags(s->body);
+        else if (s->kind == ast.ST_LOOP) self.expandStmtFlags(s->body);
         else if (s->kind == ast.ST_SWITCH) {
-            for (u32 ci = 0; ci < s->ncases; ci++) if (s->cases[ci] != null) for (u32 k = 0; k < s->cases[ci]->nbody; k++) expandStmtFlags(s->cases[ci]->body[k], self);
-            if (s->defaultCase != null) for (u32 k = 0; k < s->defaultCase->nbody; k++) expandStmtFlags(s->defaultCase->body[k], self);
+            for (u32 ci = 0; ci < s->ncases; ci++) if (s->cases[ci] != null) for (u32 k = 0; k < s->cases[ci]->nbody; k++) self.expandStmtFlags(s->cases[ci]->body[k]);
+            if (s->defaultCase != null) for (u32 k = 0; k < s->defaultCase->nbody; k++) self.expandStmtFlags(s->defaultCase->body[k]);
         }
     }
     void run()
@@ -457,18 +457,43 @@ pub struct Check
                             off += d->caseLens[ci];
                         }
                     } else if (d->defaultBody != null) { body = d->defaultBody; nbody = d->ndeclDefault; }
-                    if (body != null)
-                        for (u32 k = 0; k < nbody; k++) if (body[k] != null) newDecls[newN++] = body[k];
+                    if (body != null) for (u32 k = 0; k < nbody; k++) if (body[k] != null) newDecls[newN++] = body[k];
                     continue;
                 }
                 newDecls[newN++] = d;
             }
-            if (newN != self.prog->ndecls)
+            bool hadFlag = false;
+            for (u32 i = 0; i < self.prog->ndecls; i++) if (self.prog->decls[i] != null && self.prog->decls[i]->kind == ast.DT_FLAG) { hadFlag = true; break; }
+            if (hadFlag || newN != self.prog->ndecls)
             {
                 if (self.prog->decls) mman.dealloc<ast.Decl*>(self.prog->decls);
                 self.prog->decls = newDecls;
                 self.prog->ndecls = newN;
             } else mman.dealloc<ast.Decl*>(newDecls);
+        }
+        if (self.emitMode != 0)
+        {
+            for (u32 li = 0; li < ld->n; li++)
+            {
+                ast.Program* ip = ld->progs[li];
+                if (ip == null) continue;
+                for (u32 k = 0; k < ip->ndecls; k++)
+                {
+                    ast.Decl* id = ip->decls[k];
+                    if (id == null) continue;
+                    if (id->kind != ast.DT_FUNC && id->kind != ast.DT_STRUCT && id->kind != ast.DT_ENUM && id->kind != ast.DT_TYPEDEF) continue;
+                    if (id->ngenerics > 0) continue;
+                    bool exists = false;
+                    for (u32 j = 0; j < self.prog->ndecls; j++) if (self.prog->decls[j] == id) { exists = true; break; }
+                    if (exists) continue;
+                    ast.Decl** nd = mman.alloc<ast.Decl*>(self.prog->ndecls + 1);
+                    for (u32 j = 0; j < self.prog->ndecls; j++) nd[j] = self.prog->decls[j];
+                    nd[self.prog->ndecls] = id;
+                    if (self.prog->decls) mman.dealloc<ast.Decl*>(self.prog->decls);
+                    self.prog->decls = nd;
+                    self.prog->ndecls++;
+                }
+            }
         }
         // pass 2: type-check const/var initializers and enum variant values
         for (u32 i = 0; i < self.prog->ndecls; i++)
@@ -562,11 +587,11 @@ pub struct Check
         {
             ast.Decl* d = self.prog->decls[i];
             if (d == null) continue;
-            if (d->kind == ast.DT_FUNC && d->body != null) expandStmtFlags(d->body, self);
+            if (d->kind == ast.DT_FUNC && d->body != null) self.expandStmtFlags(d->body);
             else if (d->kind == ast.DT_STRUCT)
-                for (u32 k = 0; k < d->ndecls; k++) if (d->decls[k] != null && d->decls[k]->body != null) expandStmtFlags(d->decls[k]->body, self);
+                for (u32 k = 0; k < d->ndecls; k++) if (d->decls[k] != null && d->decls[k]->body != null) self.expandStmtFlags(d->decls[k]->body);
             else if (d->kind == ast.DT_METHODBLOCK)
-                for (u32 k = 0; k < d->ndecls; k++) if (d->decls[k] != null && d->decls[k]->body != null) expandStmtFlags(d->decls[k]->body, self);
+                for (u32 k = 0; k < d->ndecls; k++) if (d->decls[k] != null && d->decls[k]->body != null) self.expandStmtFlags(d->decls[k]->body);
         }
         // monomorphisation pass: specialize every concrete generic instantiation
         // discovered during body typing. Each generic Decl is re-typechecked

@@ -251,6 +251,7 @@ i32 main(u32 argc, char** argv)
         ck.emitMode = emitMode;
         ck.optLevel = optLevel;
         ck.debugBuild = debugBuild;
+        // Use value-based run to avoid needing Check* allocation
         ck.run();
         if (ck.nerrors > 0) return 1;
         if (emitMode == 0)
