@@ -1,5 +1,4 @@
-@[[no_drop]]
-mod math = import(lib, "std/math/math.crl");
+mod std = import(lib, "std");
 
 pub struct Complex
 {
@@ -65,12 +64,12 @@ pub struct Complex
 
     f64 abs()
     {
-        return math.hypot(self.re, self.im);
+        return std.maths.hypot(self.re, self.im);
     }
 
     f64 arg()
     {
-        return math.atan2(self.im, self.re);
+        return std.maths.atan2(self.im, self.re);
     }
 
     f64 absSq()
@@ -90,13 +89,13 @@ pub struct Complex
 
     Complex exp()
     {
-        f64 e = math.exp(self.re);
-        return Complex::new(e * math.cos(self.im), e * math.sin(self.im));
+        f64 e = std.maths.exp(self.re);
+        return Complex::new(e * std.maths.cos(self.im), e * std.maths.sin(self.im));
     }
 
     Complex log()
     {
-        return Complex::new(math.log(self.abs()), self.arg());
+        return Complex::new(std.maths.log(self.abs()), self.arg());
     }
 
     Complex pow(Complex other)
@@ -108,24 +107,24 @@ pub struct Complex
     Complex sin()
     {
         return Complex::new(
-            math.sin(self.re) * math.cosh(self.im),
-            math.cos(self.re) * math.sinh(self.im)
+            std.maths.sin(self.re) * std.maths.cosh(self.im),
+            std.maths.cos(self.re) * std.maths.sinh(self.im)
         );
     }
 
     Complex cos()
     {
         return Complex::new(
-            math.cos(self.re) * math.cosh(self.im),
-            -math.sin(self.re) * math.sinh(self.im)
+            std.maths.cos(self.re) * std.maths.cosh(self.im),
+            -std.maths.sin(self.re) * std.maths.sinh(self.im)
         );
     }
 
     Complex sqrt()
     {
         f64 r = self.abs();
-        f64 a = math.sqrt((r + self.re) / 2.0);
-        f64 b = math.sqrt((r - self.re) / 2.0);
+        f64 a = std.maths.sqrt((r + self.re) / 2.0);
+        f64 b = std.maths.sqrt((r - self.re) / 2.0);
         if (self.im < 0.0) b = -b;
         return Complex::new(a, b);
     }

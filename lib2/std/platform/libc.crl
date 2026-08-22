@@ -220,3 +220,8 @@ pub extern i32 send(void* s, const u8* buf, i32 len, i32 flags);
 pub extern i32 recv(void* s, u8* buf, i32 len, i32 flags);
 pub extern i32 closesocket(void* s);
 pub extern i32 setsockopt(void* s, i32 level, i32 optname, const u8* optval, i32 optlen);
+pub extern i64 recvfrom(i32 fd, u8* buf, u64 len, i32 flags, void* srcAddr, i32* addrLen);
+pub extern i64 sendto(i32 fd, const u8* buf, u64 len, i32 flags, const void* dstAddr, i32 addrLen);
+pub extern u64 htonl(u32 val);
+pub extern u32 ntohl(u32 val);
+pub extern u16 ntohs(u16 val);

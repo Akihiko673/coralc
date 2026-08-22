@@ -6,33 +6,33 @@ pub struct semaphore
 
     bool init(u32 value)
     {
-        return std.platform.libc.sem_init(self.impl, 0, value) == 0;
+        return std.libc.sem_init(self.impl, 0, value) == 0;
     }
 
     void destroy()
     {
-        std.platform.libc.sem_destroy(self.impl);
+        std.libc.sem_destroy(self.impl);
     }
 
     void wait()
     {
-        std.platform.libc.sem_wait(self.impl);
+        std.libc.sem_wait(self.impl);
     }
 
     bool tryWait()
     {
-        return std.platform.libc.sem_trywait(self.impl) == 0;
+        return std.libc.sem_trywait(self.impl) == 0;
     }
 
     void post()
     {
-        std.platform.libc.sem_post(self.impl);
+        std.libc.sem_post(self.impl);
     }
 
     i32 value()
     {
         i32 v;
-        std.platform.libc.sem_getvalue(self.impl, &v);
+        std.libc.sem_getvalue(self.impl, &v);
         return v;
     }
 }

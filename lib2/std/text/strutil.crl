@@ -1,8 +1,6 @@
+mod std = import(lib, "std");
 
-@[[no_drop]]
-mod string = import(lib, "std/text/string.crl");
-
-pub u64 split(strView sv, char delim, strView* out, u64 maxParts)
+pub u64 split(std.string.strView sv, char delim, std.string.strView* out, u64 maxParts)
 {
     if (maxParts == 0) return 0;
     u64 count = 0;
@@ -11,34 +9,34 @@ pub u64 split(strView sv, char delim, strView* out, u64 maxParts)
     {
         if (count + 1 >= maxParts)
         {
-            out[count++] = strView::fromParts(sv.ptr + start, sv.len - start);
+            out[count++] = std.string.strView::fromParts(sv.ptr + start, sv.len - start);
             return count;
         }
         if (i == sv.len || sv.ptr[i] == delim)
         {
-            out[count++] = strView::fromParts(sv.ptr + start, i - start);
+            out[count++] = std.string.strView::fromParts(sv.ptr + start, i - start);
             start = i + 1;
         }
     }
     return count;
 }
 
-pub vec<strView> splitVec(strView sv, char delim)
+pub std.vec.vec<std.string.strView> splitVec(std.string.strView sv, char delim)
 {
-    vec<strView> v = vec<strView>::new();
+    std.vec.vec<std.string.strView> v = std.vec.vec<std.string.strView>::new();
     u64 start = 0;
     for (u64 i = 0; i <= sv.len; i++)
     {
         if (i == sv.len || sv.ptr[i] == delim)
         {
-            v.push(&v, strView::fromParts(sv.ptr + start, i - start));
+            v.push(&v, std.string.strView::fromParts(sv.ptr + start, i - start));
             start = i + 1;
         }
     }
     return v;
 }
 
-pub strView trim(strView sv)
+pub std.string.strView trim(std.string.strView sv)
 {
     u64 start = 0;
     while (start < sv.len && (sv.ptr[start] == ' ' || sv.ptr[start] == '\t' || sv.ptr[start] == '\n' || sv.ptr[start] == '\r'))
@@ -46,26 +44,26 @@ pub strView trim(strView sv)
     u64 end = sv.len;
     while (end > start && (sv.ptr[end - 1] == ' ' || sv.ptr[end - 1] == '\t' || sv.ptr[end - 1] == '\n' || sv.ptr[end - 1] == '\r'))
         end--;
-    return strView::fromParts(sv.ptr + start, end - start);
+    return std.string.strView::fromParts(sv.ptr + start, end - start);
 }
 
-pub strView trimLeft(strView sv)
+pub std.string.strView trimLeft(std.string.strView sv)
 {
     u64 start = 0;
     while (start < sv.len && (sv.ptr[start] == ' ' || sv.ptr[start] == '\t' || sv.ptr[start] == '\n' || sv.ptr[start] == '\r'))
         start++;
-    return strView::fromParts(sv.ptr + start, sv.len - start);
+    return std.string.strView::fromParts(sv.ptr + start, sv.len - start);
 }
 
-pub strView trimRight(strView sv)
+pub std.string.strView trimRight(std.string.strView sv)
 {
     u64 end = sv.len;
     while (end > 0 && (sv.ptr[end - 1] == ' ' || sv.ptr[end - 1] == '\t' || sv.ptr[end - 1] == '\n' || sv.ptr[end - 1] == '\r'))
         end--;
-    return strView::fromParts(sv.ptr, end);
+    return std.string.strView::fromParts(sv.ptr, end);
 }
 
-pub bool startsWith(strView sv, strView prefix)
+pub bool startsWith(std.string.strView sv, std.string.strView prefix)
 {
     if (sv.len < prefix.len) return false;
     for (u64 i = 0; i < prefix.len; i++)
@@ -73,7 +71,7 @@ pub bool startsWith(strView sv, strView prefix)
     return true;
 }
 
-pub bool endsWith(strView sv, strView suffix)
+pub bool endsWith(std.string.strView sv, std.string.strView suffix)
 {
     if (sv.len < suffix.len) return false;
     u64 offset = sv.len - suffix.len;
@@ -82,7 +80,7 @@ pub bool endsWith(strView sv, strView suffix)
     return true;
 }
 
-pub bool contains(strView sv, strView sub)
+pub bool contains(std.string.strView sv, std.string.strView sub)
 {
     if (sub.len > sv.len) return false;
     for (u64 i = 0; i <= sv.len - sub.len; i++)
@@ -97,7 +95,7 @@ pub bool contains(strView sv, strView sub)
     return false;
 }
 
-pub i64 indexOf(strView sv, strView sub)
+pub i64 indexOf(std.string.strView sv, std.string.strView sub)
 {
     if (sub.len > sv.len) return -1;
     for (u64 i = 0; i <= sv.len - sub.len; i++)
@@ -112,14 +110,14 @@ pub i64 indexOf(strView sv, strView sub)
     return -1;
 }
 
-pub i64 indexOfChar(strView sv, char ch)
+pub i64 indexOfChar(std.string.strView sv, char ch)
 {
     for (u64 i = 0; i < sv.len; i++)
         if (sv.ptr[i] == ch) return (i64)i;
     return -1;
 }
 
-pub i64 lastIndexOf(strView sv, strView sub)
+pub i64 lastIndexOf(std.string.strView sv, std.string.strView sub)
 {
     if (sub.len > sv.len) return -1;
     u64 limit = sv.len - sub.len;
@@ -142,37 +140,37 @@ pub i64 lastIndexOf(strView sv, strView sub)
     return -1;
 }
 
-pub string replace(strView sv, strView from, strView to)
+pub std.string.String replace(std.string.strView sv, std.string.strView from, std.string.strView to)
 {
-    string out = string.new();
+    std.string.String out = std.string.String::new();
     if (from.len == 0)
     {
         for (u64 i = 0; i <= sv.len; i++)
         {
             out.pushView(&out, to);
-            if (i < sv.len) out.pushView(&out, strView::fromParts(sv.ptr + i, 1));
+            if (i < sv.len) out.pushView(&out, std.string.strView::fromParts(sv.ptr + i, 1));
         }
         return out;
     }
     u64 i = 0;
     while (i < sv.len)
     {
-        i64 idx = indexOf(strView::fromParts(sv.ptr + i, sv.len - i), from);
+        i64 idx = indexOf(std.string.strView::fromParts(sv.ptr + i, sv.len - i), from);
         if (idx < 0)
         {
-            out.pushView(&out, strView::fromParts(sv.ptr + i, sv.len - i));
+            out.pushView(&out, std.string.strView::fromParts(sv.ptr + i, sv.len - i));
             break;
         }
-        if ((u64)idx > 0) out.pushView(&out, strView::fromParts(sv.ptr + i, (u64)idx));
+        if ((u64)idx > 0) out.pushView(&out, std.string.strView::fromParts(sv.ptr + i, (u64)idx));
         out.pushView(&out, to);
         i += (u64)idx + from.len;
     }
     return out;
 }
 
-pub string join(const strView* parts, u64 count, strView sep)
+pub std.string.String join(const std.string.strView* parts, u64 count, std.string.strView sep)
 {
-    string out = string.new();
+    std.string.String out = std.string.String::new();
     for (u64 i = 0; i < count; i++)
     {
         if (i > 0) out.pushView(&out, sep);
@@ -181,9 +179,9 @@ pub string join(const strView* parts, u64 count, strView sep)
     return out;
 }
 
-pub string joinVec(const vec<strView>* parts, strView sep)
+pub std.string.String joinVec(const std.vec.vec<std.string.strView>* parts, std.string.strView sep)
 {
-    string out = string.new();
+    std.string.String out = std.string.String::new();
     for (u64 i = 0; i < parts->count(parts); i++)
     {
         if (i > 0) out.pushView(&out, sep);
@@ -192,15 +190,15 @@ pub string joinVec(const vec<strView>* parts, strView sep)
     return out;
 }
 
-pub strView substr(strView sv, u64 start, u64 len)
+pub std.string.strView substr(std.string.strView sv, u64 start, u64 len)
 {
-    if (start >= sv.len) return strView::empty();
+    if (start >= sv.len) return std.string.strView::empty();
     u64 remaining = sv.len - start;
     u64 clen = len < remaining ? len : remaining;
-    return strView::fromParts(sv.ptr + start, clen);
+    return std.string.strView::fromParts(sv.ptr + start, clen);
 }
 
-pub bool equalsIgnoreCase(strView a, strView b)
+pub bool equalsIgnoreCase(std.string.strView a, std.string.strView b)
 {
     if (a.len != b.len) return false;
     for (u64 i = 0; i < a.len; i++)

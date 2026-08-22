@@ -17,27 +17,27 @@ pub struct Timeval
 pub Timespec nowMonotonic()
 {
     Timespec ts;
-    std.platform.libc.clock_gettime(CLOCK_MONOTONIC, &ts);
+    std.libc.clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts;
 }
 
 pub Timespec nowRealtime()
 {
     Timespec ts;
-    std.platform.libc.clock_gettime(0, &ts);
+    std.libc.clock_gettime(0, &ts);
     return ts;
 }
 
 pub Timeval nowTimeval()
 {
     Timeval tv;
-    std.platform.libc.gettimeofday(&tv, null);
+    std.libc.gettimeofday(&tv, null);
     return tv;
 }
 
 pub u64 unixSeconds()
 {
-    return std.platform.libc.time(null);
+    return std.libc.time(null);
 }
 
 pub Timespec addTimespec(Timespec a, Timespec b)
@@ -81,5 +81,5 @@ pub void sleepMs(u64 ms)
     Timespec ts;
     ts.sec = (i64)(ms / 1000u);
     ts.nsec = (i64)((ms % 1000u) * 1000000u);
-    std.platform.libc.nanosleep(&ts, null);
+    std.libc.nanosleep(&ts, null);
 }

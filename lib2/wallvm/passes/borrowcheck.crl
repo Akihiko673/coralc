@@ -1,12 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
-mod mman = import(lib, "std/memory/mman.crl");
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 // Optional IR-based borrow check. This is a diagnostic pass, it never
 // rewrites the IR, it only reports suspicious alias patterns.
@@ -72,9 +65,9 @@ pub struct BorrowCheckOptions
 
 pub struct BorrowCheckPass
 {
-    ir_types.IrContext* ctx;
-    ir_types.IrModule* module;
-    ir_types.IrFunc* curFunc;
+    wallvm.ir_types.IrContext* ctx;
+    wallvm.ir_types.IrModule* module;
+    wallvm.ir_types.IrFunc* curFunc;
     u32 curNblocks;
     u64 violations;
     u64 maxParams;
@@ -84,7 +77,7 @@ pub struct BorrowCheckPass
     u32 violLen;
     u32 violCap;
 
-    BorrowCheckPass new(ir_types.IrContext* ctx, BorrowCheckOptions* options)
+    BorrowCheckPass new(wallvm.ir_types.IrContext* ctx, BorrowCheckOptions* options)
     {
         BorrowCheckPass p;
         p.ctx = ctx;
@@ -147,7 +140,7 @@ pub struct BorrowCheckPass
         return "borrow check violation";
     }
 
-    void recordViolation(BorrowCheckKind kind, ir_types.IrInst* at)
+    void recordViolation(BorrowCheckKind kind, wallvm.ir_types.IrInst* at)
     {
         self.violations++;
         BorrowViolation v;
@@ -170,10 +163,10 @@ pub struct BorrowCheckPass
             if (self.violLen >= self.violCap)
             {
                 u32 nc = self.violCap ? self.violCap * 2 : 16;
-                BorrowViolation* nl = mman.alloc<BorrowViolation>(nc);
+                BorrowViolation* nl = std.mman.alloc<BorrowViolation>(nc);
                 for (u32 i = 0; i < self.violLen; i++)
                     nl[i] = self.violList[i];
-                if (self.violList) mman.dealloc<BorrowViolation>(self.violList);
+                if (self.violList) std.mman.dealloc<BorrowViolation>(self.violList);
                 self.violList = nl;
                 self.violCap = nc;
             }
@@ -185,7 +178,7 @@ pub struct BorrowCheckPass
 
     void deinit()
     {
-        if (self.violList) mman.dealloc<BorrowViolation>(self.violList);
+        if (self.violList) std.mman.dealloc<BorrowViolation>(self.violList);
         self.violList = null;
         self.violLen = 0;
         self.violCap = 0;
@@ -195,8 +188,8 @@ pub struct BorrowCheckPass
     // A bitcast keeps the same address as its operand, and a phi may be any
     // of its incoming values, so those values denote the same region base.
     // Unifying them makes the region model chase across casts and merges.
-    ir_types.IrValue** ufKeys;
-    ir_types.IrValue** ufPars;
+    wallvm.ir_types.IrValue** ufKeys;
+    wallvm.ir_types.IrValue** ufPars;
     u32 ufLen;
     u32 ufCap;
 
@@ -204,8 +197,8 @@ pub struct BorrowCheckPass
     {
         if (self.ufLen < self.ufCap) return;
         u32 nc = self.ufCap ? self.ufCap * 2 : 16;
-        ir_types.IrValue** nk = mman.alloc<ir_types.IrValue*>(nc);
-        ir_types.IrValue** np = mman.alloc<ir_types.IrValue*>(nc);
+        wallvm.ir_types.IrValue** nk = std.mman.alloc<wallvm.ir_types.IrValue*>(nc);
+        wallvm.ir_types.IrValue** np = std.mman.alloc<wallvm.ir_types.IrValue*>(nc);
         for (u32 i = 0; i < self.ufLen; i++)
         {
             nk[i] = self.ufKeys[i];
@@ -213,15 +206,15 @@ pub struct BorrowCheckPass
         }
         if (self.ufKeys)
         {
-            mman.dealloc<ir_types.IrValue*>(self.ufKeys);
-            mman.dealloc<ir_types.IrValue*>(self.ufPars);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(self.ufKeys);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(self.ufPars);
         }
         self.ufKeys = nk;
         self.ufPars = np;
         self.ufCap = nc;
     }
 
-    u32 ufIndex(ir_types.IrValue* v)
+    u32 ufIndex(wallvm.ir_types.IrValue* v)
     {
         for (u32 i = 0; i < self.ufLen; i++)
             if (self.ufKeys[i] == v) return i;
@@ -232,7 +225,7 @@ pub struct BorrowCheckPass
         return self.ufLen - 1;
     }
 
-    ir_types.IrValue* ufFind(ir_types.IrValue* v)
+    wallvm.ir_types.IrValue* ufFind(wallvm.ir_types.IrValue* v)
     {
         if (!v) return v;
         u32 i = self.ufIndex(v);
@@ -248,34 +241,34 @@ pub struct BorrowCheckPass
         return self.ufKeys[root];
     }
 
-    void ufUnion(ir_types.IrValue* a, ir_types.IrValue* b)
+    void ufUnion(wallvm.ir_types.IrValue* a, wallvm.ir_types.IrValue* b)
     {
         if (!a || !b) return;
-        ir_types.IrValue* ra = self.ufFind(a);
-        ir_types.IrValue* rb = self.ufFind(b);
+        wallvm.ir_types.IrValue* ra = self.ufFind(a);
+        wallvm.ir_types.IrValue* rb = self.ufFind(b);
         if (ra == rb) return;
         self.ufPars[self.ufIndex(rb)] = ra;
     }
 
-    void ufBuild(ir_types.IrFunc* func)
+    void ufBuild(wallvm.ir_types.IrFunc* func)
     {
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             for (u32 ii = 0; ii < bb.ninsts; ii++)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
-                if (inst.opcode == ir_opcodes.IrOpcode::Bitcast)
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
+                if (inst.opcode == wallvm.irOps.IrOpcode::Bitcast)
                 {
                     if (inst.nops >= 1 && inst.ops[0])
-                        self.ufUnion((ir_types.IrValue*)inst, inst.ops[0]);
+                        self.ufUnion((wallvm.ir_types.IrValue*)inst, inst.ops[0]);
                 }
-                else if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                else if (inst.opcode == wallvm.irOps.IrOpcode::Phi)
                 {
                     // Interleaved val, block, val, block...
                     for (u32 oi = 0; oi + 1 < inst.nops; oi += 2)
                         if (inst.ops[oi])
-                            self.ufUnion((ir_types.IrValue*)inst, inst.ops[oi]);
+                            self.ufUnion((wallvm.ir_types.IrValue*)inst, inst.ops[oi]);
                 }
             }
         }
@@ -285,8 +278,8 @@ pub struct BorrowCheckPass
     {
         if (self.ufKeys)
         {
-            mman.dealloc<ir_types.IrValue*>(self.ufKeys);
-            mman.dealloc<ir_types.IrValue*>(self.ufPars);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(self.ufKeys);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(self.ufPars);
         }
         self.ufKeys = null;
         self.ufPars = null;
@@ -304,7 +297,7 @@ pub struct BorrowCheckPass
         if (self.maxParams == 0) return;
         if (self.module.nfuncs == 0) return;
 
-        self.caps = mman.alloc<bool>(self.module.nfuncs * self.maxParams);
+        self.caps = std.mman.alloc<bool>(self.module.nfuncs * self.maxParams);
         for (u64 i = 0; i < self.module.nfuncs * self.maxParams; i++)
             self.caps[i] = false;
 
@@ -318,27 +311,27 @@ pub struct BorrowCheckPass
             guard++;
             for (u32 fi = 0; fi < self.module.nfuncs; fi++)
             {
-                ir_types.IrFunc* f = self.module.funcs[fi];
+                wallvm.ir_types.IrFunc* f = self.module.funcs[fi];
                 if (f.isExtern || f.nblocks == 0) continue;
 
                 for (u32 bi = 0; bi < f.nblocks; bi++)
                 {
-                    ir_types.IrBlock* bb = f.blocks[bi];
+                    wallvm.ir_types.IrBlock* bb = f.blocks[bi];
                     for (u32 ii = 0; ii < bb.ninsts; ii++)
                     {
-                        ir_types.IrInst* inst = bb.insts[ii];
-                        if (inst.opcode == ir_opcodes.IrOpcode::Store && inst.nops >= 2)
+                        wallvm.ir_types.IrInst* inst = bb.insts[ii];
+                        if (inst.opcode == wallvm.irOps.IrOpcode::Store && inst.nops >= 2)
                         {
                             i32 pi = self.paramIndexOf(f, inst.ops[1]);
                             if (pi < 0) continue;
                             u64 bit = (u64)fi * self.maxParams + (u64)pi;
                             if (!self.caps[bit]) { self.caps[bit] = true; changed = true; }
                         }
-                        else if (inst.opcode == ir_opcodes.IrOpcode::Call && inst.nops >= 2)
+                        else if (inst.opcode == wallvm.irOps.IrOpcode::Call && inst.nops >= 2)
                         {
-                            ir_types.IrValue* calleeVal = inst.ops[0];
-                            if (!calleeVal || calleeVal.kind != ir_types.IrValueKind::Func) continue;
-                            ir_types.IrFunc* g = (ir_types.IrFunc*)calleeVal;
+                            wallvm.ir_types.IrValue* calleeVal = inst.ops[0];
+                            if (!calleeVal || calleeVal.kind != wallvm.ir_types.IrValueKind::Func) continue;
+                            wallvm.ir_types.IrFunc* g = (wallvm.ir_types.IrFunc*)calleeVal;
                             if (g.isExtern || g.nblocks == 0) continue;
                             i32 gi = -1;
                             for (u32 x = 0; x < self.module.nfuncs; x++)
@@ -370,7 +363,7 @@ pub struct BorrowCheckPass
     {
         if (self.caps)
         {
-            mman.dealloc<bool>(self.caps);
+            std.mman.dealloc<bool>(self.caps);
             self.caps = null;
         }
         self.maxParams = 0;
@@ -378,11 +371,11 @@ pub struct BorrowCheckPass
 
     // A parameter is one of the leading instructions of the entry block
     // (the transpiler's convention; inlining maps them from there).
-    i32 paramIndexOf(ir_types.IrFunc* f, ir_types.IrValue* v)
+    i32 paramIndexOf(wallvm.ir_types.IrFunc* f, wallvm.ir_types.IrValue* v)
     {
-        if (!v || v.kind != ir_types.IrValueKind::Inst) return -1;
+        if (!v || v.kind != wallvm.ir_types.IrValueKind::Inst) return -1;
         if (f.nblocks == 0 || f.nparams == 0) return -1;
-        ir_types.IrBlock* entry = f.blocks[0];
+        wallvm.ir_types.IrBlock* entry = f.blocks[0];
         u32 n = f.nparams;
         if (entry.ninsts < n) n = entry.ninsts;
         for (u32 i = 0; i < n; i++)
@@ -393,10 +386,10 @@ pub struct BorrowCheckPass
     // Can the callee write through the argument at param position argIdx?
     // Unknown callees (extern, bodyless, non-function values) are assumed
     // to write, preserving the conservative baseline.
-    bool calleeWrites(ir_types.IrValue* calleeVal, u32 argIdx)
+    bool calleeWrites(wallvm.ir_types.IrValue* calleeVal, u32 argIdx)
     {
-        if (!calleeVal || calleeVal.kind != ir_types.IrValueKind::Func) return true;
-        ir_types.IrFunc* g = (ir_types.IrFunc*)calleeVal;
+        if (!calleeVal || calleeVal.kind != wallvm.ir_types.IrValueKind::Func) return true;
+        wallvm.ir_types.IrFunc* g = (wallvm.ir_types.IrFunc*)calleeVal;
         if (g.isExtern || g.nblocks == 0) return true;
         if (self.caps == null) return true;
         if (argIdx >= g.nparams) return true;
@@ -412,7 +405,7 @@ pub struct BorrowCheckPass
         return true;
     }
 
-    bool run(ir_types.IrFunc* func)
+    bool run(wallvm.ir_types.IrFunc* func)
     {
         self.violations = 0;
         if (!func || func.nblocks == 0) return false;
@@ -437,18 +430,18 @@ pub struct BorrowCheckPass
     // Chase GEP chains of constant indices to a base pointer and a byte
     // offset. Returns false when the address is not statically known, in
     // which case the value still aliases its own SSA value.
-    bool regionOf(ir_types.IrValue* v, ir_types.IrValue** base, u64* off)
+    bool regionOf(wallvm.ir_types.IrValue* v, wallvm.ir_types.IrValue** base, u64* off)
     {
-        ir_types.IrValue* cur = v;
+        wallvm.ir_types.IrValue* cur = v;
         u64 acc = 0;
-        while (cur && cur.kind == ir_types.IrValueKind::Inst)
+        while (cur && cur.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* inst = (ir_types.IrInst*)cur;
-            if (inst.opcode != ir_opcodes.IrOpcode::Gep) break;
+            wallvm.ir_types.IrInst* inst = (wallvm.ir_types.IrInst*)cur;
+            if (inst.opcode != wallvm.irOps.IrOpcode::Gep) break;
             for (u32 i = 1; i < inst.nops; i++)
             {
-                ir_types.IrValue* idx = inst.ops[i];
-                if (!idx || idx.kind != ir_types.IrValueKind::ConstInt) return false;
+                wallvm.ir_types.IrValue* idx = inst.ops[i];
+                if (!idx || idx.kind != wallvm.ir_types.IrValueKind::ConstInt) return false;
                 acc += idx.valData * 8;
             }
             cur = inst.ops[0];
@@ -460,7 +453,7 @@ pub struct BorrowCheckPass
 
     // Byte extent of a region. Pointer arguments are treated as covering one
     // 8-byte unit of the backend's addressing model.
-    u64 regionWidth(ir_types.IrValue* v, bool isLoad)
+    u64 regionWidth(wallvm.ir_types.IrValue* v, bool isLoad)
     {
         if (isLoad)
         {
@@ -475,23 +468,23 @@ pub struct BorrowCheckPass
     // resolve to the stored regions; a load from a slot with no recorded
     // stores (extern code may have written it) is unknown provenance and
     // overlaps everything.
-    ir_types.IrValue** alSlotBases;
+    wallvm.ir_types.IrValue** alSlotBases;
     u64* alSlotOffs;
-    ir_types.IrValue** alStoredBases;
+    wallvm.ir_types.IrValue** alStoredBases;
     u64* alStoredOffs;
     u32 alLen;
     u32 alCap;
 
-    void alAdd(ir_types.IrValue* sb, u64 so, ir_types.IrValue* vb, u64 vo)
+    void alAdd(wallvm.ir_types.IrValue* sb, u64 so, wallvm.ir_types.IrValue* vb, u64 vo)
     {
         if (!sb || !vb) return;
         if (self.alLen >= self.alCap)
         {
             u32 nc = self.alCap ? self.alCap * 2 : 16;
-            ir_types.IrValue** nsb = mman.alloc<ir_types.IrValue*>(nc);
-            u64* nso = mman.alloc<u64>(nc);
-            ir_types.IrValue** nvb = mman.alloc<ir_types.IrValue*>(nc);
-            u64* nvo = mman.alloc<u64>(nc);
+            wallvm.ir_types.IrValue** nsb = std.mman.alloc<wallvm.ir_types.IrValue*>(nc);
+            u64* nso = std.mman.alloc<u64>(nc);
+            wallvm.ir_types.IrValue** nvb = std.mman.alloc<wallvm.ir_types.IrValue*>(nc);
+            u64* nvo = std.mman.alloc<u64>(nc);
             for (u32 i = 0; i < self.alLen; i++)
             {
                 nsb[i] = self.alSlotBases[i];
@@ -501,10 +494,10 @@ pub struct BorrowCheckPass
             }
             if (self.alSlotBases)
             {
-                mman.dealloc<ir_types.IrValue*>(self.alSlotBases);
-                mman.dealloc<u64>(self.alSlotOffs);
-                mman.dealloc<ir_types.IrValue*>(self.alStoredBases);
-                mman.dealloc<u64>(self.alStoredOffs);
+                std.mman.dealloc<wallvm.ir_types.IrValue*>(self.alSlotBases);
+                std.mman.dealloc<u64>(self.alSlotOffs);
+                std.mman.dealloc<wallvm.ir_types.IrValue*>(self.alStoredBases);
+                std.mman.dealloc<u64>(self.alStoredOffs);
             }
             self.alSlotBases = nsb;
             self.alSlotOffs = nso;
@@ -519,12 +512,12 @@ pub struct BorrowCheckPass
         self.alLen++;
     }
 
-    bool isFuncValue(ir_types.IrValue* v)
+    bool isFuncValue(wallvm.ir_types.IrValue* v)
     {
-        if (!v || v.kind != ir_types.IrValueKind::Func) return false;
+        if (!v || v.kind != wallvm.ir_types.IrValueKind::Func) return false;
         if (!self.module) return false;
         for (u32 i = 0; i < self.module.nfuncs; i++)
-            if (self.module.funcs[i] == (ir_types.IrFunc*)v) return true;
+            if (self.module.funcs[i] == (wallvm.ir_types.IrFunc*)v) return true;
         return false;
     }
 
@@ -533,21 +526,21 @@ pub struct BorrowCheckPass
         if (!self.module) return;
         for (u32 fi = 0; fi < self.module.nfuncs; fi++)
         {
-            ir_types.IrFunc* f = self.module.funcs[fi];
+            wallvm.ir_types.IrFunc* f = self.module.funcs[fi];
             if (f.isExtern || f.nblocks == 0) continue;
             for (u32 bi = 0; bi < f.nblocks; bi++)
             {
-                ir_types.IrBlock* bb = f.blocks[bi];
+                wallvm.ir_types.IrBlock* bb = f.blocks[bi];
                 for (u32 ii = 0; ii < bb.ninsts; ii++)
                 {
-                    ir_types.IrInst* inst = bb.insts[ii];
-                    if (inst.opcode != ir_opcodes.IrOpcode::Store || inst.nops < 2) continue;
-                    ir_types.IrValue* slotB = null;
+                    wallvm.ir_types.IrInst* inst = bb.insts[ii];
+                    if (inst.opcode != wallvm.irOps.IrOpcode::Store || inst.nops < 2) continue;
+                    wallvm.ir_types.IrValue* slotB = null;
                     u64 slotO = 0;
                     self.regionOf(inst.ops[1], &slotB, &slotO);
-                    if (!slotB || slotB.kind != ir_types.IrValueKind::Func) continue;
+                    if (!slotB || slotB.kind != wallvm.ir_types.IrValueKind::Func) continue;
                     if (self.isFuncValue(slotB)) continue;
-                    ir_types.IrValue* valB = null;
+                    wallvm.ir_types.IrValue* valB = null;
                     u64 valO = 0;
                     self.regionOf(inst.ops[0], &valB, &valO);
                     if (!valB) continue;
@@ -561,10 +554,10 @@ pub struct BorrowCheckPass
     {
         if (self.alSlotBases)
         {
-            mman.dealloc<ir_types.IrValue*>(self.alSlotBases);
-            mman.dealloc<u64>(self.alSlotOffs);
-            mman.dealloc<ir_types.IrValue*>(self.alStoredBases);
-            mman.dealloc<u64>(self.alStoredOffs);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(self.alSlotBases);
+            std.mman.dealloc<u64>(self.alSlotOffs);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(self.alStoredBases);
+            std.mman.dealloc<u64>(self.alStoredOffs);
         }
         self.alSlotBases = null;
         self.alSlotOffs = null;
@@ -575,18 +568,18 @@ pub struct BorrowCheckPass
     }
 
     // Is this value a pointer that came out of a memory load?
-    bool isLoadedPointer(ir_types.IrValue* v)
+    bool isLoadedPointer(wallvm.ir_types.IrValue* v)
     {
-        if (!v || v.kind != ir_types.IrValueKind::Inst) return false;
-        ir_types.IrInst* inst = (ir_types.IrInst*)v;
-        return inst.opcode == ir_opcodes.IrOpcode::Load;
+        if (!v || v.kind != wallvm.ir_types.IrValueKind::Inst) return false;
+        wallvm.ir_types.IrInst* inst = (wallvm.ir_types.IrInst*)v;
+        return inst.opcode == wallvm.irOps.IrOpcode::Load;
     }
 
     // Region (sb, so, known) vs value b's region, identity + range only.
-    bool regionOverlapsValue(ir_types.IrValue* sb, u64 so, bool sKnown,
-                             ir_types.IrValue* b, bool bLoad)
+    bool regionOverlapsValue(wallvm.ir_types.IrValue* sb, u64 so, bool sKnown,
+                             wallvm.ir_types.IrValue* b, bool bLoad)
     {
-        ir_types.IrValue* bb = null;
+        wallvm.ir_types.IrValue* bb = null;
         u64 bo = 0;
         bool bk = self.regionOf(b, &bb, &bo);
         if (!bb) return false;
@@ -599,17 +592,17 @@ pub struct BorrowCheckPass
     }
 
     // The load's address slot, as a region.
-    bool slotOf(ir_types.IrValue* v, ir_types.IrValue** sb, u64* so)
+    bool slotOf(wallvm.ir_types.IrValue* v, wallvm.ir_types.IrValue** sb, u64* so)
     {
         if (!self.isLoadedPointer(v)) return false;
-        ir_types.IrInst* load = (ir_types.IrInst*)v;
+        wallvm.ir_types.IrInst* load = (wallvm.ir_types.IrInst*)v;
         return self.regionOf(load.ops[0], sb, so);
     }
 
-    bool regionsOverlap(ir_types.IrValue* a, bool aLoad, ir_types.IrValue* b, bool bLoad)
+    bool regionsOverlap(wallvm.ir_types.IrValue* a, bool aLoad, wallvm.ir_types.IrValue* b, bool bLoad)
     {
-        ir_types.IrValue* ab = null;
-        ir_types.IrValue* bb = null;
+        wallvm.ir_types.IrValue* ab = null;
+        wallvm.ir_types.IrValue* bb = null;
         u64 ao = 0;
         u64 bo = 0;
         bool ak = self.regionOf(a, &ab, &ao);
@@ -620,7 +613,7 @@ pub struct BorrowCheckPass
         // slot they came from has recorded stores; unknown overlaps all.
         if (self.isLoadedPointer(a))
         {
-            ir_types.IrValue* slotB = null;
+            wallvm.ir_types.IrValue* slotB = null;
             u64 slotO = 0;
             if (!self.slotOf(a, &slotB, &slotO)) return true;
             bool any = false;
@@ -629,7 +622,7 @@ pub struct BorrowCheckPass
                 if (self.alSlotBases[i] != slotB) continue;
                 if (self.alSlotOffs[i] != slotO) continue;
                 any = true;
-                ir_types.IrValue* stored = self.alStoredBases[i];
+                wallvm.ir_types.IrValue* stored = self.alStoredBases[i];
                 u64 storedO = self.alStoredOffs[i];
                 if (self.isLoadedPointer(stored))
                 {
@@ -642,7 +635,7 @@ pub struct BorrowCheckPass
         }
         if (self.isLoadedPointer(b))
         {
-            ir_types.IrValue* slotB = null;
+            wallvm.ir_types.IrValue* slotB = null;
             u64 slotO = 0;
             if (!self.slotOf(b, &slotB, &slotO)) return true;
             bool any = false;
@@ -651,7 +644,7 @@ pub struct BorrowCheckPass
                 if (self.alSlotBases[i] != slotB) continue;
                 if (self.alSlotOffs[i] != slotO) continue;
                 any = true;
-                ir_types.IrValue* stored = self.alStoredBases[i];
+                wallvm.ir_types.IrValue* stored = self.alStoredBases[i];
                 u64 storedO = self.alStoredOffs[i];
                 if (self.isLoadedPointer(stored))
                 {
@@ -672,21 +665,21 @@ pub struct BorrowCheckPass
         return false;
     }
 
-    bool isPointerValue(ir_types.IrValue* v)
+    bool isPointerValue(wallvm.ir_types.IrValue* v)
     {
         if (!v) return false;
-        if (v.kind == ir_types.IrValueKind::Inst)
+        if (v.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* inst = (ir_types.IrInst*)v;
-            if (inst.opcode == ir_opcodes.IrOpcode::Gep ||
-                inst.opcode == ir_opcodes.IrOpcode::Alloca ||
-                inst.opcode == ir_opcodes.IrOpcode::Load) return true;
+            wallvm.ir_types.IrInst* inst = (wallvm.ir_types.IrInst*)v;
+            if (inst.opcode == wallvm.irOps.IrOpcode::Gep ||
+                inst.opcode == wallvm.irOps.IrOpcode::Alloca ||
+                inst.opcode == wallvm.irOps.IrOpcode::Load) return true;
         }
-        if (v.type && v.type.kind == ir_types.IrTypeKind::Ptr) return true;
+        if (v.type && v.type.kind == wallvm.ir_types.IrTypeKind::Ptr) return true;
         return false;
     }
 
-    u32 instIndex(ir_types.IrBlock* bb, ir_types.IrInst* target)
+    u32 instIndex(wallvm.ir_types.IrBlock* bb, wallvm.ir_types.IrInst* target)
     {
         for (u32 i = 0; i < bb.ninsts; i++)
             if (bb.insts[i] == target) return i;
@@ -698,13 +691,13 @@ pub struct BorrowCheckPass
     // or flows out of the block (or into it from a predecessor). This
     // replaces the previous heuristic that any user in another block made
     // the value live, now only blocks reachable from the call count.
-    ir_types.IrInst** liveOrder;
+    wallvm.ir_types.IrInst** liveOrder;
     u32 liveN;
     u64** liveIn;
     u64** liveOut;
     u32 liveWords;
 
-    u32 bitOf(ir_types.IrValue* v)
+    u32 bitOf(wallvm.ir_types.IrValue* v)
     {
         for (u32 i = 0; i < self.liveN; i++)
             if (self.liveOrder[i] == v) return i;
@@ -722,7 +715,7 @@ pub struct BorrowCheckPass
         return (set[bit >> 6] & (1u << (bit & 63))) != 0;
     }
 
-    void buildLiveness(ir_types.IrFunc* func)
+    void buildLiveness(wallvm.ir_types.IrFunc* func)
     {
         self.liveN = 0;
         for (u32 bi = 0; bi < func.nblocks; bi++)
@@ -730,24 +723,24 @@ pub struct BorrowCheckPass
         if (self.liveN == 0) return;
         self.liveWords = (self.liveN + 63) / 64;
 
-        self.liveOrder = mman.alloc<ir_types.IrInst*>(self.liveN);
+        self.liveOrder = std.mman.alloc<wallvm.ir_types.IrInst*>(self.liveN);
         u32 oi = 0;
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             for (u32 ii = 0; ii < bb.ninsts; ii++)
                 self.liveOrder[oi++] = bb.insts[ii];
         }
 
         u32 nb = func.nblocks;
-        self.liveIn = mman.alloc<u64*>(nb);
-        self.liveOut = mman.alloc<u64*>(nb);
-        u64** use = mman.alloc<u64*>(nb);
+        self.liveIn = std.mman.alloc<u64*>(nb);
+        self.liveOut = std.mman.alloc<u64*>(nb);
+        u64** use = std.mman.alloc<u64*>(nb);
         for (u32 bi = 0; bi < nb; bi++)
         {
-            self.liveIn[bi] = mman.alloc<u64>(self.liveWords);
-            self.liveOut[bi] = mman.alloc<u64>(self.liveWords);
-            use[bi] = mman.alloc<u64>(self.liveWords);
+            self.liveIn[bi] = std.mman.alloc<u64>(self.liveWords);
+            self.liveOut[bi] = std.mman.alloc<u64>(self.liveWords);
+            use[bi] = std.mman.alloc<u64>(self.liveWords);
             for (u32 w = 0; w < self.liveWords; w++)
             {
                 self.liveIn[bi][w] = 0;
@@ -759,13 +752,13 @@ pub struct BorrowCheckPass
         // Uses, every operand that is an instruction of this function.
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             for (u32 ii = 0; ii < bb.ninsts; ii++)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
                 for (u32 oi = 0; oi < inst.nops; oi++)
                 {
-                    if (!inst.ops[oi] || inst.ops[oi].kind != ir_types.IrValueKind::Inst) continue;
+                    if (!inst.ops[oi] || inst.ops[oi].kind != wallvm.ir_types.IrValueKind::Inst) continue;
                     u32 bit = self.bitOf(inst.ops[oi]);
                     if (bit < self.liveN) self.setBit(use[bi], bit);
                 }
@@ -782,7 +775,7 @@ pub struct BorrowCheckPass
             guard++;
             for (u32 bi = 0; bi < nb; bi++)
             {
-                ir_types.IrBlock* bb = func.blocks[bi];
+                wallvm.ir_types.IrBlock* bb = func.blocks[bi];
                 u64* out = self.liveOut[bi];
                 bool outSet = false;
                 for (u32 si = 0; si < bb.nsuccs; si++)
@@ -809,11 +802,11 @@ pub struct BorrowCheckPass
         }
 
         for (u32 bi = 0; bi < nb; bi++)
-            mman.dealloc<u64>(use[bi]);
-        mman.dealloc<u64*>(use);
+            std.mman.dealloc<u64>(use[bi]);
+        std.mman.dealloc<u64*>(use);
     }
 
-    u32 blockIndex(ir_types.IrFunc* func, ir_types.IrBlock* bb)
+    u32 blockIndex(wallvm.ir_types.IrFunc* func, wallvm.ir_types.IrBlock* bb)
     {
         for (u32 bi = 0; bi < func.nblocks; bi++)
             if (func.blocks[bi] == bb) return bi;
@@ -821,12 +814,12 @@ pub struct BorrowCheckPass
     }
 
     // Definitions of a block, every instruction it holds.
-    u64 defsWord(ir_types.IrBlock* bb, u32 w)
+    u64 defsWord(wallvm.ir_types.IrBlock* bb, u32 w)
     {
         u64 mask = 0;
         for (u32 i = 0; i < bb.ninsts; i++)
         {
-            u32 bit = self.bitOf((ir_types.IrValue*)bb.insts[i]);
+            u32 bit = self.bitOf((wallvm.ir_types.IrValue*)bb.insts[i]);
             if (bit < self.liveN && (bit >> 6) == w)
                 mask |= 1u << (bit & 63);
         }
@@ -837,18 +830,18 @@ pub struct BorrowCheckPass
     {
         if (self.liveOrder)
         {
-            mman.dealloc<ir_types.IrInst*>(self.liveOrder);
+            std.mman.dealloc<wallvm.ir_types.IrInst*>(self.liveOrder);
             if (self.liveIn)
             {
                 for (u32 bi = 0; bi < self.curNblocks; bi++)
-                    mman.dealloc<u64>(self.liveIn[bi]);
-                mman.dealloc<u64*>(self.liveIn);
+                    std.mman.dealloc<u64>(self.liveIn[bi]);
+                std.mman.dealloc<u64*>(self.liveIn);
             }
             if (self.liveOut)
             {
                 for (u32 bi = 0; bi < self.curNblocks; bi++)
-                    mman.dealloc<u64>(self.liveOut[bi]);
-                mman.dealloc<u64*>(self.liveOut);
+                    std.mman.dealloc<u64>(self.liveOut[bi]);
+                std.mman.dealloc<u64*>(self.liveOut);
             }
         }
         self.liveOrder = null;
@@ -860,15 +853,15 @@ pub struct BorrowCheckPass
 
     // The value is still live when the call executes if it is used after
     // the call in this block, or it flows into/out of the block.
-    bool usedAfter(ir_types.IrInst* load, u32 callIdx, ir_types.IrBlock* bb)
+    bool usedAfter(wallvm.ir_types.IrInst* load, u32 callIdx, wallvm.ir_types.IrBlock* bb)
     {
         for (u32 ji = callIdx + 1; ji < bb.ninsts; ji++)
         {
-            ir_types.IrInst* user = bb.insts[ji];
+            wallvm.ir_types.IrInst* user = bb.insts[ji];
             for (u32 oi = 0; oi < user.nops; oi++)
-                if (user.ops[oi] == (ir_types.IrValue*)load) return true;
+                if (user.ops[oi] == (wallvm.ir_types.IrValue*)load) return true;
         }
-        u32 bit = self.bitOf((ir_types.IrValue*)load);
+        u32 bit = self.bitOf((wallvm.ir_types.IrValue*)load);
         if (bit >= self.liveN) return false;
         u32 bi = self.blockIndex(self.curFunc, bb);
         if (bi >= self.curNblocks) return false;
@@ -877,7 +870,7 @@ pub struct BorrowCheckPass
         return false;
     }
 
-    void checkBlock(ir_types.IrBlock* bb)
+    void checkBlock(wallvm.ir_types.IrBlock* bb)
     {
         // Rule, a store to a region invalidates any still-live load of
         // that region. For every store, any preceding load from an
@@ -885,14 +878,14 @@ pub struct BorrowCheckPass
         // violation, the used value is already stale.
         for (u32 si = 0; si < bb.ninsts; si++)
         {
-            ir_types.IrInst* store = bb.insts[si];
-            if (store.opcode != ir_opcodes.IrOpcode::Store) continue;
+            wallvm.ir_types.IrInst* store = bb.insts[si];
+            if (store.opcode != wallvm.irOps.IrOpcode::Store) continue;
             if (store.nops < 2) continue;
 
             for (u32 li = 0; li < si; li++)
             {
-                ir_types.IrInst* load = bb.insts[li];
-                if (load.opcode != ir_opcodes.IrOpcode::Load) continue;
+                wallvm.ir_types.IrInst* load = bb.insts[li];
+                if (load.opcode != wallvm.irOps.IrOpcode::Load) continue;
                 if (!self.regionsOverlap(load.ops[0], true, store.ops[1], false)) continue;
                 if (self.usedAfter(load, si, bb))
                     self.recordViolation(BorrowCheckKind::StoreVsLiveLoad, store);
@@ -901,19 +894,19 @@ pub struct BorrowCheckPass
 
         for (u32 ci = 0; ci < bb.ninsts; ci++)
         {
-            ir_types.IrInst* call = bb.insts[ci];
-            if (call.opcode != ir_opcodes.IrOpcode::Call || call.nops < 2) continue;
+            wallvm.ir_types.IrInst* call = bb.insts[ci];
+            if (call.opcode != wallvm.irOps.IrOpcode::Call || call.nops < 2) continue;
 
             // Rule, no two pointer arguments may alias the same region
             // when the callee can write through either of them.
             for (u32 ai = 1; ai < call.nops; ai++)
             {
-                ir_types.IrValue* argA = call.ops[ai];
+                wallvm.ir_types.IrValue* argA = call.ops[ai];
                 if (!self.isPointerValue(argA)) continue;
                 if (!self.calleeWrites(call.ops[0], ai - 1)) continue;
                 for (u32 aj = ai + 1; aj < call.nops; aj++)
                 {
-                    ir_types.IrValue* argB = call.ops[aj];
+                    wallvm.ir_types.IrValue* argB = call.ops[aj];
                     if (!self.isPointerValue(argB)) continue;
                     if (self.regionsOverlap(argA, false, argB, false))
                         self.recordViolation(BorrowCheckKind::AliasingCallArgs, call);
@@ -922,7 +915,7 @@ pub struct BorrowCheckPass
 
             for (u32 ai = 1; ai < call.nops; ai++)
             {
-                ir_types.IrValue* arg = call.ops[ai];
+                wallvm.ir_types.IrValue* arg = call.ops[ai];
                 if (!self.isPointerValue(arg)) continue;
                 // Only callees that can write through this argument
                 // threaten the region.
@@ -930,8 +923,8 @@ pub struct BorrowCheckPass
 
                 for (u32 li = 0; li < ci; li++)
                 {
-                    ir_types.IrInst* load = bb.insts[li];
-                    if (load.opcode != ir_opcodes.IrOpcode::Load) continue;
+                    wallvm.ir_types.IrInst* load = bb.insts[li];
+                    if (load.opcode != wallvm.irOps.IrOpcode::Load) continue;
                     if (!self.regionsOverlap(load.ops[0], true, arg, false)) continue;
                     if (self.usedAfter(load, ci, bb))
                         self.recordViolation(BorrowCheckKind::StaleLoadAcrossCall, call);
@@ -941,9 +934,9 @@ pub struct BorrowCheckPass
     }
 }
 
-pub bool irPassBorrowCheck(ir_types.IrFunc* func, void* userdata)
+pub bool irPassBorrowCheck(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     BorrowCheckOptions opts;
     opts.collect = false;

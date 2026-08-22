@@ -1,6 +1,18 @@
 ; WallVM IR
 func @_mmap -> ptr {
   block %entry:
+    %3 = alloca ptr
+    %5 = store void [%4(addr), %3]
+    %6 = alloca ptr
+    %8 = store void [%7(length), %6]
+    %9 = alloca ptr
+    %11 = store void [%10(prot), %9]
+    %12 = alloca ptr
+    %14 = store void [%13(flags), %12]
+    %15 = alloca ptr
+    %17 = store void [%16(fd), %15]
+    %18 = alloca ptr
+    %20 = store void [%19(offset), %18]
     %21 = alloca ptr
     %25 = inlineasm i64 ["movq %2, %%rdi
 	movq %3, %%rsi
@@ -30,19 +42,21 @@ func @_mmap -> ptr {
 }
 func @main -> i32 {
   block %entry:
-    %78 = br void [%66(entry)]
-  block %after_inline:
-    %62 = ret i64 [0]
-  block %entry:
-    %69 = icmp i1 [%29, 18446744073709547521]
-    %70 = icmp i1 [3434, 0]
-    %71 = icmp i1 [%69, 0]
-    %72 = and i1 [%70, %71]
-    %73 = cond_br void [%72, %67(if.then), %68(if.join)]
-  block %if.then:
-    %80 = br void [%79(cont_inline)]
-  block %if.join:
-    %81 = br void [%79(cont_inline)]
-  block %cont_inline:
-    %83 = br void [%65(after_inline)]
+    %48 = alloca ptr
+    %49 = store void [0, %48]
+    %50 = alloca ptr
+    %52 = store void [7, %50]
+    %53 = alloca ptr
+    %55 = store void [3, %53]
+    %56 = alloca ptr
+    %58 = store void [34, %56]
+    %59 = alloca ptr
+    %62 = store void [18446744073709551615, %59]
+    %63 = load ptr [%48]
+    %64 = load i64 [%50]
+    %65 = load i32 [%53]
+    %66 = load i32 [%56]
+    %67 = load i32 [%59]
+    %68 = call ptr [%1(_mmap), %63, %64, %65, %66, %67, 0]
+    %69 = ret i64 [0]
 }

@@ -1,14 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod string = import(lib, "std/text/string.crl");
-mod mman = import(lib, "std/memory/mman.crl");
-mod strutil = import(lib, "std/text/strutil.crl");
-mod libc = import(lib, "std/platform/libc.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std/text/std");
 
 pub enum JsonType
 {
@@ -28,8 +18,8 @@ pub struct JsonValue
     i64 i64Val;
     f64 f64Val;
     string strVal;
-    vec<JsonValue> arrVal;
-    vec<JsonPair> objVal;
+    std.vec.<JsonValue> arrVal;
+    std.vec.<JsonPair> objVal;
 
     JsonValue nullVal()
     {
@@ -74,7 +64,7 @@ pub struct JsonValue
     {
         JsonValue v;
         v.type = JsonType.Array;
-        v.arrVal = vec<JsonValue>::new();
+        v.arrVal = std.vec.<JsonValue>::new();
         return v;
     }
 
@@ -82,7 +72,7 @@ pub struct JsonValue
     {
         JsonValue v;
         v.type = JsonType.Object;
-        v.objVal = vec<JsonPair>::new();
+        v.objVal = std.vec.<JsonPair>::new();
         return v;
     }
 
@@ -154,7 +144,7 @@ struct _ParseCtx
 
     string parseString()
     {
-        string s = string.new();
+        string s = std.string.String::new();
         if (self.next() != '"') { self.error = true; return s; }
         while (self.pos < self.len)
         {
@@ -309,7 +299,7 @@ struct _ParseCtx
                 f64 fv;
                 i32 n;
                 u8* end;
-                fv = libc.strtod(tmp, &end);
+                fv = std.libc.strtod(tmp, &end);
                 if (end != tmp + tpos)
                 {
                     self.error = true;
@@ -365,7 +355,7 @@ struct _ParseCtx
 
 string _escapeString(strView s)
 {
-    string out = string.new();
+    string out = std.string.String::new();
     out.pushByte('"');
     for (u64 i = 0; i < s.len; i++)
     {
@@ -401,7 +391,7 @@ void _serialize(JsonValue* v, string* out)
     if (v->type == JsonType::I64)
     {
         u8 buf[32];
-        i32 n = libc.snprintf(buf, 32u, "%lld", v->i64Val);
+        i32 n = std.libc.snprintf(buf, 32u, "%lld", v->i64Val);
         out->pushView(strView::fromParts((const char*)buf, (u64)n));
         return;
     }
@@ -413,7 +403,7 @@ void _serialize(JsonValue* v, string* out)
             return;
         }
         u8 buf[64];
-        i32 n = libc.snprintf(buf, 64u, "%.17g", v->f64Val);
+        i32 n = std.libc.snprintf(buf, 64u, "%.17g", v->f64Val);
         out->pushView(strView::fromParts((const char*)buf, (u64)n));
         return;
     }
@@ -459,7 +449,7 @@ pub bool parse(strView input, JsonValue* out)
     ctx.len = input.len;
     ctx.pos = 0;
     ctx.error = false;
-    ctx.errMsg = string.new();
+    ctx.errMsg = std.string.String::new();
 
     JsonValue v = ctx.parseValue();
     if (ctx.error) { v.dispose(); ctx.errMsg.free(); *out = JsonValue::nullVal(); return false; }
@@ -472,7 +462,7 @@ pub bool parse(strView input, JsonValue* out)
 
 pub string serialize(JsonValue* v)
 {
-    string out = string.new();
+    string out = std.string.String::new();
     _serialize(v, &out);
     return out;
 }

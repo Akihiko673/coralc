@@ -1,11 +1,5 @@
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-@[[forced_pointer]]
-@[[no_warn_unsafe]]
-@[[no_drop]]
-
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod mman = import("std/memory/mman.crl");
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 pub enum IrTypeKind
 {
@@ -59,11 +53,11 @@ pub struct IrValue
         if (self.nusers >= self.capUsers)
         {
             u32 newCap = self.capUsers ? self.capUsers * 2 : 4;
-            IrInst** newUsers = mman.alloc<IrInst*>(newCap);
+            IrInst** newUsers = std.mman.alloc<IrInst*>(newCap);
             if (self.users)
             {
-                mman.copy<IrInst*>(newUsers, self.users, self.nusers);
-                mman.dealloc<IrInst*>(self.users);
+                std.mman.copy<IrInst*>(newUsers, self.users, self.nusers);
+                std.mman.dealloc<IrInst*>(self.users);
             }
             self.users = newUsers;
             self.capUsers = newCap;
@@ -145,7 +139,7 @@ pub struct IrInst
     {
         if (!file) return;
         u32 len = 0; while (file[len]) len++;
-        char* copy = mman.alloc<char>(len + 1);
+        char* copy = std.mman.alloc<char>(len + 1);
         for (u32 i = 0; i < len; i++) copy[i] = file[i];
         copy[len] = 0;
         self.debugLoc.file = copy;
@@ -158,17 +152,17 @@ pub struct IrInst
         if (self.nvarDbg >= self.capVarDbg)
         {
             u32 nc = self.capVarDbg ? self.capVarDbg * 2 : 4;
-            IrVarDebugInfo* nd = mman.alloc<IrVarDebugInfo>(nc);
+            IrVarDebugInfo* nd = std.mman.alloc<IrVarDebugInfo>(nc);
             if (self.varDbg)
             {
-                mman.copy<IrVarDebugInfo>(nd, self.varDbg, self.nvarDbg);
-                mman.dealloc<IrVarDebugInfo>(self.varDbg);
+                std.mman.copy<IrVarDebugInfo>(nd, self.varDbg, self.nvarDbg);
+                std.mman.dealloc<IrVarDebugInfo>(self.varDbg);
             }
             self.varDbg = nd;
             self.capVarDbg = nc;
         }
         u32 nl = 0; while (name[nl]) nl++;
-        char* nc = mman.alloc<char>(nl + 1);
+        char* nc = std.mman.alloc<char>(nl + 1);
         for (u32 i = 0; i < nl; i++) nc[i] = name[i];
         nc[nl] = 0;
         self.varDbg[self.nvarDbg++] = (IrVarDebugInfo){ nc, ty, line, col, argIdx };
@@ -200,24 +194,24 @@ pub struct IrInst
 
         // Free operands
         if (self.capOps > 0)
-            mman.dealloc<IrValue*>(self.ops);
+            std.mman.dealloc<IrValue*>(self.ops);
 
         // Free users
         if (self.base.capUsers > 0)
-            mman.dealloc<IrInst*>(self.base.users);
+            std.mman.dealloc<IrInst*>(self.base.users);
 
         // Free debug info
         if (self.debugLoc.file)
-            mman.dealloc<char>(self.debugLoc.file);
+            std.mman.dealloc<char>(self.debugLoc.file);
         if (self.varDbg)
         {
             for (u32 i = 0; i < self.nvarDbg; i++)
                 if (self.varDbg[i].varName)
-                    mman.dealloc<char>(self.varDbg[i].varName);
-            mman.dealloc<IrVarDebugInfo>(self.varDbg);
+                    std.mman.dealloc<char>(self.varDbg[i].varName);
+            std.mman.dealloc<IrVarDebugInfo>(self.varDbg);
         }
 
-        mman.dealloc<IrInst>(self);
+        std.mman.dealloc<IrInst>(self);
     }
 
     IrOpcode instOpcode() { return self->opcode; }
@@ -244,11 +238,11 @@ pub struct IrBlock
         if (self.ninsts >= self.capInsts)
         {
             u32 newCap = self.capInsts ? self.capInsts * 2 : 8;
-            IrInst** newInsts = mman.alloc<IrInst*>(newCap);
+            IrInst** newInsts = std.mman.alloc<IrInst*>(newCap);
             if (self.insts)
             {
-                mman.copy<IrInst*>(newInsts, self.insts, self.ninsts);
-                mman.dealloc<IrInst*>(self.insts);
+                std.mman.copy<IrInst*>(newInsts, self.insts, self.ninsts);
+                std.mman.dealloc<IrInst*>(self.insts);
             }
             self.insts = newInsts;
             self.capInsts = newCap;
@@ -265,11 +259,11 @@ pub struct IrBlock
         if (self.ninsts >= self.capInsts)
         {
             u32 newCap = self.capInsts ? self.capInsts * 2 : 8;
-            IrInst** newInsts = mman.alloc<IrInst*>(newCap);
+            IrInst** newInsts = std.mman.alloc<IrInst*>(newCap);
             if (self.insts)
             {
-                mman.copy<IrInst*>(newInsts, self.insts, self.ninsts);
-                mman.dealloc<IrInst*>(self.insts);
+                std.mman.copy<IrInst*>(newInsts, self.insts, self.ninsts);
+                std.mman.dealloc<IrInst*>(self.insts);
             }
             self.insts = newInsts;
             self.capInsts = newCap;
@@ -289,11 +283,11 @@ pub struct IrBlock
         if (self.npreds >= self.capPreds)
         {
             u32 newCap = self.capPreds ? self.capPreds * 2 : 4;
-            IrBlock** newPreds = mman.alloc<IrBlock*>(newCap);
+            IrBlock** newPreds = std.mman.alloc<IrBlock*>(newCap);
             if (self.preds)
             {
-                mman.copy<IrBlock*>(newPreds, self.preds, self.npreds);
-                mman.dealloc<IrBlock*>(self.preds);
+                std.mman.copy<IrBlock*>(newPreds, self.preds, self.npreds);
+                std.mman.dealloc<IrBlock*>(self.preds);
             }
             self.preds = newPreds;
             self.capPreds = newCap;
@@ -306,11 +300,11 @@ pub struct IrBlock
         if (self.nsuccs >= self.capSuccs)
         {
             u32 newCap = self.capSuccs ? self.capSuccs * 2 : 4;
-            IrBlock** newSuccs = mman.alloc<IrBlock*>(newCap);
+            IrBlock** newSuccs = std.mman.alloc<IrBlock*>(newCap);
             if (self.succs)
             {
-                mman.copy<IrBlock*>(newSuccs, self.succs, self.nsuccs);
-                mman.dealloc<IrBlock*>(self.succs);
+                std.mman.copy<IrBlock*>(newSuccs, self.succs, self.nsuccs);
+                std.mman.dealloc<IrBlock*>(self.succs);
             }
             self.succs = newSuccs;
             self.capSuccs = newCap;
@@ -370,11 +364,11 @@ pub struct IrFunc
         if (self.nblocks >= self.capBlocks)
         {
             u32 newCap = self.capBlocks ? self.capBlocks * 2 : 4;
-            IrBlock** newBlocks = mman.alloc<IrBlock*>(newCap);
+            IrBlock** newBlocks = std.mman.alloc<IrBlock*>(newCap);
             if (self.blocks)
             {
-                mman.copy<IrBlock*>(newBlocks, self.blocks, self.nblocks);
-                mman.dealloc<IrBlock*>(self.blocks);
+                std.mman.copy<IrBlock*>(newBlocks, self.blocks, self.nblocks);
+                std.mman.dealloc<IrBlock*>(self.blocks);
             }
             self.blocks = newBlocks;
             self.capBlocks = newCap;
@@ -449,11 +443,11 @@ pub struct IrModule
         if (self.nfuncs >= self.capFuncs)
         {
             u32 newCap = self.capFuncs ? self.capFuncs * 2 : 4;
-            IrFunc** newFuncs = mman.alloc<IrFunc*>(newCap);
+            IrFunc** newFuncs = std.mman.alloc<IrFunc*>(newCap);
             if (self.funcs)
             {
-                mman.copy<IrFunc*>(newFuncs, self.funcs, self.nfuncs);
-                mman.dealloc<IrFunc*>(self.funcs);
+                std.mman.copy<IrFunc*>(newFuncs, self.funcs, self.nfuncs);
+                std.mman.dealloc<IrFunc*>(self.funcs);
             }
             self.funcs = newFuncs;
             self.capFuncs = newCap;
@@ -480,11 +474,11 @@ pub struct IrModule
         if (self.nglobals >= self.capGlobals)
         {
             u32 nc = self.capGlobals ? self.capGlobals * 2 : 4;
-            IrGlobal** ng = mman.alloc<IrGlobal*>(nc);
+            IrGlobal** ng = std.mman.alloc<IrGlobal*>(nc);
             if (self.globals)
             {
-                mman.copy<IrGlobal*>(ng, self.globals, self.nglobals);
-                mman.dealloc<IrGlobal*>(self.globals);
+                std.mman.copy<IrGlobal*>(ng, self.globals, self.nglobals);
+                std.mman.dealloc<IrGlobal*>(self.globals);
             }
             self.globals = ng;
             self.capGlobals = nc;
@@ -498,11 +492,11 @@ pub struct IrModule
         if (self.nconstStrings >= self.capConstStrings)
         {
             u32 nc = self.capConstStrings ? self.capConstStrings * 2 : 4;
-            IrStringConst** ns = mman.alloc<IrStringConst*>(nc);
+            IrStringConst** ns = std.mman.alloc<IrStringConst*>(nc);
             if (self.constStrings)
             {
-                mman.copy<IrStringConst*>(ns, self.constStrings, self.nconstStrings);
-                mman.dealloc<IrStringConst*>(self.constStrings);
+                std.mman.copy<IrStringConst*>(ns, self.constStrings, self.nconstStrings);
+                std.mman.dealloc<IrStringConst*>(self.constStrings);
             }
             self.constStrings = ns;
             self.capConstStrings = nc;
@@ -515,11 +509,11 @@ pub struct IrModule
         if (self.nstructs >= self.capStructs)
         {
             u32 nc = self.capStructs ? self.capStructs * 2 : 4;
-            IrStructType** ns = mman.alloc<IrStructType*>(nc);
+            IrStructType** ns = std.mman.alloc<IrStructType*>(nc);
             if (self.structs)
             {
-                mman.copy<IrStructType*>(ns, self.structs, self.nstructs);
-                mman.dealloc<IrStructType*>(self.structs);
+                std.mman.copy<IrStructType*>(ns, self.structs, self.nstructs);
+                std.mman.dealloc<IrStructType*>(self.structs);
             }
             self.structs = ns;
             self.capStructs = nc;
@@ -590,9 +584,9 @@ pub struct IrContext
 
     IrGlobal* createGlobal(const char* name, IrType* ty, bool isConst, bool isExtern, IrValue* init, u32 alignment)
     {
-        IrGlobal* g = mman.alloc<IrGlobal>(1);
+        IrGlobal* g = std.mman.alloc<IrGlobal>(1);
         u32 nl = 0; if (name) { while (name[nl]) nl++; }
-        char* nc = mman.alloc<char>(nl + 1);
+        char* nc = std.mman.alloc<char>(nl + 1);
         for (u32 i = 0; i < nl; i++) nc[i] = name[i];
         nc[nl] = 0;
         *g = (IrGlobal){
@@ -604,10 +598,10 @@ pub struct IrContext
 
     IrStringConst* createStringConst(const char* str, u32 length)
     {
-        IrStringConst* sc = mman.alloc<IrStringConst>(1);
+        IrStringConst* sc = std.mman.alloc<IrStringConst>(1);
         IrType* charTy = self.tyInt(8);
         IrType* arrTy = self.tyArray(charTy, length + 1);
-        char* copy = mman.alloc<char>(length + 1);
+        char* copy = std.mman.alloc<char>(length + 1);
         for (u32 i = 0; i < length; i++) copy[i] = str[i];
         copy[length] = 0;
         *sc = (IrStringConst){
@@ -677,16 +671,16 @@ pub struct IrContext
 
     IrStructType* createStructType(const char* name, IrType** fields, char** fieldNames, u32 nfields)
     {
-        IrStructType* st = mman.alloc<IrStructType>(1);
+        IrStructType* st = std.mman.alloc<IrStructType>(1);
         u32 nl = 0; if (name) { while (name[nl]) nl++; }
-        char* nc = mman.alloc<char>(nl + 1);
+        char* nc = std.mman.alloc<char>(nl + 1);
         for (u32 i = 0; i < nl; i++) nc[i] = name[i];
         nc[nl] = 0;
 
         // Alignment-aware layout, every field starts at its natural
         // alignment, and the struct size is padded to the maximum field
         // alignment so an array of structs keeps every element aligned.
-        u32* offs = mman.alloc<u32>(nfields > 0 ? nfields : 1);
+        u32* offs = std.mman.alloc<u32>(nfields > 0 ? nfields : 1);
         u32 off = 0;
         u32 maxAlign = 1;
         for (u32 i = 0; i < nfields; i++)
@@ -724,15 +718,15 @@ pub struct IrContext
             else return t;
         }
 
-        IrType* t = mman.alloc<IrType>(1);
+        IrType* t = std.mman.alloc<IrType>(1);
         *t = (IrType){ kind, width, elem, count, ret, params, nparams, isVararg };
 
         u32 idx = self.ntypes;
         if (idx >= self.capTypes)
         {
             u32 newCap = self.capTypes ? self.capTypes * 2 : 16;
-            IrType** newTypes = mman.alloc<IrType*>(newCap);
-            if (self.types) { mman.copy<IrType*>(newTypes, self.types, self.ntypes); mman.dealloc<IrType*>(self.types); }
+            IrType** newTypes = std.mman.alloc<IrType*>(newCap);
+            if (self.types) { std.mman.copy<IrType*>(newTypes, self.types, self.ntypes); std.mman.dealloc<IrType*>(self.types); }
             self.types = newTypes; self.capTypes = newCap;
         }
         self.types[idx] = t;
@@ -746,14 +740,14 @@ pub struct IrContext
             if (self.constInts[i]->type == ty && self.constInts[i]->valData == val)
                 return self.constInts[i];
 
-        IrValue* v = mman.alloc<IrValue>(1);
+        IrValue* v = std.mman.alloc<IrValue>(1);
         *v = (IrValue){ IrValueKind::ConstInt, ty, self.nextValueId(), val, null, null, 0, 0 };
         u32 idx = self.nconstInts;
         if (idx >= self.capConstInts)
         {
             u32 newCap = self.capConstInts ? self.capConstInts * 2 : 16;
-            IrValue** newC = mman.alloc<IrValue*>(newCap);
-            if (self.constInts) { mman.copy<IrValue*>(newC, self.constInts, self.nconstInts); mman.dealloc<IrValue*>(self.constInts); }
+            IrValue** newC = std.mman.alloc<IrValue*>(newCap);
+            if (self.constInts) { std.mman.copy<IrValue*>(newC, self.constInts, self.nconstInts); std.mman.dealloc<IrValue*>(self.constInts); }
             self.constInts = newC; self.capConstInts = newCap;
         }
         self.constInts[idx] = v;
@@ -764,20 +758,20 @@ pub struct IrContext
     IrValue* constFloat(IrType* ty, f64 val)
     {
         u64 raw;
-        mman.copy<u8>((u8*)&raw, (u8*)&val, 8);
+        std.mman.copy<u8>((u8*)&raw, (u8*)&val, 8);
         // Coral has no f32 scalar type, so consts always carry the f64 bit
         // pattern; width-32 float types are only a codegen-level hint.
         for (u32 i = 0; i < self.nconstFloats; i++)
             if (self.constFloats[i]->valData == raw) return self.constFloats[i];
 
-        IrValue* v = mman.alloc<IrValue>(1);
+        IrValue* v = std.mman.alloc<IrValue>(1);
         *v = (IrValue){ IrValueKind::ConstFloat, ty, self.nextValueId(), raw, null, null, 0, 0 };
         u32 idx = self.nconstFloats;
         if (idx >= self.capConstFloats)
         {
             u32 newCap = self.capConstFloats ? self.capConstFloats * 2 : 8;
-            IrValue** newC = mman.alloc<IrValue*>(newCap);
-            if (self.constFloats) { mman.copy<IrValue*>(newC, self.constFloats, self.nconstFloats); mman.dealloc<IrValue*>(self.constFloats); }
+            IrValue** newC = std.mman.alloc<IrValue*>(newCap);
+            if (self.constFloats) { std.mman.copy<IrValue*>(newC, self.constFloats, self.nconstFloats); std.mman.dealloc<IrValue*>(self.constFloats); }
             self.constFloats = newC; self.capConstFloats = newCap;
         }
         self.constFloats[idx] = v;
@@ -787,8 +781,8 @@ pub struct IrContext
 
     IrInst* createInst(IrOpcode op, IrType* ty, IrValue** ops, u32 nops, u64 icmpP, u64 fcmpP)
     {
-        IrInst* inst = mman.alloc<IrInst>(1);
-        IrValue** opsCopy = mman.alloc<IrValue*>(nops > 0 ? nops : 1);
+        IrInst* inst = std.mman.alloc<IrInst>(1);
+        IrValue** opsCopy = std.mman.alloc<IrValue*>(nops > 0 ? nops : 1);
         for (u32 i = 0; i < nops; i++) opsCopy[i] = ops ? ops[i] : null;
 
         *inst = (IrInst){
@@ -803,10 +797,10 @@ pub struct IrContext
 
     IrBlock* createBlock(const char* name)
     {
-        IrBlock* bb = mman.alloc<IrBlock>(1);
+        IrBlock* bb = std.mman.alloc<IrBlock>(1);
         u32 nameLen = 0;
         if (name) { while (name[nameLen]) nameLen++; }
-        char* nameCopy = mman.alloc<char>(nameLen + 1);
+        char* nameCopy = std.mman.alloc<char>(nameLen + 1);
         for (u32 i = 0; i < nameLen; i++) nameCopy[i] = name[i];
         nameCopy[nameLen] = 0;
 
@@ -819,10 +813,10 @@ pub struct IrContext
 
     IrFunc* createFunc(const char* name, IrType* ret, IrType** params, u32 nparams)
     {
-        IrFunc* f = mman.alloc<IrFunc>(1);
+        IrFunc* f = std.mman.alloc<IrFunc>(1);
         u32 nameLen = 0;
         if (name) { while (name[nameLen]) nameLen++; }
-        char* nameCopy = mman.alloc<char>(nameLen + 1);
+        char* nameCopy = std.mman.alloc<char>(nameLen + 1);
         for (u32 i = 0; i < nameLen; i++) nameCopy[i] = name[i];
         nameCopy[nameLen] = 0;
 
@@ -836,10 +830,10 @@ pub struct IrContext
 
     IrModule* createModule(const char* name)
     {
-        IrModule* m = mman.alloc<IrModule>(1);
+        IrModule* m = std.mman.alloc<IrModule>(1);
         u32 nameLen = 0;
         if (name) { while (name[nameLen]) nameLen++; }
-        char* nameCopy = mman.alloc<char>(nameLen + 1);
+        char* nameCopy = std.mman.alloc<char>(nameLen + 1);
         for (u32 i = 0; i < nameLen; i++) nameCopy[i] = name[i];
         nameCopy[nameLen] = 0;
 
@@ -852,7 +846,7 @@ pub struct IrContext
 
 pub IrContext* irCtxCreate()
 {
-    IrContext* ctx = mman.alloc<IrContext>(1);
+    IrContext* ctx = std.mman.alloc<IrContext>(1);
     *ctx = (IrContext){ null, 0, 0, 1, null, 0, 0, null, 0, 0 };
     return ctx;
 }
@@ -860,32 +854,32 @@ pub IrContext* irCtxCreate()
 pub void irCtxDestroy(IrContext* ctx)
 {
     if (!ctx) return;
-    if (ctx->constInts) mman.dealloc<IrValue*>(ctx->constInts);
-    if (ctx->constFloats) mman.dealloc<IrValue*>(ctx->constFloats);
-    if (ctx->types) mman.dealloc<IrType*>(ctx->types);
-    mman.dealloc<IrContext>(ctx);
+    if (ctx->constInts) std.mman.dealloc<IrValue*>(ctx->constInts);
+    if (ctx->constFloats) std.mman.dealloc<IrValue*>(ctx->constFloats);
+    if (ctx->types) std.mman.dealloc<IrType*>(ctx->types);
+    std.mman.dealloc<IrContext>(ctx);
 }
 
 pub void irGlobalDestroy(IrGlobal* g)
 {
     if (!g) return;
-    if (g->base.name) mman.dealloc<char>(g->base.name);
-    mman.dealloc<IrGlobal>(g);
+    if (g->base.name) std.mman.dealloc<char>(g->base.name);
+    std.mman.dealloc<IrGlobal>(g);
 }
 
 pub void irStringConstDestroy(IrStringConst* sc)
 {
     if (!sc) return;
-    if (sc->str) mman.dealloc<char>(sc->str);
-    mman.dealloc<IrStringConst>(sc);
+    if (sc->str) std.mman.dealloc<char>(sc->str);
+    std.mman.dealloc<IrStringConst>(sc);
 }
 
 pub void irStructTypeDestroy(IrStructType* st)
 {
     if (!st) return;
-    if (st->name) mman.dealloc<char>(st->name);
-    if (st->offsets) mman.dealloc<u32>(st->offsets);
-    mman.dealloc<IrStructType>(st);
+    if (st->name) std.mman.dealloc<char>(st->name);
+    if (st->offsets) std.mman.dealloc<u32>(st->offsets);
+    std.mman.dealloc<IrStructType>(st);
 }
 
 static bool irTypeEqual(IrType* a, IrType* b)

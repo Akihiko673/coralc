@@ -1,7 +1,4 @@
-@[[no_drop]]
-mod string = import(lib, "std/text/string.crl");
-mod ios = import(lib, "std/io/ios.crl");
-mod time = import(lib, "std/core/time.crl");
+mod std = import(lib, "std");
 
 pub enum LogLevel
 {
@@ -15,12 +12,12 @@ pub enum LogLevel
 pub struct Logger
 {
     LogLevel minLevel;
-    string.String name;
+    std.string.String name;
 
-    Logger new(string.strView name, LogLevel minLevel)
+    Logger new(std.string.strView name, LogLevel minLevel)
     {
         Logger l;
-        l.name = string.String.fromView(name);
+        l.name = std.string.std.string.fromView(name);
         l.minLevel = minLevel;
         return l;
     }

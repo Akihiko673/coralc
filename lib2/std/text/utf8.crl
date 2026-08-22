@@ -1,9 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod string.String = import(lib, "std/text/string.crl");
+mod std = import(lib, "std");
 
 pub u8 encodeCodepoint(u32 cp, u8* out)
 {
@@ -125,9 +120,9 @@ pub bool isValid(const u8* s, u64 len)
     return true;
 }
 
-pub string.String toLower(const u8* s, u64 len)
+pub std.string.String toLower(const u8* s, u64 len)
 {
-    string.String out = string.String::new();
+    std.string.String out = std.string.String::new();
     u64 i = 0;
     while (i < len)
     {
@@ -143,9 +138,9 @@ pub string.String toLower(const u8* s, u64 len)
     return out;
 }
 
-pub string.String toUpper(const u8* s, u64 len)
+pub std.string.String toUpper(const u8* s, u64 len)
 {
-    string.String out = string.String::new();
+    std.string.String out = std.string.String::new();
     u64 i = 0;
     while (i < len)
     {

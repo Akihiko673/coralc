@@ -1,23 +1,14 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod asm_rules = import("wallvm/rules/asm_rules.crl");
-mod mman = import("std/memory/mman.crl");
+mod asm_rules = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 pub struct Ppc64Codegen
 {
-    ir_types.IrContext* ctx;
-    asm_rules.ABIRules abi;
+    wallvm.ir_types.IrContext* ctx;
+    wallvm.asm_rules.ABIRules abi;
     char* out;
     u32 outLen;
     u32 outCap;
-    ir_types.IrFunc* func;
+    wallvm.ir_types.IrFunc* func;
     u32 frameSize;
     u32* stackSlots;
     u32 stackSlotsLen;
@@ -25,11 +16,11 @@ pub struct Ppc64Codegen
     u32* blockLabels;
     u32 blockLabelsCap;
 
-    Ppc64Codegen new(ir_types.IrContext* ctx)
+    Ppc64Codegen new(wallvm.ir_types.IrContext* ctx)
     {
         Ppc64Codegen c;
         c.ctx = ctx;
-        c.abi = asm_rules.ppc64Abi();
+        c.abi = wallvm.asm_rules.ppc64Abi();
         c.out = null; c.outLen = 0; c.outCap = 0;
         c.func = null;
         c.frameSize = 32;
@@ -43,11 +34,11 @@ pub struct Ppc64Codegen
         if (self.outCap >= self.outLen + n) return;
         u32 nc = self.outCap ? self.outCap * 2 : 4096;
         while (nc < self.outLen + n) nc *= 2;
-        char* nb = mman.alloc<char>(nc);
+        char* nb = std.mman.alloc<char>(nc);
         if (self.out)
         {
             for (u32 i = 0; i < self.outLen; i++) nb[i] = self.out[i];
-            mman.dealloc<char>(self.out);
+            std.mman.dealloc<char>(self.out);
         }
         self.out = nb;
         self.outCap = nc;
@@ -100,16 +91,16 @@ pub struct Ppc64Codegen
         if (id < self.stackSlotsCap) return;
         u32 nc = self.stackSlotsCap ? self.stackSlotsCap * 2 : 64;
         while (nc <= id) nc *= 2;
-        u32* ns = mman.alloc<u32>(nc);
+        u32* ns = std.mman.alloc<u32>(nc);
         for (u32 i = 0; i < self.stackSlotsCap; i++) ns[i] = self.stackSlots[i];
         for (u32 i = self.stackSlotsCap; i < nc; i++) ns[i] = 0;
-        if (self.stackSlots) mman.dealloc<u32>(self.stackSlots);
+        if (self.stackSlots) std.mman.dealloc<u32>(self.stackSlots);
         self.stackSlots = ns;
         self.stackSlotsCap = nc;
         if (id >= self.stackSlotsLen) self.stackSlotsLen = id + 1;
     }
 
-    u32 slot(ir_types.IrValue* v)
+    u32 slot(wallvm.ir_types.IrValue* v)
     {
         if (!v) return 0;
         u32 id = v->id;
@@ -122,11 +113,11 @@ pub struct Ppc64Codegen
         return self.stackSlots[id];
     }
 
-    bool isConst(ir_types.IrValue* v)
+    bool isConst(wallvm.ir_types.IrValue* v)
     {
         if (!v) return true;
-        ir_types.IrValueKind k = v->kind;
-        return k == ir_types.IrValueKind::ConstInt || k == ir_types.IrValueKind::ConstFloat;
+        wallvm.ir_types.IrValueKind k = v->kind;
+        return k == wallvm.ir_types.IrValueKind::ConstInt || k == wallvm.ir_types.IrValueKind::ConstFloat;
     }
 
     void emitLoadImm(const char* r, u64 n)
@@ -159,12 +150,12 @@ pub struct Ppc64Codegen
         }
     }
 
-    void load(ir_types.IrValue* v, const char* r)
+    void load(wallvm.ir_types.IrValue* v, const char* r)
     {
         if (!v) { self.inst2("li", r, "0"); return; }
         if (self.isConst(v))
         {
-            if (v->type && v->type->kind == ir_types.IrTypeKind::Float)
+            if (v->type && v->type->kind == wallvm.ir_types.IrTypeKind::Float)
             {
                 u64 raw = v->valData;
                 self.emitLoadImm("r11", raw);
@@ -182,8 +173,8 @@ pub struct Ppc64Codegen
             }
             return;
         }
-        ir_types.IrType* ty = v->type;
-        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        wallvm.ir_types.IrType* ty = v->type;
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Float)
         {
             u32 off = self.slot(v);
             self.pad(); self.s("lfd "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
@@ -193,7 +184,7 @@ pub struct Ppc64Codegen
         self.pad(); self.s("ld "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
     }
 
-    void loadArith(ir_types.IrValue* v, const char* r)
+    void loadArith(wallvm.ir_types.IrValue* v, const char* r)
     {
         if (!v) { self.inst2("li", r, "0"); return; }
         if (self.isConst(v))
@@ -205,12 +196,12 @@ pub struct Ppc64Codegen
         self.load(v, r);
     }
 
-    void store(ir_types.IrValue* v, const char* r)
+    void store(wallvm.ir_types.IrValue* v, const char* r)
     {
         if (!v) return;
-        ir_types.IrType* ty = v->type;
+        wallvm.ir_types.IrType* ty = v->type;
         u32 off = self.slot(v);
-        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Float)
         {
             self.pad(); self.s("stfd "); self.s(r); self.s(", "); self.u((u64)off); self.s("(r1)\n");
             return;
@@ -220,7 +211,7 @@ pub struct Ppc64Codegen
 
     // Block labels
 
-    u32 resolveBlock(ir_types.IrValue* bv)
+    u32 resolveBlock(wallvm.ir_types.IrValue* bv)
     {
         for (u32 i = 0; i < self.func.nblocks; i++)
             if (&self.func.blocks[i].base == bv) return i;
@@ -229,11 +220,11 @@ pub struct Ppc64Codegen
 
     // Arithmetic emission
 
-    void emitArith(ir_types.IrInst* inst, const char* mne)
+    void emitArith(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(lhs, "r12");
         if (rhs)
         {
@@ -251,20 +242,20 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitUnary(ir_types.IrInst* inst, const char* mne)
+    void emitUnary(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(src, "r12");
         self.inst2(mne, "r12", "r12");
         self.store(res, "r12");
     }
 
-    void emitDivRem(ir_types.IrInst* inst, const char* divMne, bool sig, bool rem)
+    void emitDivRem(wallvm.ir_types.IrInst* inst, const char* divMne, bool sig, bool rem)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(lhs, "r12");
         if (rhs && self.isConst(rhs))
             self.emitLoadImm("r11", rhs->valData);
@@ -282,11 +273,11 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitShift(ir_types.IrInst* inst, const char* mne)
+    void emitShift(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(val, "r12");
         if (cnt && self.isConst(cnt))
         {
@@ -302,12 +293,12 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitICmp(ir_types.IrInst* inst)
+    void emitICmp(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_opcodes.IrICmpPred p = inst->icmpPred;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.irOps.IrICmpPred p = inst->icmpPred;
         self.loadArith(lhs, "r12");
         if (rhs && self.isConst(rhs))
             self.emitLoadImm("r11", rhs->valData);
@@ -316,8 +307,8 @@ pub struct Ppc64Codegen
         else
             self.inst2("li", "r11", "0");
 
-        bool isUnsigned = (p == ir_opcodes.IrICmpPred::Ult || p == ir_opcodes.IrICmpPred::Ule ||
-                           p == ir_opcodes.IrICmpPred::Ugt || p == ir_opcodes.IrICmpPred::Uge);
+        bool isUnsigned = (p == wallvm.irOps.IrICmpPred::Ult || p == wallvm.irOps.IrICmpPred::Ule ||
+                           p == wallvm.irOps.IrICmpPred::Ugt || p == wallvm.irOps.IrICmpPred::Uge);
         if (isUnsigned)
             self.inst2("cmpld", "r12", "r11");
         else
@@ -329,28 +320,28 @@ pub struct Ppc64Codegen
 
         switch (p)
         {
-        case ir_opcodes.IrICmpPred::Eq: self.inst3("isel", "r12", "r11", "r12, 2"); break;
-        case ir_opcodes.IrICmpPred::Ne: self.inst3("isel", "r12", "r12", "r11, 2"); break;
-        case ir_opcodes.IrICmpPred::Slt: self.inst3("isel", "r12", "r11", "r12, 0"); break;
-        case ir_opcodes.IrICmpPred::Sle:
+        case wallvm.irOps.IrICmpPred::Eq: self.inst3("isel", "r12", "r11", "r12, 2"); break;
+        case wallvm.irOps.IrICmpPred::Ne: self.inst3("isel", "r12", "r12", "r11, 2"); break;
+        case wallvm.irOps.IrICmpPred::Slt: self.inst3("isel", "r12", "r11", "r12, 0"); break;
+        case wallvm.irOps.IrICmpPred::Sle:
             self.inst3("isel", "r10", "r11", "r10, 0");
             self.inst3("isel", "r12", "r11", "r12, 2");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrICmpPred::Sgt: self.inst3("isel", "r12", "r11", "r12, 1"); break;
-        case ir_opcodes.IrICmpPred::Sge:
+        case wallvm.irOps.IrICmpPred::Sgt: self.inst3("isel", "r12", "r11", "r12, 1"); break;
+        case wallvm.irOps.IrICmpPred::Sge:
             self.inst3("isel", "r10", "r11", "r10, 1");
             self.inst3("isel", "r12", "r11", "r12, 2");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrICmpPred::Ult: self.inst3("isel", "r12", "r11", "r12, 0"); break;
-        case ir_opcodes.IrICmpPred::Ule:
+        case wallvm.irOps.IrICmpPred::Ult: self.inst3("isel", "r12", "r11", "r12, 0"); break;
+        case wallvm.irOps.IrICmpPred::Ule:
             self.inst3("isel", "r10", "r11", "r10, 0");
             self.inst3("isel", "r12", "r11", "r12, 2");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrICmpPred::Ugt: self.inst3("isel", "r12", "r11", "r12, 1"); break;
-        case ir_opcodes.IrICmpPred::Uge:
+        case wallvm.irOps.IrICmpPred::Ugt: self.inst3("isel", "r12", "r11", "r12, 1"); break;
+        case wallvm.irOps.IrICmpPred::Uge:
             self.inst3("isel", "r10", "r11", "r10, 1");
             self.inst3("isel", "r12", "r11", "r12, 2");
             self.inst3("or", "r12", "r12", "r10");
@@ -359,12 +350,12 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitFCmp(ir_types.IrInst* inst)
+    void emitFCmp(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_opcodes.IrFCmpPred p = inst->fcmpPred;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.irOps.IrFCmpPred p = inst->fcmpPred;
 
         if (lhs) self.load(lhs, "f1");
         else { self.inst2("li", "r12", "0"); self.pad(); self.s("std.core r12, -8(r1)\n"); self.pad(); self.s("addi r1, r1, -8\n"); self.pad(); self.s("lfd f1, 0(r1)\n"); self.pad(); self.s("addi r1, r1, 8\n"); }
@@ -380,45 +371,45 @@ pub struct Ppc64Codegen
         // rldicl r12, tmp, 1, 0 -> shift to LSB (0/1)
         switch (p)
         {
-        case ir_opcodes.IrFCmpPred::Oeq:
+        case wallvm.irOps.IrFCmpPred::Oeq:
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             break;
-        case ir_opcodes.IrFCmpPred::One:
+        case wallvm.irOps.IrFCmpPred::One:
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             self.inst3("xori", "r12", "r12", "1");
             break;
-        case ir_opcodes.IrFCmpPred::Olt:
+        case wallvm.irOps.IrFCmpPred::Olt:
             self.pad(); self.s("rldicl r12, r11, 35, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             break;
-        case ir_opcodes.IrFCmpPred::Ole:
+        case wallvm.irOps.IrFCmpPred::Ole:
             self.pad(); self.s("rldicl r10, r11, 35, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Ogt:
+        case wallvm.irOps.IrFCmpPred::Ogt:
             self.pad(); self.s("rldicl r12, r11, 34, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             break;
-        case ir_opcodes.IrFCmpPred::Oge:
+        case wallvm.irOps.IrFCmpPred::Oge:
             self.pad(); self.s("rldicl r10, r11, 34, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Ueq:
+        case wallvm.irOps.IrFCmpPred::Ueq:
             self.pad(); self.s("rldicl r10, r11, 32, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Une:
+        case wallvm.irOps.IrFCmpPred::Une:
             self.pad(); self.s("rldicl r10, r11, 32, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
@@ -426,14 +417,14 @@ pub struct Ppc64Codegen
             self.inst3("xori", "r12", "r12", "1");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Ult:
+        case wallvm.irOps.IrFCmpPred::Ult:
             self.pad(); self.s("rldicl r10, r11, 32, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 35, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Ule:
+        case wallvm.irOps.IrFCmpPred::Ule:
             self.pad(); self.s("rldicl r10, r11, 32, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
@@ -443,14 +434,14 @@ pub struct Ppc64Codegen
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Ugt:
+        case wallvm.irOps.IrFCmpPred::Ugt:
             self.pad(); self.s("rldicl r10, r11, 32, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 34, 63\n");
             self.pad(); self.s("rldicl r12, r12, 1, 0\n");
             self.inst3("or", "r12", "r12", "r10");
             break;
-        case ir_opcodes.IrFCmpPred::Uge:
+        case wallvm.irOps.IrFCmpPred::Uge:
             self.pad(); self.s("rldicl r10, r11, 32, 63\n");
             self.pad(); self.s("rldicl r10, r10, 1, 0\n");
             self.pad(); self.s("rldicl r12, r11, 33, 63\n");
@@ -464,19 +455,19 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitCall(ir_types.IrInst* inst)
+    void emitCall(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* callee = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* callee = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 nArgs = inst->nops > 0 ? inst->nops - 1 : 0;
 
         for (u32 i = 0; i < nArgs; i++)
         {
-            ir_types.IrValue* arg = inst->ops[i + 1];
+            wallvm.ir_types.IrValue* arg = inst->ops[i + 1];
             if (i < self.abi.numArgRegs)
             {
                 const char* reg = self.abi.argRegs[i];
-                if (arg && arg->type && arg->type->kind == ir_types.IrTypeKind::Float)
+                if (arg && arg->type && arg->type->kind == wallvm.ir_types.IrTypeKind::Float)
                     self.load(arg, self.abi.floatArgRegs[i]);
                 else
                     self.load(arg, reg);
@@ -485,7 +476,7 @@ pub struct Ppc64Codegen
             {
                 u32 stkOff = (i - self.abi.numArgRegs) * 8;
                 self.pad(); self.s("addi r1, r1, -8\n");
-                if (arg && arg->type && arg->type->kind == ir_types.IrTypeKind::Float)
+                if (arg && arg->type && arg->type->kind == wallvm.ir_types.IrTypeKind::Float)
                 {
                     self.load(arg, "f0");
                     self.pad(); self.s("stfd f0, 0(r1)\n");
@@ -498,7 +489,7 @@ pub struct Ppc64Codegen
             }
         }
 
-        if (callee && callee->kind == ir_types.IrValueKind::Func && callee->name && callee->name[0])
+        if (callee && callee->kind == wallvm.ir_types.IrValueKind::Func && callee->name && callee->name[0])
             self.inst1("bl", callee->name);
         else
         {
@@ -507,9 +498,9 @@ pub struct Ppc64Codegen
             self.inst0("bctrl");
         }
 
-        if (res->type && res->type->kind != ir_types.IrTypeKind::Void)
+        if (res->type && res->type->kind != wallvm.ir_types.IrTypeKind::Void)
         {
-            if (res->type->kind == ir_types.IrTypeKind::Float)
+            if (res->type->kind == wallvm.ir_types.IrTypeKind::Float)
                 self.store(res, "f1");
             else
                 self.store(res, "r3");
@@ -519,13 +510,13 @@ pub struct Ppc64Codegen
             self.pad(); self.s("addi r1, r1, 8\n");
     }
 
-    void emitLoad(ir_types.IrInst* inst)
+    void emitLoad(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_types.IrType* ty = res->type;
+        wallvm.ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrType* ty = res->type;
         self.load(ptr, "r12");
-        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Float)
         {
             self.pad(); self.s("lfd f0, 0(r12)\n");
             self.store(res, "f0");
@@ -543,13 +534,13 @@ pub struct Ppc64Codegen
         }
     }
 
-    void emitStore(ir_types.IrInst* inst)
+    void emitStore(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* ptr = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrType* ty = val ? val->type : null;
+        wallvm.ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* ptr = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrType* ty = val ? val->type : null;
         self.load(ptr, "r11");
-        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Float)
         {
             self.load(val, "f0");
             self.pad(); self.s("stfd f0, 0(r11)\n");
@@ -567,11 +558,11 @@ pub struct Ppc64Codegen
         }
     }
 
-    void emitAlloca(ir_types.IrInst* inst)
+    void emitAlloca(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 sz = 8;
-        if (res->type && res->type->kind == ir_types.IrTypeKind::Ptr && res->type->elem)
+        if (res->type && res->type->kind == wallvm.ir_types.IrTypeKind::Ptr && res->type->elem)
         {
             u32 ew = res->type->elem->width;
             if (ew == 0) ew = 8;
@@ -582,15 +573,15 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitGep(ir_types.IrInst* inst)
+    void emitGep(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 nidxs = inst->nops > 1 ? inst->nops - 1 : 0;
         self.load(ptr, "r12");
         for (u32 i = 0; i < nidxs; i++)
         {
-            ir_types.IrValue* idx = inst->ops[i + 1];
+            wallvm.ir_types.IrValue* idx = inst->ops[i + 1];
             if (self.isConst(idx))
             {
                 u64 off = idx->valData * 8;
@@ -615,20 +606,20 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitCast(ir_types.IrInst* inst)
+    void emitCast(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_types.IrType* st = src ? src->type : null;
-        ir_types.IrType* dt = res->type;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrType* st = src ? src->type : null;
+        wallvm.ir_types.IrType* dt = res->type;
         u32 sw = st ? st->width : 64;
         u32 dw = dt ? dt->width : 64;
 
         switch (inst->opcode)
         {
-        case ir_opcodes.IrOpcode::Trunc:
+        case wallvm.irOps.IrOpcode::Trunc:
             self.load(src, "r12"); self.store(res, "r12"); break;
-        case ir_opcodes.IrOpcode::Zext:
+        case wallvm.irOps.IrOpcode::Zext:
             self.load(src, "r12");
             if (dw > sw)
             {
@@ -637,7 +628,7 @@ pub struct Ppc64Codegen
                 else if (sw <= 32) { self.inst3("clrldi", "r12", "r12", "32"); }
             }
             self.store(res, "r12"); break;
-        case ir_opcodes.IrOpcode::Sext:
+        case wallvm.irOps.IrOpcode::Sext:
             self.load(src, "r12");
             if (dw > sw)
             {
@@ -646,18 +637,18 @@ pub struct Ppc64Codegen
                 else if (sw <= 32) { self.inst3("sldi", "r12", "r12", "32"); self.inst3("sradi", "r12", "r12", "32"); }
             }
             self.store(res, "r12"); break;
-        case ir_opcodes.IrOpcode::FpTrunc:
+        case wallvm.irOps.IrOpcode::FpTrunc:
             self.load(src, "f1");
             self.inst0("frsp f1, f1");
             self.store(res, "f1"); break;
-        case ir_opcodes.IrOpcode::FpExt:
+        case wallvm.irOps.IrOpcode::FpExt:
             self.load(src, "f1");
             // float to double is a no-op on PPC (same register format)
             self.store(res, "f1"); break;
-        case ir_opcodes.IrOpcode::FpToSi:
-        case ir_opcodes.IrOpcode::FpToUi:
+        case wallvm.irOps.IrOpcode::FpToSi:
+        case wallvm.irOps.IrOpcode::FpToUi:
             self.load(src, "f1");
-            if (inst->opcode == ir_opcodes.IrOpcode::FpToSi)
+            if (inst->opcode == wallvm.irOps.IrOpcode::FpToSi)
                 self.inst0("fctidz f1, f1");
             else
                 self.inst0("fctiduz f1, f1");
@@ -665,22 +656,22 @@ pub struct Ppc64Codegen
             self.pad(); self.s("ld r12, -8(r1)\n");
             self.pad(); self.s("addi r1, r1, -8\n");
             self.store(res, "r12"); break;
-        case ir_opcodes.IrOpcode::SiToFp:
-        case ir_opcodes.IrOpcode::UiToFp:
+        case wallvm.irOps.IrOpcode::SiToFp:
+        case wallvm.irOps.IrOpcode::UiToFp:
         {
             self.load(src, "r12");
             self.pad(); self.s("std.core r12, -8(r1)\n");
             self.pad(); self.s("addi r1, r1, -8\n");
             self.pad(); self.s("lfd f1, 0(r1)\n");
-            if (inst->opcode == ir_opcodes.IrOpcode::SiToFp)
+            if (inst->opcode == wallvm.irOps.IrOpcode::SiToFp)
                 self.inst0("fcfid f1, f1");
             else
                 self.inst0("fcfidu f1, f1");
             self.pad(); self.s("addi r1, r1, 8\n");
             self.store(res, "f1"); break;
         }
-        case ir_opcodes.IrOpcode::Bitcast:
-            if (st && st->kind == ir_types.IrTypeKind::Float && dt && dt->kind != ir_types.IrTypeKind::Float)
+        case wallvm.irOps.IrOpcode::Bitcast:
+            if (st && st->kind == wallvm.ir_types.IrTypeKind::Float && dt && dt->kind != wallvm.ir_types.IrTypeKind::Float)
             {
                 self.load(src, "f1");
                 self.pad(); self.s("stfd f1, -8(r1)\n");
@@ -689,7 +680,7 @@ pub struct Ppc64Codegen
                 self.pad(); self.s("addi r1, r1, 8\n");
                 self.store(res, "r12");
             }
-            else if (st && st->kind != ir_types.IrTypeKind::Float && dt && dt->kind == ir_types.IrTypeKind::Float)
+            else if (st && st->kind != wallvm.ir_types.IrTypeKind::Float && dt && dt->kind == wallvm.ir_types.IrTypeKind::Float)
             {
                 self.load(src, "r12");
                 self.pad(); self.s("std.core r12, -8(r1)\n");
@@ -708,15 +699,15 @@ pub struct Ppc64Codegen
         }
     }
 
-    void emitSelect(ir_types.IrInst* inst)
+    void emitSelect(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* tval = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* fval = inst->nops > 2 ? inst->ops[2] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_types.IrType* ty = res->type;
+        wallvm.ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* tval = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* fval = inst->nops > 2 ? inst->ops[2] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrType* ty = res->type;
 
-        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Float)
         {
             self.loadArith(cond, "r12");
             self.load(fval, "f1");
@@ -739,21 +730,21 @@ pub struct Ppc64Codegen
         }
     }
 
-    void emitPhi(ir_types.IrInst* inst)
+    void emitPhi(wallvm.ir_types.IrInst* inst)
     {
         // Phi results are materialized on incoming edges (emitPhiEdges).
     }
 
-    void emitPhiEdges(ir_types.IrBlock* pred, ir_types.IrValue* tgt)
+    void emitPhiEdges(wallvm.ir_types.IrBlock* pred, wallvm.ir_types.IrValue* tgt)
     {
         if (!pred || !tgt) return;
         u32 tbi = self.resolveBlock(tgt);
         if (tbi == ~0u) return;
-        ir_types.IrBlock* tb = self.func.blocks[tbi];
+        wallvm.ir_types.IrBlock* tb = self.func.blocks[tbi];
         for (u32 i = 0; i < tb->ninsts; i++)
         {
-            ir_types.IrInst* phi = tb->insts[i];
-            if (phi->opcode != ir_opcodes.IrOpcode::Phi) break;
+            wallvm.ir_types.IrInst* phi = tb->insts[i];
+            if (phi->opcode != wallvm.irOps.IrOpcode::Phi) break;
             for (u32 j = 0; j + 1 < phi->nops; j += 2)
             {
                 if (phi->ops[j + 1] == &pred->base)
@@ -766,28 +757,28 @@ pub struct Ppc64Codegen
         }
     }
 
-    void emitCtPop(ir_types.IrInst* inst)
+    void emitCtPop(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(src, "r12");
         self.inst2("popcntd", "r12", "r12");
         self.store(res, "r12");
     }
 
-    void emitCtLz(ir_types.IrInst* inst)
+    void emitCtLz(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(src, "r12");
         self.inst2("cntlzd", "r12", "r12");
         self.store(res, "r12");
     }
 
-    void emitCtTz(ir_types.IrInst* inst)
+    void emitCtTz(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(src, "r12");
         self.inst3("addi", "r11", "r12", "-1");
         self.inst3("andc", "r12", "r11", "r12");
@@ -796,11 +787,11 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitRot(ir_types.IrInst* inst, const char* mne)
+    void emitRot(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(val, "r12");
         if (cnt && self.isConst(cnt))
         {
@@ -816,11 +807,11 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitBswap(ir_types.IrInst* inst)
+    void emitBswap(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_types.IrType* ty = res ? res->type : null;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrType* ty = res ? res->type : null;
         u32 w = ty ? ty->width : 64;
         self.loadArith(src, "r12");
 
@@ -848,11 +839,11 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitMinMax(ir_types.IrInst* inst, bool sig, bool max)
+    void emitMinMax(wallvm.ir_types.IrInst* inst, bool sig, bool max)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
 
         self.loadArith(lhs, "r12");
         if (rhs && self.isConst(rhs))
@@ -875,10 +866,10 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitAbs(ir_types.IrInst* inst)
+    void emitAbs(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.loadArith(src, "r12");
         self.inst3("sradi", "r11", "r12", "63");
         self.inst3("add", "r12", "r12", "r11");
@@ -886,12 +877,12 @@ pub struct Ppc64Codegen
         self.store(res, "r12");
     }
 
-    void emitFma(ir_types.IrInst* inst)
+    void emitFma(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* a = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* b = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* c = inst->nops > 2 ? inst->ops[2] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* a = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* b = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* c = inst->nops > 2 ? inst->ops[2] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
         if (a) self.load(a, "f1");
         else { self.inst2("li", "r12", "0"); self.pad(); self.s("std.core r12, -8(r1)\n"); self.pad(); self.s("addi r1, r1, -8\n"); self.pad(); self.s("lfd f1, 0(r1)\n"); self.pad(); self.s("addi r1, r1, 8\n"); }
@@ -903,19 +894,19 @@ pub struct Ppc64Codegen
         self.store(res, "f1");
     }
 
-    void emitFAbs(ir_types.IrInst* inst)
+    void emitFAbs(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.load(src, "f1");
         self.inst0("fabs f1, f1");
         self.store(res, "f1");
     }
 
-    void emitFSqrt(ir_types.IrInst* inst)
+    void emitFSqrt(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         self.load(src, "f1");
         self.inst0("fsqrt f1, f1");
         self.store(res, "f1");
@@ -923,7 +914,7 @@ pub struct Ppc64Codegen
 
     // genFunc
 
-    bool genFunc(ir_types.IrFunc* func)
+    bool genFunc(wallvm.ir_types.IrFunc* func)
     {
         if (!func) return false;
         if (func->isExtern) { if (func->base.name && func->base.name[0]) { self.pad(); self.s(".globl "); self.s(func->base.name); self.c('\n'); } return true; }
@@ -935,17 +926,17 @@ pub struct Ppc64Codegen
 
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
-            ir_types.IrBlock* blk = func->blocks[bi];
+            wallvm.ir_types.IrBlock* blk = func->blocks[bi];
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
-                ir_types.IrInst* inst = blk->insts[ii];
-                ir_types.IrValue* res = &inst->base;
-                if (res->type && res->type->kind != ir_types.IrTypeKind::Void)
+                wallvm.ir_types.IrInst* inst = blk->insts[ii];
+                wallvm.ir_types.IrValue* res = &inst->base;
+                if (res->type && res->type->kind != wallvm.ir_types.IrTypeKind::Void)
                     self.slot(res);
                 for (u32 oi = 0; oi < inst->nops; oi++)
                 {
-                    ir_types.IrValue* op = inst->ops[oi];
-                    if (op && !self.isConst(op) && op->kind != ir_types.IrValueKind::Block)
+                    wallvm.ir_types.IrValue* op = inst->ops[oi];
+                    if (op && !self.isConst(op) && op->kind != wallvm.ir_types.IrValueKind::Block)
                         self.slot(op);
                 }
             }
@@ -971,10 +962,10 @@ pub struct Ppc64Codegen
         {
             u32 nc = self.blockLabelsCap ? self.blockLabelsCap * 2 : 16;
             while (nc < func->nblocks) nc *= 2;
-            u32* nm = mman.alloc<u32>(nc);
+            u32* nm = std.mman.alloc<u32>(nc);
             for (u32 i = 0; i < self.blockLabelsCap; i++) nm[i] = self.blockLabels[i];
             for (u32 i = self.blockLabelsCap; i < nc; i++) nm[i] = ~0u;
-            if (self.blockLabels) mman.dealloc<u32>(self.blockLabels);
+            if (self.blockLabels) std.mman.dealloc<u32>(self.blockLabels);
             self.blockLabels = nm;
             self.blockLabelsCap = nc;
         }
@@ -986,20 +977,20 @@ pub struct Ppc64Codegen
         // Emit blocks
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
-            ir_types.IrBlock* blk = func->blocks[bi];
+            wallvm.ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
             self.s(".LBB"); self.u((u64)self.blockLabels[bi]); self.s(":\n");
 
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
-                ir_types.IrInst* inst = blk->insts[ii];
+                wallvm.ir_types.IrInst* inst = blk->insts[ii];
 
                 switch (inst->opcode)
                 {
                 // Terminators
-                case ir_opcodes.IrOpcode::Br:
+                case wallvm.irOps.IrOpcode::Br:
                 {
-                    ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null;
+                    wallvm.ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null;
                     if (tgt)
                     {
                         self.emitPhiEdges(blk, tgt);
@@ -1009,11 +1000,11 @@ pub struct Ppc64Codegen
                     }
                     break;
                 }
-                case ir_opcodes.IrOpcode::CondBr:
+                case wallvm.irOps.IrOpcode::CondBr:
                 {
-                    ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
-                    ir_types.IrValue* tv = inst->nops > 1 ? inst->ops[1] : null;
-                    ir_types.IrValue* ev = inst->nops > 2 ? inst->ops[2] : null;
+                    wallvm.ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
+                    wallvm.ir_types.IrValue* tv = inst->nops > 1 ? inst->ops[1] : null;
+                    wallvm.ir_types.IrValue* ev = inst->nops > 2 ? inst->ops[2] : null;
                     u32 tbi = tv ? self.resolveBlock(tv) : ~0u;
                     u32 ebi = ev ? self.resolveBlock(ev) : ~0u;
                     self.emitPhiEdges(blk, tv);
@@ -1026,13 +1017,13 @@ pub struct Ppc64Codegen
                     { self.s("    b .LBB"); self.u((u64)self.blockLabels[tbi]); self.c('\n'); }
                     break;
                 }
-                case ir_opcodes.IrOpcode::Ret:
+                case wallvm.irOps.IrOpcode::Ret:
                 {
-                    ir_types.IrValue* rv = inst->nops > 0 ? inst->ops[0] : null;
-                    ir_types.IrType* rt = func->retType;
-                    if (rv && rt && rt->kind != ir_types.IrTypeKind::Void)
+                    wallvm.ir_types.IrValue* rv = inst->nops > 0 ? inst->ops[0] : null;
+                    wallvm.ir_types.IrType* rt = func->retType;
+                    if (rv && rt && rt->kind != wallvm.ir_types.IrTypeKind::Void)
                     {
-                        if (rt->kind == ir_types.IrTypeKind::Float)
+                        if (rt->kind == wallvm.ir_types.IrTypeKind::Float)
                             self.load(rv, "f1");
                         else
                             self.load(rv, "r3");
@@ -1043,11 +1034,11 @@ pub struct Ppc64Codegen
                     self.inst0("blr");
                     break;
                 }
-                case ir_opcodes.IrOpcode::Unreachable:
+                case wallvm.irOps.IrOpcode::Unreachable:
                     self.inst0("trap"); break;
-                case ir_opcodes.IrOpcode::Noret:
+                case wallvm.irOps.IrOpcode::Noret:
                 {
-                    const char* tmpl = asm_rules.noretTemplate(&self.abi);
+                    const char* tmpl = wallvm.asm_rules.noretTemplate(&self.abi);
                     for (u32 i = 0; tmpl[i]; i++)
                     {
                         if (tmpl[i] == '$' && tmpl[i+1] == 'e' && tmpl[i+2] == 'x' &&
@@ -1066,73 +1057,73 @@ pub struct Ppc64Codegen
                 }
 
                 // Unary
-                case ir_opcodes.IrOpcode::Neg: self.emitUnary(inst, "neg"); break;
-                case ir_opcodes.IrOpcode::Not: self.emitUnary(inst, "nor"); break;
+                case wallvm.irOps.IrOpcode::Neg: self.emitUnary(inst, "neg"); break;
+                case wallvm.irOps.IrOpcode::Not: self.emitUnary(inst, "nor"); break;
 
                 // Binary arithmetic
-                case ir_opcodes.IrOpcode::Add: self.emitArith(inst, "add"); break;
-                case ir_opcodes.IrOpcode::Sub: self.emitArith(inst, "subf"); break;
-                case ir_opcodes.IrOpcode::Mul: self.emitArith(inst, "mulld"); break;
-                case ir_opcodes.IrOpcode::SDiv: self.emitDivRem(inst, "divd", true, false); break;
-                case ir_opcodes.IrOpcode::UDiv: self.emitDivRem(inst, "divdu", false, false); break;
-                case ir_opcodes.IrOpcode::SRem: self.emitDivRem(inst, "divd", true, true); break;
-                case ir_opcodes.IrOpcode::URem: self.emitDivRem(inst, "divdu", false, true); break;
+                case wallvm.irOps.IrOpcode::Add: self.emitArith(inst, "add"); break;
+                case wallvm.irOps.IrOpcode::Sub: self.emitArith(inst, "subf"); break;
+                case wallvm.irOps.IrOpcode::Mul: self.emitArith(inst, "mulld"); break;
+                case wallvm.irOps.IrOpcode::SDiv: self.emitDivRem(inst, "divd", true, false); break;
+                case wallvm.irOps.IrOpcode::UDiv: self.emitDivRem(inst, "divdu", false, false); break;
+                case wallvm.irOps.IrOpcode::SRem: self.emitDivRem(inst, "divd", true, true); break;
+                case wallvm.irOps.IrOpcode::URem: self.emitDivRem(inst, "divdu", false, true); break;
 
                 // Binary bitwise
-                case ir_opcodes.IrOpcode::And: self.emitArith(inst, "and"); break;
-                case ir_opcodes.IrOpcode::Or: self.emitArith(inst, "or"); break;
-                case ir_opcodes.IrOpcode::Xor: self.emitArith(inst, "xor"); break;
-                case ir_opcodes.IrOpcode::Shl: self.emitShift(inst, "sld"); break;
-                case ir_opcodes.IrOpcode::Ashr: self.emitShift(inst, "srad"); break;
-                case ir_opcodes.IrOpcode::Lshr: self.emitShift(inst, "srd"); break;
+                case wallvm.irOps.IrOpcode::And: self.emitArith(inst, "and"); break;
+                case wallvm.irOps.IrOpcode::Or: self.emitArith(inst, "or"); break;
+                case wallvm.irOps.IrOpcode::Xor: self.emitArith(inst, "xor"); break;
+                case wallvm.irOps.IrOpcode::Shl: self.emitShift(inst, "sld"); break;
+                case wallvm.irOps.IrOpcode::Ashr: self.emitShift(inst, "srad"); break;
+                case wallvm.irOps.IrOpcode::Lshr: self.emitShift(inst, "srd"); break;
 
                 // Bit manipulation
-                case ir_opcodes.IrOpcode::CtPop: self.emitCtPop(inst); break;
-                case ir_opcodes.IrOpcode::CtLz: self.emitCtLz(inst); break;
-                case ir_opcodes.IrOpcode::CtTz: self.emitCtTz(inst); break;
-                case ir_opcodes.IrOpcode::Rotl: self.emitRot(inst, "rotld"); break;
-                case ir_opcodes.IrOpcode::Rotr: self.emitRot(inst, "rotrd"); break;
-                case ir_opcodes.IrOpcode::Bswap: self.emitBswap(inst); break;
+                case wallvm.irOps.IrOpcode::CtPop: self.emitCtPop(inst); break;
+                case wallvm.irOps.IrOpcode::CtLz: self.emitCtLz(inst); break;
+                case wallvm.irOps.IrOpcode::CtTz: self.emitCtTz(inst); break;
+                case wallvm.irOps.IrOpcode::Rotl: self.emitRot(inst, "rotld"); break;
+                case wallvm.irOps.IrOpcode::Rotr: self.emitRot(inst, "rotrd"); break;
+                case wallvm.irOps.IrOpcode::Bswap: self.emitBswap(inst); break;
 
                 // Integer min/max/abs
-                case ir_opcodes.IrOpcode::SMin: self.emitMinMax(inst, true, false); break;
-                case ir_opcodes.IrOpcode::SMax: self.emitMinMax(inst, true, true); break;
-                case ir_opcodes.IrOpcode::UMin: self.emitMinMax(inst, false, false); break;
-                case ir_opcodes.IrOpcode::UMax: self.emitMinMax(inst, false, true); break;
-                case ir_opcodes.IrOpcode::Abs: self.emitAbs(inst); break;
+                case wallvm.irOps.IrOpcode::SMin: self.emitMinMax(inst, true, false); break;
+                case wallvm.irOps.IrOpcode::SMax: self.emitMinMax(inst, true, true); break;
+                case wallvm.irOps.IrOpcode::UMin: self.emitMinMax(inst, false, false); break;
+                case wallvm.irOps.IrOpcode::UMax: self.emitMinMax(inst, false, true); break;
+                case wallvm.irOps.IrOpcode::Abs: self.emitAbs(inst); break;
 
                 // Float
-                case ir_opcodes.IrOpcode::Fma: self.emitFma(inst); break;
-                case ir_opcodes.IrOpcode::FAbs: self.emitFAbs(inst); break;
-                case ir_opcodes.IrOpcode::FSqrt: self.emitFSqrt(inst); break;
+                case wallvm.irOps.IrOpcode::Fma: self.emitFma(inst); break;
+                case wallvm.irOps.IrOpcode::FAbs: self.emitFAbs(inst); break;
+                case wallvm.irOps.IrOpcode::FSqrt: self.emitFSqrt(inst); break;
 
                 // Memory
-                case ir_opcodes.IrOpcode::Alloca: self.emitAlloca(inst); break;
-                case ir_opcodes.IrOpcode::Load: self.emitLoad(inst); break;
-                case ir_opcodes.IrOpcode::Store: self.emitStore(inst); break;
-                case ir_opcodes.IrOpcode::Gep: self.emitGep(inst); break;
+                case wallvm.irOps.IrOpcode::Alloca: self.emitAlloca(inst); break;
+                case wallvm.irOps.IrOpcode::Load: self.emitLoad(inst); break;
+                case wallvm.irOps.IrOpcode::Store: self.emitStore(inst); break;
+                case wallvm.irOps.IrOpcode::Gep: self.emitGep(inst); break;
 
                 // Cast
-                case ir_opcodes.IrOpcode::Trunc:
-                case ir_opcodes.IrOpcode::Zext:
-                case ir_opcodes.IrOpcode::Sext:
-                case ir_opcodes.IrOpcode::FpTrunc:
-                case ir_opcodes.IrOpcode::FpExt:
-                case ir_opcodes.IrOpcode::FpToSi:
-                case ir_opcodes.IrOpcode::SiToFp:
-                case ir_opcodes.IrOpcode::FpToUi:
-                case ir_opcodes.IrOpcode::UiToFp:
-                case ir_opcodes.IrOpcode::Bitcast:
+                case wallvm.irOps.IrOpcode::Trunc:
+                case wallvm.irOps.IrOpcode::Zext:
+                case wallvm.irOps.IrOpcode::Sext:
+                case wallvm.irOps.IrOpcode::FpTrunc:
+                case wallvm.irOps.IrOpcode::FpExt:
+                case wallvm.irOps.IrOpcode::FpToSi:
+                case wallvm.irOps.IrOpcode::SiToFp:
+                case wallvm.irOps.IrOpcode::FpToUi:
+                case wallvm.irOps.IrOpcode::UiToFp:
+                case wallvm.irOps.IrOpcode::Bitcast:
                     self.emitCast(inst); break;
 
                 // Compare
-                case ir_opcodes.IrOpcode::ICmp: self.emitICmp(inst); break;
-                case ir_opcodes.IrOpcode::FCmp: self.emitFCmp(inst); break;
+                case wallvm.irOps.IrOpcode::ICmp: self.emitICmp(inst); break;
+                case wallvm.irOps.IrOpcode::FCmp: self.emitFCmp(inst); break;
 
                 // Other
-                case ir_opcodes.IrOpcode::Call: self.emitCall(inst); break;
-                case ir_opcodes.IrOpcode::Phi: self.emitPhi(inst); break;
-                case ir_opcodes.IrOpcode::Select: self.emitSelect(inst); break;
+                case wallvm.irOps.IrOpcode::Call: self.emitCall(inst); break;
+                case wallvm.irOps.IrOpcode::Phi: self.emitPhi(inst); break;
+                case wallvm.irOps.IrOpcode::Select: self.emitSelect(inst); break;
                 }
             }
         }
@@ -1145,7 +1136,7 @@ pub struct Ppc64Codegen
         return true;
     }
 
-    bool generate(ir_types.IrModule* mod_)
+    bool generate(wallvm.ir_types.IrModule* mod_)
     {
         if (!mod_) return false;
         self.s(".text\n");
@@ -1159,9 +1150,9 @@ pub struct Ppc64Codegen
     }
 }
 
-pub bool irCodegenPpc64(ir_types.IrModule* mod_, void* userdata)
+pub bool irCodegenPpc64(wallvm.ir_types.IrModule* mod_, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !mod_) return false;
     Ppc64Codegen cg = Ppc64Codegen::new(ctx);
     return cg.generate(mod_);

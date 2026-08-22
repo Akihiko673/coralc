@@ -1,19 +1,13 @@
-mod string = import(lib, "std/text/string.crl");
-@[[no_drop]]
-mod mman = import(lib, "std/memory/mman.crl");
-mod hashmap = import(lib, "std/collections/hashmap.crl");
-mod strutil = import(lib, "std/text/strutil.crl");
-mod option = import(lib, "std/data/option.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct iniSection
 {
-    hashmap.hashmap<string.String, string.String> entries;
+    std.hasmap.hashmap<std.string.String, std.string.String> entries;
 
     iniSection new()
     {
         iniSection s;
-        s.entries = hashmap.hashmap<string.String, string.String>::new(hashString, eq);
+        s.entries = std.hasmap.hashmap<std.string.String, std.string.String>::new(hashString, eq);
         return s;
     }
 
@@ -23,44 +17,44 @@ pub struct iniSection
         self.entries.dispose();
     }
 
-    string.String get(string.strView key)
+    std.string.String get(std.string.strView key)
     {
-        string.String sk = string.String::fromView(key);
-        option.option<string.String> v = self.entries.get(sk);
+        std.string.String sk = std.string.String::fromView(key);
+        option.option<std.string.String> v = self.entries.get(sk);
         sk.free();
-        if (v.isNone()) return string.String::new();
-        string.String stored = v.unwrap();
-        return string.String::fromView(stored.asView());
+        if (v.isNone()) return std.string.String::new();
+        std.string.String stored = v.unwrap();
+        return std.string.String::fromView(stored.asView());
     }
 
-    void set(string.strView key, string.strView value)
+    void set(std.string.strView key, std.string.strView value)
     {
-        string.String sk = string.String::fromView(key);
-        option.option<hashmap.HashMapEntry<string.String, string.String>> old = self.entries.removeEntry(sk);
+        std.string.String sk = std.string.String::fromView(key);
+        option.option<std.hasmap.HashMapEntry<std.string.String, std.string.String>> old = self.entries.removeEntry(sk);
         if (old.isSome())
         {
-            hashmap.HashMapEntry<string.String, string.String> e = old.unwrap();
+            std.hasmap.HashMapEntry<std.string.String, std.string.String> e = old.unwrap();
             e.key.free();
             e.value.free();
         }
-        string.String sv = string.String::fromView(value);
+        std.string.String sv = std.string.String::fromView(value);
         self.entries.insert(sk, sv);
     }
 }
 
 pub struct iniFile
 {
-    vec.vec<iniSection> sections;
-    vec.vec<string.String> names;
+    std.vec.vec<iniSection> sections;
+    std.vec.vec<std.string.String> names;
 
     iniFile new()
     {
         iniFile f;
-        f.sections = vec.vec<iniSection>::new();
-        f.names = vec.vec<string.String>::new();
+        f.sections = std.vec.vec<iniSection>::new();
+        f.names = std.vec.vec<std.string.String>::new();
         iniSection global = iniSection::new();
         f.sections.push(global);
-        f.names.push(string.String::new());
+        f.names.push(std.string.String::new());
         return f;
     }
 
@@ -74,43 +68,43 @@ pub struct iniFile
         self.names.dispose();
     }
 
-    bool parse(string.strView input)
+    bool parse(std.string.strView input)
     {
-        vec.vec<string.strView> lines = strutil.splitVec(input, '\n');
+        std.vec.vec<std.string.strView> lines = strutil.splitVec(input, '\n');
         u64 curSection = 0;
         for (u64 i = 0; i < lines.count(); i++)
         {
-            string.strView line = strutil.trim(lines.at(i));
+            std.string.strView line = strutil.trim(lines.at(i));
             if (line.len == 0 || line.ptr[0] == ';' || line.ptr[0] == '#') continue;
             if (line.ptr[0] == '[')
             {
                 i64 closeIdx = strutil.indexOfChar(line, ']');
                 if (closeIdx < 0) continue;
-                string.strView name = strutil.trim(string.strView::fromParts(line.ptr + 1, (u64)closeIdx - 1));
+                std.string.strView name = strutil.trim(std.string.strView::fromParts(line.ptr + 1, (u64)closeIdx - 1));
                 iniSection sec = iniSection::new();
                 self.sections.push(sec);
-                self.names.push(string.String::fromView(name));
+                self.names.push(std.string.String::fromView(name));
                 curSection = self.sections.count() - 1;
                 continue;
             }
             i64 eq = strutil.indexOfChar(line, '=');
             if (eq < 0) continue;
-            string.strView key = strutil.trim(string.strView::fromParts(line.ptr, (u64)eq));
-            string.strView value = strutil.trim(string.strView::fromParts(line.ptr + (u64)eq + 1, line.len - (u64)eq - 1));
+            std.string.strView key = strutil.trim(std.string.strView::fromParts(line.ptr, (u64)eq));
+            std.string.strView value = strutil.trim(std.string.strView::fromParts(line.ptr + (u64)eq + 1, line.len - (u64)eq - 1));
             i64 semi = strutil.indexOfChar(value, ';');
             if (semi >= 0)
-                value = strutil.trim(string.strView::fromParts(value.ptr, (u64)semi));
+                value = strutil.trim(std.string.strView::fromParts(value.ptr, (u64)semi));
             self.sections.atPtr(curSection)->set(key, value);
         }
         lines.dispose();
         return true;
     }
 
-    iniSection* section(string.strView name)
+    iniSection* section(std.string.strView name)
     {
         for (u64 i = 0; i < self.names.count(); i++)
         {
-            string.strView n = self.names.at(i).asView();
+            std.string.strView n = self.names.at(i).asView();
             if (n.len == name.len)
             {
                 bool match = true;
@@ -122,11 +116,11 @@ pub struct iniFile
         return null;
     }
 
-    string.String get(string.strView section, string.strView key)
+    std.string.String get(std.string.strView section, std.string.strView key)
     {
         for (u64 i = 0; i < self.names.count(); i++)
         {
-            string.strView n = self.names.at(i).asView();
+            std.string.strView n = self.names.at(i).asView();
             if (n.len == section.len)
             {
                 bool match = true;
@@ -136,13 +130,13 @@ pub struct iniFile
                     return self.sections.at(i).get(key);
             }
         }
-        return string.String::new();
+        return std.string.String::new();
     }
 }
 
-u64 hashString(string.String s)
+u64 hashString(std.string.String s)
 {
-    string.strView v = s.asView();
+    std.string.strView v = s.asView();
     u64 hash = 14695981039346656037u;
     for (u64 i = 0; i < v.len; i++)
     {
@@ -152,12 +146,12 @@ u64 hashString(string.String s)
     return hash;
 }
 
-bool eq(string.String a, string.String b)
+bool eq(std.string.String a, std.string.String b)
 {
     return a.asView().equalsView(b.asView());
 }
 
-void freeEntry(hashmap.HashMapEntry<string.String, string.String>* e)
+void freeEntry(std.hasmap.HashMapEntry<std.string.String, std.string.String>* e)
 {
     e->key.free();
     e->value.free();

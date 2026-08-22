@@ -1,12 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
-mod mman = import(lib, "std/memory/mman.crl");
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 // Local dead store elimination.
 //
@@ -22,10 +15,10 @@ mod mman = import(lib, "std/memory/mman.crl");
 // and stores with aliasable-but-different pointer values are never folded.
 pub struct DsePass
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u64 removed;
 
-    DsePass new(ir_types.IrContext* ctx)
+    DsePass new(wallvm.ir_types.IrContext* ctx)
     {
         DsePass p;
         p.ctx = ctx;
@@ -33,58 +26,58 @@ pub struct DsePass
         return p;
     }
 
-    bool run(ir_types.IrFunc* func)
+    bool run(wallvm.ir_types.IrFunc* func)
     {
         self.removed = 0;
         bool changed = false;
 
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             if (self.sweepBlock(bb)) changed = true;
         }
 
         return changed;
     }
 
-    bool isBarrier(ir_opcodes.IrOpcode op)
+    bool isBarrier(wallvm.irOps.IrOpcode op)
     {
         switch (op)
         {
-        case ir_opcodes.IrOpcode::Load:
-        case ir_opcodes.IrOpcode::AtomicLoad:
-        case ir_opcodes.IrOpcode::AtomicStore:
-        case ir_opcodes.IrOpcode::AtomicRmw:
-        case ir_opcodes.IrOpcode::AtomicCmpXchg:
-        case ir_opcodes.IrOpcode::Fence:
-        case ir_opcodes.IrOpcode::Call:
-        case ir_opcodes.IrOpcode::InlineAsm:
-        case ir_opcodes.IrOpcode::GcRoot:
-        case ir_opcodes.IrOpcode::GcWriteBarrier:
-        case ir_opcodes.IrOpcode::GcSafepoint:
-        case ir_opcodes.IrOpcode::LandingPad:
+        case wallvm.irOps.IrOpcode::Load:
+        case wallvm.irOps.IrOpcode::AtomicLoad:
+        case wallvm.irOps.IrOpcode::AtomicStore:
+        case wallvm.irOps.IrOpcode::AtomicRmw:
+        case wallvm.irOps.IrOpcode::AtomicCmpXchg:
+        case wallvm.irOps.IrOpcode::Fence:
+        case wallvm.irOps.IrOpcode::Call:
+        case wallvm.irOps.IrOpcode::InlineAsm:
+        case wallvm.irOps.IrOpcode::GcRoot:
+        case wallvm.irOps.IrOpcode::GcWriteBarrier:
+        case wallvm.irOps.IrOpcode::GcSafepoint:
+        case wallvm.irOps.IrOpcode::LandingPad:
             return true;
         default:
             return false;
         }
     }
 
-    bool sweepBlock(ir_types.IrBlock* bb)
+    bool sweepBlock(wallvm.ir_types.IrBlock* bb)
     {
         const u32 MAX_TRACKED = 128;
-        ir_types.IrValue** addrs = mman.alloc<ir_types.IrValue*>(MAX_TRACKED);
-        ir_types.IrInst** stores = mman.alloc<ir_types.IrInst*>(MAX_TRACKED);
+        wallvm.ir_types.IrValue** addrs = std.mman.alloc<wallvm.ir_types.IrValue*>(MAX_TRACKED);
+        wallvm.ir_types.IrInst** stores = std.mman.alloc<wallvm.ir_types.IrInst*>(MAX_TRACKED);
         u32 tracked = 0;
         bool changed = false;
 
         u32 ii = 0;
         while (ii < bb.ninsts)
         {
-            ir_types.IrInst* inst = bb.insts[ii];
+            wallvm.ir_types.IrInst* inst = bb.insts[ii];
 
-            if (inst.opcode == ir_opcodes.IrOpcode::Store && inst.nops >= 2)
+            if (inst.opcode == wallvm.irOps.IrOpcode::Store && inst.nops >= 2)
             {
-                ir_types.IrValue* addr = inst.ops[1];
+                wallvm.ir_types.IrValue* addr = inst.ops[1];
                 // Look for a pending store to the identical address value.
                 i32 hit = -1;
                 for (u32 k = 0; k < tracked; k++)
@@ -120,8 +113,8 @@ pub struct DsePass
             ii++;
         }
 
-        mman.dealloc<ir_types.IrValue*>(addrs);
-        mman.dealloc<ir_types.IrInst*>(stores);
+        std.mman.dealloc<wallvm.ir_types.IrValue*>(addrs);
+        std.mman.dealloc<wallvm.ir_types.IrInst*>(stores);
         return changed;
     }
 
@@ -131,9 +124,9 @@ pub struct DsePass
     }
 }
 
-pub bool irPassDse(ir_types.IrFunc* func, void* userdata)
+pub bool irPassDse(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     DsePass pass = DsePass::new(ctx);
     return pass.run(func);

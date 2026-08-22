@@ -610,7 +610,7 @@ pub struct Check
         // alive: resolveTypeExpr needs them, and run() frees `top` below.
         if (self.emitMode == 1) codegen.emitH(self.prog, top, mods, self.filename, self.debugBuild);
         else if (self.emitMode == 2) codegen.emitIR(self.prog, top, mods, self.filename, self.optLevel, self.debugBuild);
-        else if (self.emitMode == 3) codegen.emitAsm(self.prog, top, mods, self.filename, self.optLevel, self.debugBuild);
+        else if (self.emitMode == 3) codegen.emitAsm(self.prog, top, mods, self.filename, self.optLevel, self.debugBuild, self.flagNames, self.flagVals, self.nflags);
 
         scopes.scopeFree(top);
     }

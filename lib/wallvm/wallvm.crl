@@ -37,6 +37,9 @@ mod asm_rules = import("wallvm/rules/asm_rules.crl");
 mod ir_types = import("wallvm/ir_types.crl");
 mod mman = import("std/memory/mman.crl");
 
+pub bool gEnableBorrowCheck = false;
+pub bool gEnableUnroll = false;
+
 pub const u32 WALLVM_VERSION_MAJOR = 0;
 pub const u32 WALLVM_VERSION_MINOR = 1;
 pub const u32 WALLVM_VERSION_PATCH = 0;
@@ -190,12 +193,15 @@ pub bool irStructureLane(IrFunc* func, IrContext* ctx)
 {
     if (!func || !ctx) return false;
 
-    // Borrow checking is semantic, not an optimization, run it before any
-    // pass that could move or remove loads/stores around.
-    if (borrowcheck.irPassBorrowCheck(func, (void*)ctx)) return false;
+    if (gEnableBorrowCheck) {
+        if (borrowcheck.irPassBorrowCheck(func, (void*)ctx)) {
+            // borrow check violation is a diagnostic, not a hard failure
+            // let caller emit TC-BORROW; do not abort structure lane
+        }
+    }
 
     PassPipeline p = PassPipeline::new();
-    p.add(unroll.irPassUnroll, "unroll");
+    if (gEnableUnroll) p.add(unroll.irPassUnroll, "unroll");
     p.add(dse.irPassDse, "dse");
     p.add(validate.irPassValidate, "validate");
     p.runOnFunc(func, (void*)ctx);

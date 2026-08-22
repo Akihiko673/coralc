@@ -1,18 +1,11 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod wallvm = import(lib, "wallvm");
 
 pub struct IdiomRecognizePass
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u64 recognized;
 
-    IdiomRecognizePass new(ir_types.IrContext* ctx)
+    IdiomRecognizePass new(wallvm.ir_types.IrContext* ctx)
     {
         IdiomRecognizePass p;
         p.ctx = ctx;
@@ -20,18 +13,18 @@ pub struct IdiomRecognizePass
         return p;
     }
 
-    bool run(ir_types.IrFunc* func)
+    bool run(wallvm.ir_types.IrFunc* func)
     {
         self.recognized = 0;
         bool changed = false;
 
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             u32 ii = 0;
             while (ii < bb.ninsts)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
                 if (self.recognizeIdiom(inst))
                 {
                     self.recognized++;
@@ -48,12 +41,12 @@ pub struct IdiomRecognizePass
     }
 
     // Recognize common code idioms and replace with single instructions
-    bool recognizeIdiom(ir_types.IrInst* inst)
+    bool recognizeIdiom(wallvm.ir_types.IrInst* inst)
     {
         if (inst.nops < 2) return false;
 
-        ir_types.IrValue* a = inst.ops[0];
-        ir_types.IrValue* b = inst.ops[1];
+        wallvm.ir_types.IrValue* a = inst.ops[0];
+        wallvm.ir_types.IrValue* b = inst.ops[1];
         if (!a || !b) return false;
 
         if (self.matchRotate(inst, a, b))
@@ -75,25 +68,25 @@ pub struct IdiomRecognizePass
     }
 
     // Match rotate idiom, or(shl(x, N), lshr(x, M-N)) -> rotl(x, N)
-    bool matchRotate(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    bool matchRotate(wallvm.ir_types.IrInst* inst, wallvm.ir_types.IrValue* a, wallvm.ir_types.IrValue* b)
     {
-        if (inst.opcode != ir_opcodes.IrOpcode::Or) return false;
-        if (a.kind != ir_types.IrValueKind::Inst || b.kind != ir_types.IrValueKind::Inst) return false;
+        if (inst.opcode != wallvm.irOps.IrOpcode::Or) return false;
+        if (a.kind != wallvm.ir_types.IrValueKind::Inst || b.kind != wallvm.ir_types.IrValueKind::Inst) return false;
 
-        ir_types.IrInst* aInst = (ir_types.IrInst*)a;
-        ir_types.IrInst* bInst = (ir_types.IrInst*)b;
+        wallvm.ir_types.IrInst* aInst = (wallvm.ir_types.IrInst*)a;
+        wallvm.ir_types.IrInst* bInst = (wallvm.ir_types.IrInst*)b;
 
-        if (aInst->opcode == ir_opcodes.IrOpcode::Shl &&
-            bInst->opcode == ir_opcodes.IrOpcode::Lshr &&
+        if (aInst->opcode == wallvm.irOps.IrOpcode::Shl &&
+            bInst->opcode == wallvm.irOps.IrOpcode::Lshr &&
             aInst->nops == 2 && bInst->nops == 2)
         {
-            ir_types.IrValue* x1 = aInst->ops[0];
-            ir_types.IrValue* x2 = bInst->ops[0];
-            ir_types.IrValue* n1 = aInst->ops[1];
-            ir_types.IrValue* n2 = bInst->ops[1];
+            wallvm.ir_types.IrValue* x1 = aInst->ops[0];
+            wallvm.ir_types.IrValue* x2 = bInst->ops[0];
+            wallvm.ir_types.IrValue* n1 = aInst->ops[1];
+            wallvm.ir_types.IrValue* n2 = bInst->ops[1];
 
-            if (x1 == x2 && n1.kind == ir_types.IrValueKind::ConstInt &&
-                n2.kind == ir_types.IrValueKind::ConstInt)
+            if (x1 == x2 && n1.kind == wallvm.ir_types.IrValueKind::ConstInt &&
+                n2.kind == wallvm.ir_types.IrValueKind::ConstInt)
             {
                 u32 bits = x1.type ? x1.type.width : 64;
                 u64 shift = n1.valData;
@@ -101,9 +94,9 @@ pub struct IdiomRecognizePass
 
                 if (complement == bits - shift || complement == (64 - shift))
                 {
-                    ir_types.IrType* ty = x1.type;
-                    ir_types.IrValue* rotlOps[2] = { x1, self.ctx.constInt(ty, shift) };
-                    ir_types.IrInst* rotlInst = self.ctx.createInst(ir_opcodes.IrOpcode::Rotl, ty, rotlOps, 2, 0, 0);
+                    wallvm.ir_types.IrType* ty = x1.type;
+                    wallvm.ir_types.IrValue* rotlOps[2] = { x1, self.ctx.constInt(ty, shift) };
+                    wallvm.ir_types.IrInst* rotlInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Rotl, ty, rotlOps, 2, 0, 0);
                     rotlOps[0].addUser(rotlInst);
                     rotlOps[1].addUser(rotlInst);
                     inst.parent.insertBefore(rotlInst, inst);
@@ -114,17 +107,17 @@ pub struct IdiomRecognizePass
             }
         }
 
-        if (aInst->opcode == ir_opcodes.IrOpcode::Lshr &&
-            bInst->opcode == ir_opcodes.IrOpcode::Shl &&
+        if (aInst->opcode == wallvm.irOps.IrOpcode::Lshr &&
+            bInst->opcode == wallvm.irOps.IrOpcode::Shl &&
             aInst->nops == 2 && bInst->nops == 2)
         {
-            ir_types.IrValue* x1 = aInst->ops[0];
-            ir_types.IrValue* x2 = bInst->ops[0];
-            ir_types.IrValue* n1 = aInst->ops[1];
-            ir_types.IrValue* n2 = bInst->ops[1];
+            wallvm.ir_types.IrValue* x1 = aInst->ops[0];
+            wallvm.ir_types.IrValue* x2 = bInst->ops[0];
+            wallvm.ir_types.IrValue* n1 = aInst->ops[1];
+            wallvm.ir_types.IrValue* n2 = bInst->ops[1];
 
-            if (x1 == x2 && n1.kind == ir_types.IrValueKind::ConstInt &&
-                n2.kind == ir_types.IrValueKind::ConstInt)
+            if (x1 == x2 && n1.kind == wallvm.ir_types.IrValueKind::ConstInt &&
+                n2.kind == wallvm.ir_types.IrValueKind::ConstInt)
             {
                 u32 bits = x1.type ? x1.type.width : 64;
                 u64 shift = n1.valData;
@@ -132,9 +125,9 @@ pub struct IdiomRecognizePass
 
                 if (complement == bits - shift || complement == (64 - shift))
                 {
-                    ir_types.IrType* ty = x1.type;
-                    ir_types.IrValue* rotrOps[2] = { x1, self.ctx.constInt(ty, shift) };
-                    ir_types.IrInst* rotrInst = self.ctx.createInst(ir_opcodes.IrOpcode::Rotr, ty, rotrOps, 2, 0, 0);
+                    wallvm.ir_types.IrType* ty = x1.type;
+                    wallvm.ir_types.IrValue* rotrOps[2] = { x1, self.ctx.constInt(ty, shift) };
+                    wallvm.ir_types.IrInst* rotrInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Rotr, ty, rotrOps, 2, 0, 0);
                     rotrOps[0].addUser(rotrInst);
                     rotrOps[1].addUser(rotrInst);
                     inst.parent.insertBefore(rotrInst, inst);
@@ -148,22 +141,22 @@ pub struct IdiomRecognizePass
         return false;
     }
 
-    bool matchFma(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    bool matchFma(wallvm.ir_types.IrInst* inst, wallvm.ir_types.IrValue* a, wallvm.ir_types.IrValue* b)
     {
-        if (inst.opcode != ir_opcodes.IrOpcode::FAdd) return false;
-        if (!inst.base.type || inst.base.type.kind != ir_types.IrTypeKind::Float) return false;
+        if (inst.opcode != wallvm.irOps.IrOpcode::FAdd) return false;
+        if (!inst.base.type || inst.base.type.kind != wallvm.ir_types.IrTypeKind::Float) return false;
 
-        ir_types.IrInst* mulInst = null;
-        ir_types.IrValue* other = null;
+        wallvm.ir_types.IrInst* mulInst = null;
+        wallvm.ir_types.IrValue* other = null;
 
-        if (a.kind == ir_types.IrValueKind::Inst && ((ir_types.IrInst*)a)->opcode == ir_opcodes.IrOpcode::FMul)
+        if (a.kind == wallvm.ir_types.IrValueKind::Inst && ((wallvm.ir_types.IrInst*)a)->opcode == wallvm.irOps.IrOpcode::FMul)
         {
-            mulInst = (ir_types.IrInst*)a;
+            mulInst = (wallvm.ir_types.IrInst*)a;
             other = b;
         }
-        else if (b.kind == ir_types.IrValueKind::Inst && ((ir_types.IrInst*)b)->opcode == ir_opcodes.IrOpcode::FMul)
+        else if (b.kind == wallvm.ir_types.IrValueKind::Inst && ((wallvm.ir_types.IrInst*)b)->opcode == wallvm.irOps.IrOpcode::FMul)
         {
-            mulInst = (ir_types.IrInst*)b;
+            mulInst = (wallvm.ir_types.IrInst*)b;
             other = a;
         }
         else
@@ -174,12 +167,12 @@ pub struct IdiomRecognizePass
         if (!mulInst || mulInst->nops != 2 || !other) return false;
         if (!mulInst->base.type || mulInst->base.type != inst.base.type) return false;
 
-        ir_types.IrValue* x = mulInst->ops[0];
-        ir_types.IrValue* y = mulInst->ops[1];
+        wallvm.ir_types.IrValue* x = mulInst->ops[0];
+        wallvm.ir_types.IrValue* y = mulInst->ops[1];
         if (!x || !y) return false;
 
-        ir_types.IrValue* fmaOps[3] = { x, y, other };
-        ir_types.IrInst* fmaInst = self.ctx.createInst(ir_opcodes.IrOpcode::Fma, inst.base.type, fmaOps, 3, 0, 0);
+        wallvm.ir_types.IrValue* fmaOps[3] = { x, y, other };
+        wallvm.ir_types.IrInst* fmaInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Fma, inst.base.type, fmaOps, 3, 0, 0);
         fmaOps[0].addUser(fmaInst);
         fmaOps[1].addUser(fmaInst);
         fmaOps[2].addUser(fmaInst);
@@ -191,35 +184,35 @@ pub struct IdiomRecognizePass
 
     // Match byte-swap idiom, an or-chain of masked byte shifts that places each
     // source byte at its byte-reversed destination.
-    bool matchBswap(ir_types.IrInst* inst)
+    bool matchBswap(wallvm.ir_types.IrInst* inst)
     {
-        if (inst.opcode != ir_opcodes.IrOpcode::Or) return false;
-        if (!inst.base.type || inst.base.type.kind != ir_types.IrTypeKind::Int) return false;
+        if (inst.opcode != wallvm.irOps.IrOpcode::Or) return false;
+        if (!inst.base.type || inst.base.type.kind != wallvm.ir_types.IrTypeKind::Int) return false;
         u32 width = inst.base.type.width;
         if (width < 16 || width > 64 || width % 16 != 0) return false;
         u32 nBytes = width / 8;
         if (nBytes > 8) return false;
 
-        ir_types.IrInst* leaves[8];
-        ir_types.IrInst* cur = inst;
+        wallvm.ir_types.IrInst* leaves[8];
+        wallvm.ir_types.IrInst* cur = inst;
         u32 n = 0;
         while (true)
         {
-            if (cur.opcode != ir_opcodes.IrOpcode::Or)
+            if (cur.opcode != wallvm.irOps.IrOpcode::Or)
             {
                 leaves[n++] = cur;
                 break;
             }
             if (cur.nops != 2) return false;
-            if (cur.ops[1].kind != ir_types.IrValueKind::Inst) return false;
-            leaves[n++] = (ir_types.IrInst*)cur.ops[1];
+            if (cur.ops[1].kind != wallvm.ir_types.IrValueKind::Inst) return false;
+            leaves[n++] = (wallvm.ir_types.IrInst*)cur.ops[1];
             if (n > nBytes) return false;
-            if (cur.ops[0].kind != ir_types.IrValueKind::Inst) return false;
-            cur = (ir_types.IrInst*)cur.ops[0];
+            if (cur.ops[0].kind != wallvm.ir_types.IrValueKind::Inst) return false;
+            cur = (wallvm.ir_types.IrInst*)cur.ops[0];
         }
         if (n != nBytes) return false;
 
-        ir_types.IrValue* x = null;
+        wallvm.ir_types.IrValue* x = null;
         u32 ms[8];
         u32 ds[8];
         for (u32 i = 0; i < n; i++)
@@ -235,8 +228,8 @@ pub struct IdiomRecognizePass
                 if (ds[i] == ds[j]) return false;
         }
 
-        ir_types.IrValue* bops[1] = { x };
-        ir_types.IrInst* bs = self.ctx.createInst(ir_opcodes.IrOpcode::Bswap, inst.base.type, bops, 1, 0, 0);
+        wallvm.ir_types.IrValue* bops[1] = { x };
+        wallvm.ir_types.IrInst* bs = self.ctx.createInst(wallvm.irOps.IrOpcode::Bswap, inst.base.type, bops, 1, 0, 0);
         bops[0].addUser(bs);
         inst.parent.insertBefore(bs, inst);
         inst.base.replaceAllUses(&bs.base);
@@ -246,29 +239,29 @@ pub struct IdiomRecognizePass
 
     // Match one byte-swap term; returns its source byte m and destination byte
     // d, and binds the shared value x on the first call.
-    bool bswapTerm(ir_types.IrInst* leaf, u32 nBytes, ir_types.IrValue** x, u32* m, u32* d)
+    bool bswapTerm(wallvm.ir_types.IrInst* leaf, u32 nBytes, wallvm.ir_types.IrValue** x, u32* m, u32* d)
     {
-        ir_types.IrInst* shiftInst = leaf;
+        wallvm.ir_types.IrInst* shiftInst = leaf;
         u64 mask = 0;
         bool isAnd = false;
-        if (leaf.opcode == ir_opcodes.IrOpcode::And && leaf.nops == 2)
+        if (leaf.opcode == wallvm.irOps.IrOpcode::And && leaf.nops == 2)
         {
-            if (leaf.ops[1].kind != ir_types.IrValueKind::ConstInt) return false;
-            if (leaf.ops[0].kind != ir_types.IrValueKind::Inst) return false;
+            if (leaf.ops[1].kind != wallvm.ir_types.IrValueKind::ConstInt) return false;
+            if (leaf.ops[0].kind != wallvm.ir_types.IrValueKind::Inst) return false;
             mask = leaf.ops[1].valData;
-            shiftInst = (ir_types.IrInst*)leaf.ops[0];
+            shiftInst = (wallvm.ir_types.IrInst*)leaf.ops[0];
             isAnd = true;
         }
-        if (shiftInst->opcode != ir_opcodes.IrOpcode::Shl &&
-            shiftInst->opcode != ir_opcodes.IrOpcode::Lshr) return false;
+        if (shiftInst->opcode != wallvm.irOps.IrOpcode::Shl &&
+            shiftInst->opcode != wallvm.irOps.IrOpcode::Lshr) return false;
         if (shiftInst->nops != 2) return false;
-        ir_types.IrValue* sx = shiftInst->ops[0];
-        ir_types.IrValue* s = shiftInst->ops[1];
-        if (s.kind != ir_types.IrValueKind::ConstInt) return false;
+        wallvm.ir_types.IrValue* sx = shiftInst->ops[0];
+        wallvm.ir_types.IrValue* s = shiftInst->ops[1];
+        if (s.kind != wallvm.ir_types.IrValueKind::ConstInt) return false;
         u64 shift = s.valData;
         if (shift == 0 || shift % 8 != 0) return false;
         u32 sBytes = (u32)(shift / 8);
-        bool isShl = shiftInst->opcode == ir_opcodes.IrOpcode::Shl;
+        bool isShl = shiftInst->opcode == wallvm.irOps.IrOpcode::Shl;
 
         if (!(*x)) *x = sx;
         else if (*x != sx) return false;
@@ -324,32 +317,32 @@ pub struct IdiomRecognizePass
     }
 
     // Match min/max idiom, select(icmp_XX(a, b), a, b) -> smin/smax/umin/umax
-    bool matchMinMax(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    bool matchMinMax(wallvm.ir_types.IrInst* inst, wallvm.ir_types.IrValue* a, wallvm.ir_types.IrValue* b)
     {
-        if (inst.opcode != ir_opcodes.IrOpcode::Select) return false;
-        if (a.kind != ir_types.IrValueKind::Inst) return false;
+        if (inst.opcode != wallvm.irOps.IrOpcode::Select) return false;
+        if (a.kind != wallvm.ir_types.IrValueKind::Inst) return false;
         if (inst.nops < 3) return false;
 
-        ir_types.IrInst* condInst = (ir_types.IrInst*)a;
-        if (condInst->opcode != ir_opcodes.IrOpcode::ICmp) return false;
+        wallvm.ir_types.IrInst* condInst = (wallvm.ir_types.IrInst*)a;
+        if (condInst->opcode != wallvm.irOps.IrOpcode::ICmp) return false;
         if (condInst->nops != 2) return false;
 
-        ir_types.IrValue* cmpA = condInst->ops[0];
-        ir_types.IrValue* cmpB = condInst->ops[1];
-        ir_types.IrValue* trueVal = b;
-        ir_types.IrValue* falseVal = inst.ops[2];
+        wallvm.ir_types.IrValue* cmpA = condInst->ops[0];
+        wallvm.ir_types.IrValue* cmpB = condInst->ops[1];
+        wallvm.ir_types.IrValue* trueVal = b;
+        wallvm.ir_types.IrValue* falseVal = inst.ops[2];
 
-        ir_opcodes.IrICmpPred pred = condInst->icmpPred;
-        ir_opcodes.IrOpcode minMaxOp;
+        wallvm.irOps.IrICmpPred pred = condInst->icmpPred;
+        wallvm.irOps.IrOpcode minMaxOp;
 
         if (trueVal == cmpA && falseVal == cmpB)
         {
             switch (pred)
             {
-            case ir_opcodes.IrICmpPred::Slt: case ir_opcodes.IrICmpPred::Sle: minMaxOp = ir_opcodes.IrOpcode::SMin; break;
-            case ir_opcodes.IrICmpPred::Sgt: case ir_opcodes.IrICmpPred::Sge: minMaxOp = ir_opcodes.IrOpcode::SMax; break;
-            case ir_opcodes.IrICmpPred::Ult: case ir_opcodes.IrICmpPred::Ule: minMaxOp = ir_opcodes.IrOpcode::UMin; break;
-            case ir_opcodes.IrICmpPred::Ugt: case ir_opcodes.IrICmpPred::Uge: minMaxOp = ir_opcodes.IrOpcode::UMax; break;
+            case wallvm.irOps.IrICmpPred::Slt: case wallvm.irOps.IrICmpPred::Sle: minMaxOp = wallvm.irOps.IrOpcode::SMin; break;
+            case wallvm.irOps.IrICmpPred::Sgt: case wallvm.irOps.IrICmpPred::Sge: minMaxOp = wallvm.irOps.IrOpcode::SMax; break;
+            case wallvm.irOps.IrICmpPred::Ult: case wallvm.irOps.IrICmpPred::Ule: minMaxOp = wallvm.irOps.IrOpcode::UMin; break;
+            case wallvm.irOps.IrICmpPred::Ugt: case wallvm.irOps.IrICmpPred::Uge: minMaxOp = wallvm.irOps.IrOpcode::UMax; break;
             default: return false;
             }
         }
@@ -357,10 +350,10 @@ pub struct IdiomRecognizePass
         {
             switch (pred)
             {
-            case ir_opcodes.IrICmpPred::Slt: case ir_opcodes.IrICmpPred::Sle: minMaxOp = ir_opcodes.IrOpcode::SMax; break;
-            case ir_opcodes.IrICmpPred::Sgt: case ir_opcodes.IrICmpPred::Sge: minMaxOp = ir_opcodes.IrOpcode::SMin; break;
-            case ir_opcodes.IrICmpPred::Ult: case ir_opcodes.IrICmpPred::Ule: minMaxOp = ir_opcodes.IrOpcode::UMax; break;
-            case ir_opcodes.IrICmpPred::Ugt: case ir_opcodes.IrICmpPred::Uge: minMaxOp = ir_opcodes.IrOpcode::UMin; break;
+            case wallvm.irOps.IrICmpPred::Slt: case wallvm.irOps.IrICmpPred::Sle: minMaxOp = wallvm.irOps.IrOpcode::SMax; break;
+            case wallvm.irOps.IrICmpPred::Sgt: case wallvm.irOps.IrICmpPred::Sge: minMaxOp = wallvm.irOps.IrOpcode::SMin; break;
+            case wallvm.irOps.IrICmpPred::Ult: case wallvm.irOps.IrICmpPred::Ule: minMaxOp = wallvm.irOps.IrOpcode::UMax; break;
+            case wallvm.irOps.IrICmpPred::Ugt: case wallvm.irOps.IrICmpPred::Uge: minMaxOp = wallvm.irOps.IrOpcode::UMin; break;
             default: return false;
             }
         }
@@ -369,9 +362,9 @@ pub struct IdiomRecognizePass
             return false;
         }
 
-        ir_types.IrType* ty = cmpA.type;
-        ir_types.IrValue* mmOps[2] = { cmpA, cmpB };
-        ir_types.IrInst* mmInst = self.ctx.createInst(minMaxOp, ty, mmOps, 2, 0, 0);
+        wallvm.ir_types.IrType* ty = cmpA.type;
+        wallvm.ir_types.IrValue* mmOps[2] = { cmpA, cmpB };
+        wallvm.ir_types.IrInst* mmInst = self.ctx.createInst(minMaxOp, ty, mmOps, 2, 0, 0);
         mmOps[0].addUser(mmInst);
         mmOps[1].addUser(mmInst);
         inst.parent.insertBefore(mmInst, inst);
@@ -381,45 +374,45 @@ pub struct IdiomRecognizePass
     }
 
     // Match abs idiom, select(icmp_slt(x, 0), neg(x), x) -> abs(x)
-    bool matchAbs(ir_types.IrInst* inst, ir_types.IrValue* a, ir_types.IrValue* b)
+    bool matchAbs(wallvm.ir_types.IrInst* inst, wallvm.ir_types.IrValue* a, wallvm.ir_types.IrValue* b)
     {
-        if (inst.opcode != ir_opcodes.IrOpcode::Select) return false;
-        if (a.kind != ir_types.IrValueKind::Inst) return false;
+        if (inst.opcode != wallvm.irOps.IrOpcode::Select) return false;
+        if (a.kind != wallvm.ir_types.IrValueKind::Inst) return false;
         if (inst.nops < 3) return false;
 
-        ir_types.IrInst* condInst = (ir_types.IrInst*)a;
-        if (condInst->opcode != ir_opcodes.IrOpcode::ICmp) return false;
+        wallvm.ir_types.IrInst* condInst = (wallvm.ir_types.IrInst*)a;
+        if (condInst->opcode != wallvm.irOps.IrOpcode::ICmp) return false;
         if (condInst->nops != 2) return false;
 
-        ir_types.IrValue* cmpA = condInst->ops[0];
-        ir_types.IrValue* cmpB = condInst->ops[1];
+        wallvm.ir_types.IrValue* cmpA = condInst->ops[0];
+        wallvm.ir_types.IrValue* cmpB = condInst->ops[1];
 
-        if (cmpB.kind != ir_types.IrValueKind::ConstInt || cmpB.valData != 0)
+        if (cmpB.kind != wallvm.ir_types.IrValueKind::ConstInt || cmpB.valData != 0)
             return false;
 
-        ir_types.IrValue* trueVal = b;
-        ir_types.IrValue* falseVal = inst.ops[2];
-        ir_opcodes.IrICmpPred pred = condInst->icmpPred;
+        wallvm.ir_types.IrValue* trueVal = b;
+        wallvm.ir_types.IrValue* falseVal = inst.ops[2];
+        wallvm.irOps.IrICmpPred pred = condInst->icmpPred;
 
-        ir_types.IrValue* absOperand = null;
+        wallvm.ir_types.IrValue* absOperand = null;
 
-        if (trueVal.kind == ir_types.IrValueKind::Inst)
+        if (trueVal.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* negInst = (ir_types.IrInst*)trueVal;
-            if (negInst->opcode == ir_opcodes.IrOpcode::Neg && negInst->nops == 1 &&
+            wallvm.ir_types.IrInst* negInst = (wallvm.ir_types.IrInst*)trueVal;
+            if (negInst->opcode == wallvm.irOps.IrOpcode::Neg && negInst->nops == 1 &&
                 negInst->ops[0] == falseVal &&
-                (pred == ir_opcodes.IrICmpPred::Slt || pred == ir_opcodes.IrICmpPred::Sle))
+                (pred == wallvm.irOps.IrICmpPred::Slt || pred == wallvm.irOps.IrICmpPred::Sle))
             {
                 absOperand = falseVal;
             }
         }
 
-        if (!absOperand && falseVal.kind == ir_types.IrValueKind::Inst)
+        if (!absOperand && falseVal.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* negInst = (ir_types.IrInst*)falseVal;
-            if (negInst->opcode == ir_opcodes.IrOpcode::Neg && negInst->nops == 1 &&
+            wallvm.ir_types.IrInst* negInst = (wallvm.ir_types.IrInst*)falseVal;
+            if (negInst->opcode == wallvm.irOps.IrOpcode::Neg && negInst->nops == 1 &&
                 negInst->ops[0] == trueVal &&
-                (pred == ir_opcodes.IrICmpPred::Sgt || pred == ir_opcodes.IrICmpPred::Sge))
+                (pred == wallvm.irOps.IrICmpPred::Sgt || pred == wallvm.irOps.IrICmpPred::Sge))
             {
                 absOperand = trueVal;
             }
@@ -427,9 +420,9 @@ pub struct IdiomRecognizePass
 
         if (!absOperand) return false;
 
-        ir_types.IrType* ty = absOperand.type;
-        ir_types.IrValue* absOps[1] = { absOperand };
-        ir_types.IrInst* absInst = self.ctx.createInst(ir_opcodes.IrOpcode::Abs, ty, absOps, 1, 0, 0);
+        wallvm.ir_types.IrType* ty = absOperand.type;
+        wallvm.ir_types.IrValue* absOps[1] = { absOperand };
+        wallvm.ir_types.IrInst* absInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Abs, ty, absOps, 1, 0, 0);
         absOps[0].addUser(absInst);
         inst.parent.insertBefore(absInst, inst);
         inst.base.replaceAllUses(&absInst.base);
@@ -438,9 +431,9 @@ pub struct IdiomRecognizePass
     }
 }
 
-pub bool irPassIdiom(ir_types.IrFunc* func, void* userdata)
+pub bool irPassIdiom(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     IdiomRecognizePass pass = IdiomRecognizePass::new(ctx);
     return pass.run(func);

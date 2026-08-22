@@ -1,29 +1,27 @@
-
-@[[no_drop]]
-mod string = import(lib, "std/text/string.crl");
+mod std = import(lib, "std");
 
 pub struct uri
 {
-    string scheme;
-    string userInfo;
-    string host;
+    std.string.String scheme;
+    std.string.String userInfo;
+    std.string.String host;
     u16 port;
-    string path;
-    string query;
-    string fragment;
+    std.string.String path;
+    std.string.String query;
+    std.string.String fragment;
     bool hasPort;
 
     uri new()
     {
         uri u;
-        u.scheme = string.new();
-        u.userInfo = string.new();
-        u.host = string.new();
+        u.scheme = std.string.String::new();
+        u.userInfo = std.string.String::new();
+        u.host = std.string.String::new();
         u.port = 0;
         u.hasPort = false;
-        u.path = string.new();
-        u.query = string.new();
-        u.fragment = string.new();
+        u.path = std.string.String::new();
+        u.query = std.string.String::new();
+        u.fragment = std.string.String::new();
         return u;
     }
 
@@ -47,7 +45,7 @@ pub struct uri
         if (schemeEnd < input.len && input.ptr[schemeEnd] == ':')
         {
             self.scheme.free();
-            self.scheme = string.fromView(strView::fromParts(input.ptr, schemeEnd));
+            self.scheme = std.string.String.fromView(strView::fromParts(input.ptr, schemeEnd));
             i = schemeEnd + 1;
         }
 
@@ -68,7 +66,7 @@ pub struct uri
             if (at >= 0)
             {
                 self.userInfo.free();
-                self.userInfo = string.fromView(strView::fromParts(authority.ptr, (u64)at));
+                self.userInfo = std.string.String.fromView(strView::fromParts(authority.ptr, (u64)at));
                 authority = strView::fromParts(authority.ptr + (u64)at + 1, authority.len - (u64)at - 1);
             }
 
@@ -79,7 +77,7 @@ pub struct uri
             if (colon >= 0)
             {
                 self.host.free();
-                self.host = string.fromView(strView::fromParts(authority.ptr, (u64)colon));
+                self.host = std.string.String.fromView(strView::fromParts(authority.ptr, (u64)colon));
                 strView portStr = strView::fromParts(authority.ptr + (u64)colon + 1, authority.len - (u64)colon - 1);
                 if (portStr.len == 0) return false;
                 u64 portVal = 0;
@@ -95,7 +93,7 @@ pub struct uri
             else
             {
                 self.host.free();
-                self.host = string.fromView(authority);
+                self.host = std.string.String.fromView(authority);
             }
         }
 
@@ -105,12 +103,12 @@ pub struct uri
         if (pathEnd > i)
         {
             self.path.free();
-            self.path = string.fromView(strView::fromParts(input.ptr + i, pathEnd - i));
+            self.path = std.string.String.fromView(strView::fromParts(input.ptr + i, pathEnd - i));
         }
         else if (self.host.len > 0)
         {
             self.path.free();
-            self.path = string.fromView(strView::fromCstr("/"));
+            self.path = std.string.String.fromView(strView::fromCstr("/"));
         }
         i = pathEnd;
 
@@ -120,25 +118,25 @@ pub struct uri
             u64 qEnd = i;
             while (qEnd < input.len && input.ptr[qEnd] != '#') qEnd++;
             self.query.free();
-            self.query = string.fromView(strView::fromParts(input.ptr + i, qEnd - i));
+            self.query = std.string.String.fromView(strView::fromParts(input.ptr + i, qEnd - i));
             i = qEnd;
         }
         else if (self.query.len > 0)
         {
             self.query.free();
-            self.query = string.new();
+            self.query = std.string.String::new();
         }
 
         if (i < input.len && input.ptr[i] == '#')
         {
             i++;
             self.fragment.free();
-            self.fragment = string.fromView(strView::fromParts(input.ptr + i, input.len - i));
+            self.fragment = std.string.String.fromView(strView::fromParts(input.ptr + i, input.len - i));
         }
         else if (self.fragment.len > 0)
         {
             self.fragment.free();
-            self.fragment = string.new();
+            self.fragment = std.string.String::new();
         }
 
         return true;

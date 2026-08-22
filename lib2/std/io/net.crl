@@ -1,26 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod libc = import(lib, "std/platform/libc.crl");
-mod string = import(lib, "std/text/string.crl");
-
-extern i32 socket(i32 domain, i32 type, i32 protocol);
-extern i32 connect(i32 fd, const void* addr, i32 addrLen);
-extern i32 bind(i32 fd, const void* addr, i32 addrLen);
-extern i32 listen(i32 fd, i32 backlog);
-extern i32 accept(i32 fd, void* addr, i32* addrLen);
-extern i64 send(i32 fd, const u8* buf, u64 len, i32 flags);
-extern i64 recv(i32 fd, u8* buf, u64 len, i32 flags);
-extern i64 sendto(i32 fd, const u8* buf, u64 len, i32 flags, const void* dstAddr, i32 addrLen);
-extern i64 recvfrom(i32 fd, u8* buf, u64 len, i32 flags, void* srcAddr, i32* addrLen);
-extern i32 setsockopt(i32 fd, i32 level, i32 optname, const void* optval, i32 optlen);
-extern u64 htonl(u32 val);
-extern u16 htons(u16 val);
-extern u32 ntohl(u32 val);
-extern u16 ntohs(u16 val);
+mod libc = import(lib, "std/platform/std.libc.crl");
+mod string = import(lib, "std/text/std.string.crl");
 
 const i32 AF_INET = 2;
 const i32 SOCK_STREAM = 1;
@@ -38,7 +17,7 @@ pub struct sockaddr_in
     u8 sinZero[8];
 }
 
-bool _parseIp(string.strView ip, u32* out)
+bool _parseIp(std.string.strView ip, u32* out)
 {
     u32 octet = 0;
     u32 addrVal = 0;
@@ -65,7 +44,7 @@ bool _parseIp(string.strView ip, u32* out)
         }
     }
     if (octets != 4) return false;
-    *out = htonl(addrVal);
+    *out = std.libc.htonl(addrVal);
     return true;
 }
 
@@ -76,13 +55,13 @@ void _zeroSockaddr(sockaddr_in* a)
 
 pub distinct TcpSocket = i32;
 
-pub TcpSocket tcpConnect(string.strView ip, u16 port)
+pub TcpSocket tcpConnect(std.string.strView ip, u16 port)
 {
-    i32 fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    i32 fd = std.libc.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (fd < 0) return (TcpSocket)(-1);
 
     u32 ipAddr;
-    if (!_parseIp(ip, &ipAddr)) { libc.close(fd); return (TcpSocket)(-1); }
+    if (!_parseIp(ip, &ipAddr)) { std.libc.close(fd); return (TcpSocket)(-1); }
 
     sockaddr_in addr;
     _zeroSockaddr(&addr);
@@ -90,9 +69,9 @@ pub TcpSocket tcpConnect(string.strView ip, u16 port)
     addr.sinPort = htons(port);
     addr.sinAddr = ipAddr;
 
-    if (connect(fd, &addr, 16) < 0)
+    if (std.libc.connect(fd, &addr, 16) < 0)
     {
-        libc.close(fd);
+        std.libc.close(fd);
         return (TcpSocket)(-1);
     }
     return (TcpSocket)fd;
@@ -100,19 +79,19 @@ pub TcpSocket tcpConnect(string.strView ip, u16 port)
 
 pub TcpSocket tcpListen(u16 port)
 {
-    i32 fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    i32 fd = std.libc.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (fd < 0) return (TcpSocket)(-1);
 
     i32 optval = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &optval, 4);
+    std.libc.sendto(fd, SOL_SOCKET, SO_REUSEADDR, &optval, 4);
 
     sockaddr_in addr;
     _zeroSockaddr(&addr);
     addr.sinFamily = AF_INET;
     addr.sinPort = htons(port);
-    addr.sinAddr = htonl(0u);
-    if (bind(fd, &addr, 16) < 0) { libc.close(fd); return (TcpSocket)(-1); }
-    if (listen(fd, 128) < 0) { libc.close(fd); return (TcpSocket)(-1); }
+    addr.sinAddr = std.libc.htonl(0u);
+    if (std.libc.bind(fd, &addr, 16) < 0) { std.libc.close(fd); return (TcpSocket)(-1); }
+    if (std.libc.listen(fd, 128) < 0) { std.libc.close(fd); return (TcpSocket)(-1); }
     return (TcpSocket)fd;
 }
 
@@ -120,7 +99,7 @@ pub TcpSocket tcpAccept(TcpSocket server)
 {
     sockaddr_in addr;
     i32 addrLen = 16;
-    i32 fd = accept((i32)server, &addr, &addrLen);
+    i32 fd = std.libc.accept((i32)server, &addr, &addrLen);
     return (TcpSocket)fd;
 }
 
@@ -129,7 +108,7 @@ pub i64 tcpSend(TcpSocket sock, const u8* buf, u64 len)
     u64 sent = 0;
     while (sent < len)
     {
-        i64 n = send((i32)sock, buf + sent, len - sent, 0);
+        i64 n = std.libc.send((i32)sock, buf + sent, len - sent, 0);
         if (n <= 0) return n < 0 ? n : (i64)sent;
         sent += (u64)n;
     }
@@ -141,7 +120,7 @@ pub i64 tcpRecv(TcpSocket sock, u8* buf, u64 len)
     u64 got = 0;
     while (got < len)
     {
-        i64 n = recv((i32)sock, buf + got, len - got, 0);
+        i64 n = std.libc.recv((i32)sock, buf + got, len - got, 0);
         if (n <= 0) return n < 0 ? n : (i64)got;
         got += (u64)n;
     }
@@ -150,7 +129,7 @@ pub i64 tcpRecv(TcpSocket sock, u8* buf, u64 len)
 
 pub void tcpClose(TcpSocket sock)
 {
-    libc.close((i32)sock);
+    std.libc.close((i32)sock);
 }
 
 pub struct UdpSocket
@@ -161,7 +140,7 @@ pub struct UdpSocket
 pub UdpSocket udpSocket()
 {
     UdpSocket s;
-    s.fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    s.fd = std.libc.socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     return s;
 }
 
@@ -172,11 +151,11 @@ pub bool udpBind(UdpSocket* s, u16 port)
     _zeroSockaddr(&addr);
     addr.sinFamily = AF_INET;
     addr.sinPort = htons(port);
-    addr.sinAddr = htonl(0u);
-    return bind(s->fd, &addr, 16) == 0;
+    addr.sinAddr = std.libc.htonl(0u);
+    return std.libc.bind(s->fd, &addr, 16) == 0;
 }
 
-pub i64 udpSendTo(UdpSocket* s, const u8* buf, u64 len, string.strView ip, u16 port)
+pub i64 udpSendTo(UdpSocket* s, const u8* buf, u64 len, std.string.strView ip, u16 port)
 {
     if (s->fd < 0) return -1;
     u32 ipAddr;
@@ -186,17 +165,17 @@ pub i64 udpSendTo(UdpSocket* s, const u8* buf, u64 len, string.strView ip, u16 p
     addr.sinFamily = AF_INET;
     addr.sinPort = htons(port);
     addr.sinAddr = ipAddr;
-    return sendto(s->fd, buf, len, 0, &addr, 16);
+    return std.libc.sendto(s->fd, buf, len, 0, &addr, 16);
 }
 
 pub i64 udpRecvFrom(UdpSocket* s, u8* buf, u64 len)
 {
     if (s->fd < 0) return -1;
-    return recvfrom(s->fd, buf, len, 0, null, null);
+    return std.libc.recvfrom(s->fd, buf, len, 0, null, null);
 }
 
 pub void udpClose(UdpSocket* s)
 {
-    if (s->fd >= 0) libc.close(s->fd);
+    if (s->fd >= 0) std.libc.close(s->fd);
     s->fd = -1;
 }

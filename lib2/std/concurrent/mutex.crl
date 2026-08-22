@@ -6,35 +6,35 @@ pub struct mutex
 
     void init()
     {
-        std.platform.libc.pthread_mutex_init(self.impl, null);
+        std.libc.pthread_mutex_init(self.impl, null);
     }
 
     void initRecursive()
     {
         u8 attr[8];
-        std.platform.libc.pthread_mutexattr_init(attr);
-        std.platform.libc.pthread_mutexattr_settype(attr, 1);
-        std.platform.libc.pthread_mutex_init(self.impl, attr);
-        std.platform.libc.pthread_mutexattr_destroy(attr);
+        std.libc.pthread_mutexattr_init(attr);
+        std.libc.pthread_mutexattr_settype(attr, 1);
+        std.libc.pthread_mutex_init(self.impl, attr);
+        std.libc.pthread_mutexattr_destroy(attr);
     }
 
     void destroy()
     {
-        std.platform.libc.pthread_mutex_destroy(self.impl);
+        std.libc.pthread_mutex_destroy(self.impl);
     }
 
     void lock()
     {
-        std.platform.libc.pthread_mutex_lock(self.impl);
+        std.libc.pthread_mutex_lock(self.impl);
     }
 
     void unlock()
     {
-        std.platform.libc.pthread_mutex_unlock(self.impl);
+        std.libc.pthread_mutex_unlock(self.impl);
     }
 
     bool tryLock()
     {
-        return std.platform.libc.pthread_mutex_trylock(self.impl) == 0;
+        return std.libc.pthread_mutex_trylock(self.impl) == 0;
     }
 }

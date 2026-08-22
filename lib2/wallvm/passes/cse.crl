@@ -1,19 +1,11 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod wallvm = import(lib, "wallvm");
 
 pub struct CSEPass
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u64 eliminated;
 
-    CSEPass new(ir_types.IrContext* ctx)
+    CSEPass new(wallvm.ir_types.IrContext* ctx)
     {
         CSEPass p;
         p.ctx = ctx;
@@ -23,27 +15,27 @@ pub struct CSEPass
     // Local CSE within each basic block
     // This pass only removes redundant pure instructions already available
     // earlier in the same block.
-    bool run(ir_types.IrFunc* func)
+    bool run(wallvm.ir_types.IrFunc* func)
     {
         self.eliminated = 0;
         bool changed = false;
 
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             if (self.processBlock(bb)) changed = true;
         }
 
         return changed;
     }
 
-    bool processBlock(ir_types.IrBlock* bb)
+    bool processBlock(wallvm.ir_types.IrBlock* bb)
     {
         bool changed = false;
         u32 i = 0;
         while (i < bb.ninsts)
         {
-            ir_types.IrInst* inst = bb.insts[i];
+            wallvm.ir_types.IrInst* inst = bb.insts[i];
             if (!self.isCseCandidate(inst))
             {
                 i++;
@@ -53,7 +45,7 @@ pub struct CSEPass
             bool removed = false;
             for (u32 j = 0; j < i; j++)
             {
-                ir_types.IrInst* prev = bb.insts[j];
+                wallvm.ir_types.IrInst* prev = bb.insts[j];
                 if (self.areEquivalent(inst, prev))
                 {
                     inst.base.replaceAllUses(&prev.base);
@@ -70,58 +62,58 @@ pub struct CSEPass
         return changed;
     }
 
-    bool isCseCandidate(ir_types.IrInst* inst)
+    bool isCseCandidate(wallvm.ir_types.IrInst* inst)
     {
         switch (inst.opcode)
         {
-        case ir_opcodes.IrOpcode::Add:
-        case ir_opcodes.IrOpcode::Sub:
-        case ir_opcodes.IrOpcode::Mul:
-        case ir_opcodes.IrOpcode::And:
-        case ir_opcodes.IrOpcode::Or:
-        case ir_opcodes.IrOpcode::Xor:
-        case ir_opcodes.IrOpcode::Shl:
-        case ir_opcodes.IrOpcode::Lshr:
-        case ir_opcodes.IrOpcode::Ashr:
-        case ir_opcodes.IrOpcode::SMin:
-        case ir_opcodes.IrOpcode::SMax:
-        case ir_opcodes.IrOpcode::UMin:
-        case ir_opcodes.IrOpcode::UMax:
-        case ir_opcodes.IrOpcode::ICmp:
-        case ir_opcodes.IrOpcode::FAdd:
-        case ir_opcodes.IrOpcode::FSub:
-        case ir_opcodes.IrOpcode::FMul:
-        case ir_opcodes.IrOpcode::FDiv:
-        case ir_opcodes.IrOpcode::FCmp:
-        case ir_opcodes.IrOpcode::Trunc:
-        case ir_opcodes.IrOpcode::Zext:
-        case ir_opcodes.IrOpcode::Sext:
-        case ir_opcodes.IrOpcode::FpTrunc:
-        case ir_opcodes.IrOpcode::FpExt:
-        case ir_opcodes.IrOpcode::FpToSi:
-        case ir_opcodes.IrOpcode::SiToFp:
-        case ir_opcodes.IrOpcode::FpToUi:
-        case ir_opcodes.IrOpcode::UiToFp:
-        case ir_opcodes.IrOpcode::Bitcast:
-        case ir_opcodes.IrOpcode::Neg:
-        case ir_opcodes.IrOpcode::Not:
-        case ir_opcodes.IrOpcode::Abs:
-        case ir_opcodes.IrOpcode::FAbs:
-        case ir_opcodes.IrOpcode::FSqrt:
-        case ir_opcodes.IrOpcode::CtPop:
-        case ir_opcodes.IrOpcode::CtLz:
-        case ir_opcodes.IrOpcode::CtTz:
-        case ir_opcodes.IrOpcode::Rotl:
-        case ir_opcodes.IrOpcode::Rotr:
-        case ir_opcodes.IrOpcode::Bswap:
-        case ir_opcodes.IrOpcode::Select:
+        case wallvm.irOps.IrOpcode::Add:
+        case wallvm.irOps.IrOpcode::Sub:
+        case wallvm.irOps.IrOpcode::Mul:
+        case wallvm.irOps.IrOpcode::And:
+        case wallvm.irOps.IrOpcode::Or:
+        case wallvm.irOps.IrOpcode::Xor:
+        case wallvm.irOps.IrOpcode::Shl:
+        case wallvm.irOps.IrOpcode::Lshr:
+        case wallvm.irOps.IrOpcode::Ashr:
+        case wallvm.irOps.IrOpcode::SMin:
+        case wallvm.irOps.IrOpcode::SMax:
+        case wallvm.irOps.IrOpcode::UMin:
+        case wallvm.irOps.IrOpcode::UMax:
+        case wallvm.irOps.IrOpcode::ICmp:
+        case wallvm.irOps.IrOpcode::FAdd:
+        case wallvm.irOps.IrOpcode::FSub:
+        case wallvm.irOps.IrOpcode::FMul:
+        case wallvm.irOps.IrOpcode::FDiv:
+        case wallvm.irOps.IrOpcode::FCmp:
+        case wallvm.irOps.IrOpcode::Trunc:
+        case wallvm.irOps.IrOpcode::Zext:
+        case wallvm.irOps.IrOpcode::Sext:
+        case wallvm.irOps.IrOpcode::FpTrunc:
+        case wallvm.irOps.IrOpcode::FpExt:
+        case wallvm.irOps.IrOpcode::FpToSi:
+        case wallvm.irOps.IrOpcode::SiToFp:
+        case wallvm.irOps.IrOpcode::FpToUi:
+        case wallvm.irOps.IrOpcode::UiToFp:
+        case wallvm.irOps.IrOpcode::Bitcast:
+        case wallvm.irOps.IrOpcode::Neg:
+        case wallvm.irOps.IrOpcode::Not:
+        case wallvm.irOps.IrOpcode::Abs:
+        case wallvm.irOps.IrOpcode::FAbs:
+        case wallvm.irOps.IrOpcode::FSqrt:
+        case wallvm.irOps.IrOpcode::CtPop:
+        case wallvm.irOps.IrOpcode::CtLz:
+        case wallvm.irOps.IrOpcode::CtTz:
+        case wallvm.irOps.IrOpcode::Rotl:
+        case wallvm.irOps.IrOpcode::Rotr:
+        case wallvm.irOps.IrOpcode::Bswap:
+        case wallvm.irOps.IrOpcode::Select:
             return true;
         default:
             return false;
         }
     }
 
-    bool sameOperands(ir_types.IrInst* a, ir_types.IrInst* b)
+    bool sameOperands(wallvm.ir_types.IrInst* a, wallvm.ir_types.IrInst* b)
     {
         if (a->nops != b->nops) return false;
         for (u32 i = 0; i < a->nops; i++)
@@ -129,17 +121,17 @@ pub struct CSEPass
         return true;
     }
 
-    bool areEquivalent(ir_types.IrInst* a, ir_types.IrInst* b)
+    bool areEquivalent(wallvm.ir_types.IrInst* a, wallvm.ir_types.IrInst* b)
     {
         if (a->opcode != b->opcode) return false;
         if (a->base.type != b->base.type) return false;
         if (a->nops != b->nops) return false;
-        if (a->opcode == ir_opcodes.IrOpcode::ICmp && a->icmpPred != b->icmpPred) return false;
-        if (a->opcode == ir_opcodes.IrOpcode::FCmp && a->fcmpPred != b->fcmpPred) return false;
+        if (a->opcode == wallvm.irOps.IrOpcode::ICmp && a->icmpPred != b->icmpPred) return false;
+        if (a->opcode == wallvm.irOps.IrOpcode::FCmp && a->fcmpPred != b->fcmpPred) return false;
 
         if (sameOperands(a, b)) return true;
 
-        if (a->nops == 2 && ir_opcodes.irOpcodeIsCommutative(a->opcode))
+        if (a->nops == 2 && wallvm.irOps.irOpcodeIsCommutative(a->opcode))
         {
             if (a->ops[0] == b->ops[1] && a->ops[1] == b->ops[0])
                 return true;
@@ -154,9 +146,9 @@ pub struct CSEPass
     }
 }
 
-pub bool irPassCse(ir_types.IrFunc* func, void* userdata)
+pub bool irPassCse(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     CSEPass pass = CSEPass::new(ctx);
     return pass.run(func);

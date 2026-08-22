@@ -21,7 +21,7 @@ pub void emitIR(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, 
     emitir.emitIR(prog, top, mods, path, optLevel, debug);
 }
 
-pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
+pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug, str.strView* flagNames, str.strView* flagVals, u32 nflags)
 {
-    emits.emitAsm(prog, top, mods, path, optLevel, debug);
+    emits.emitAsm(prog, top, mods, path, optLevel, debug, flagNames, flagVals, nflags);
 }

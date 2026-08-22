@@ -1,14 +1,6 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
-mod mman = import(lib, "std/memory/mman.crl");
-mod limits = import(lib, "std/core/limits.crl");
+mod wallvm = import(lib, "wallvm");;
+mod std = import(lib, "std");
+mod core = import(lib, "core");
 
 enum LatticeKind
 {
@@ -67,12 +59,12 @@ static LatticeCell latticeMeet(LatticeCell a, LatticeCell b)
     return latticeTop();
 }
 
-static LatticeCell getCell(ir_types.IrValue* val, LatticeCell* cells)
+static LatticeCell getCell(wallvm.ir_types.IrValue* val, LatticeCell* cells)
 {
     if (!val) return latticeBottom();
-    if (val.kind == ir_types.IrValueKind::ConstInt) return latticeConstInt(val.valData);
-    if (val.kind == ir_types.IrValueKind::ConstFloat) return latticeConstFloat(val.valData);
-    if (val.kind == ir_types.IrValueKind::Block || val.kind == ir_types.IrValueKind::Func) return latticeTop();
+    if (val.kind == wallvm.ir_types.IrValueKind::ConstInt) return latticeConstInt(val.valData);
+    if (val.kind == wallvm.ir_types.IrValueKind::ConstFloat) return latticeConstFloat(val.valData);
+    if (val.kind == wallvm.ir_types.IrValueKind::Block || val.kind == wallvm.ir_types.IrValueKind::Func) return latticeTop();
     return cells[val.id];
 }
 
@@ -93,7 +85,7 @@ static u64 maskWidth(u32 bits)
     return (1ULL << bits) - 1;
 }
 
-static u32 findBlockIdx(ir_types.IrFunc* func, ir_types.IrBlock* block)
+static u32 findBlockIdx(wallvm.ir_types.IrFunc* func, wallvm.ir_types.IrBlock* block)
 {
     for (u32 i = 0; i < func.nblocks; i++)
         if (func.blocks[i] == block) return i;
@@ -101,18 +93,18 @@ static u32 findBlockIdx(ir_types.IrFunc* func, ir_types.IrBlock* block)
 }
 
 // Evaluate a single instruction given current lattice state
-static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* reachable, ir_types.IrFunc* func)
+static LatticeCell evalInst(wallvm.ir_types.IrInst* inst, LatticeCell* cells, bool* reachable, wallvm.ir_types.IrFunc* func)
 {
     switch (inst.opcode)
     {
-    case ir_opcodes.IrOpcode::Phi:
+    case wallvm.irOps.IrOpcode::Phi:
     {
         LatticeCell result = latticeBottom();
-        ir_types.IrBlock* bb = inst.parent;
+        wallvm.ir_types.IrBlock* bb = inst.parent;
         if (!bb) return latticeTop();
         for (u32 j = 0; j + 1 < inst.nops; j += 2)
         {
-            ir_types.IrBlock* pred = (ir_types.IrBlock*)inst.ops[j + 1];
+            wallvm.ir_types.IrBlock* pred = (wallvm.ir_types.IrBlock*)inst.ops[j + 1];
             u32 predIdx = findBlockIdx(func, pred);
             if (predIdx < func.nblocks && reachable[predIdx])
             {
@@ -123,7 +115,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return result;
     }
 
-    case ir_opcodes.IrOpcode::Select:
+    case wallvm.irOps.IrOpcode::Select:
     {
         if (inst.nops < 3) return latticeTop();
         LatticeCell cond = getCell(inst.ops[0], cells);
@@ -134,7 +126,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::ICmp:
+    case wallvm.irOps.IrOpcode::ICmp:
     {
         if (inst.nops < 2) return latticeTop();
         LatticeCell ac = getCell(inst.ops[0], cells);
@@ -154,16 +146,16 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             bool res;
             switch (inst.icmpPred)
             {
-            case ir_opcodes.IrICmpPred::Eq: res = (au == bu); break;
-            case ir_opcodes.IrICmpPred::Ne: res = (au != bu); break;
-            case ir_opcodes.IrICmpPred::Slt: res = (sa < sb); break;
-            case ir_opcodes.IrICmpPred::Sle: res = (sa <= sb); break;
-            case ir_opcodes.IrICmpPred::Sgt: res = (sa > sb); break;
-            case ir_opcodes.IrICmpPred::Sge: res = (sa >= sb); break;
-            case ir_opcodes.IrICmpPred::Ult: res = (au < bu); break;
-            case ir_opcodes.IrICmpPred::Ule: res = (au <= bu); break;
-            case ir_opcodes.IrICmpPred::Ugt: res = (au > bu); break;
-            case ir_opcodes.IrICmpPred::Uge: res = (au >= bu); break;
+            case wallvm.irOps.IrICmpPred::Eq: res = (au == bu); break;
+            case wallvm.irOps.IrICmpPred::Ne: res = (au != bu); break;
+            case wallvm.irOps.IrICmpPred::Slt: res = (sa < sb); break;
+            case wallvm.irOps.IrICmpPred::Sle: res = (sa <= sb); break;
+            case wallvm.irOps.IrICmpPred::Sgt: res = (sa > sb); break;
+            case wallvm.irOps.IrICmpPred::Sge: res = (sa >= sb); break;
+            case wallvm.irOps.IrICmpPred::Ult: res = (au < bu); break;
+            case wallvm.irOps.IrICmpPred::Ule: res = (au <= bu); break;
+            case wallvm.irOps.IrICmpPred::Ugt: res = (au > bu); break;
+            case wallvm.irOps.IrICmpPred::Uge: res = (au >= bu); break;
             }
             return latticeConstInt((u64)(res ? 1 : 0));
         }
@@ -176,19 +168,19 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             switch (inst.icmpPred)
             {
             // For integer compare predicates on floats, use ordered equality
-            case ir_opcodes.IrICmpPred::Eq: res = (fa == fb); break;
-            case ir_opcodes.IrICmpPred::Ne: res = (fa != fb); break;
-            case ir_opcodes.IrICmpPred::Slt: case ir_opcodes.IrICmpPred::Ult: res = (fa < fb); break;
-            case ir_opcodes.IrICmpPred::Sle: case ir_opcodes.IrICmpPred::Ule: res = (fa <= fb); break;
-            case ir_opcodes.IrICmpPred::Sgt: case ir_opcodes.IrICmpPred::Ugt: res = (fa > fb); break;
-            case ir_opcodes.IrICmpPred::Sge: case ir_opcodes.IrICmpPred::Uge: res = (fa >= fb); break;
+            case wallvm.irOps.IrICmpPred::Eq: res = (fa == fb); break;
+            case wallvm.irOps.IrICmpPred::Ne: res = (fa != fb); break;
+            case wallvm.irOps.IrICmpPred::Slt: case wallvm.irOps.IrICmpPred::Ult: res = (fa < fb); break;
+            case wallvm.irOps.IrICmpPred::Sle: case wallvm.irOps.IrICmpPred::Ule: res = (fa <= fb); break;
+            case wallvm.irOps.IrICmpPred::Sgt: case wallvm.irOps.IrICmpPred::Ugt: res = (fa > fb); break;
+            case wallvm.irOps.IrICmpPred::Sge: case wallvm.irOps.IrICmpPred::Uge: res = (fa >= fb); break;
             }
             return latticeConstInt((u64)(res ? 1 : 0));
         }
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::FCmp:
+    case wallvm.irOps.IrOpcode::FCmp:
     {
         if (inst.nops < 2) return latticeTop();
         LatticeCell ac = getCell(inst.ops[0], cells);
@@ -205,12 +197,12 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             bool res;
             switch (inst.fcmpPred)
             {
-            case ir_opcodes.IrFCmpPred::Oeq: case ir_opcodes.IrFCmpPred::Ueq: res = (fa == fb); break;
-            case ir_opcodes.IrFCmpPred::One: case ir_opcodes.IrFCmpPred::Une: res = (fa != fb); break;
-            case ir_opcodes.IrFCmpPred::Olt: case ir_opcodes.IrFCmpPred::Ult: res = (fa < fb); break;
-            case ir_opcodes.IrFCmpPred::Ole: case ir_opcodes.IrFCmpPred::Ule: res = (fa <= fb); break;
-            case ir_opcodes.IrFCmpPred::Ogt: case ir_opcodes.IrFCmpPred::Ugt: res = (fa > fb); break;
-            case ir_opcodes.IrFCmpPred::Oge: case ir_opcodes.IrFCmpPred::Uge: res = (fa >= fb); break;
+            case wallvm.irOps.IrFCmpPred::Oeq: case wallvm.irOps.IrFCmpPred::Ueq: res = (fa == fb); break;
+            case wallvm.irOps.IrFCmpPred::One: case wallvm.irOps.IrFCmpPred::Une: res = (fa != fb); break;
+            case wallvm.irOps.IrFCmpPred::Olt: case wallvm.irOps.IrFCmpPred::Ult: res = (fa < fb); break;
+            case wallvm.irOps.IrFCmpPred::Ole: case wallvm.irOps.IrFCmpPred::Ule: res = (fa <= fb); break;
+            case wallvm.irOps.IrFCmpPred::Ogt: case wallvm.irOps.IrFCmpPred::Ugt: res = (fa > fb); break;
+            case wallvm.irOps.IrFCmpPred::Oge: case wallvm.irOps.IrFCmpPred::Uge: res = (fa >= fb); break;
             }
             return latticeConstInt((u64)(res ? 1 : 0));
         }
@@ -221,27 +213,27 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             bool res;
             switch (inst.fcmpPred)
             {
-            case ir_opcodes.IrFCmpPred::Oeq: case ir_opcodes.IrFCmpPred::Ueq: res = (au == bu); break;
-            case ir_opcodes.IrFCmpPred::One: case ir_opcodes.IrFCmpPred::Une: res = (au != bu); break;
-            case ir_opcodes.IrFCmpPred::Olt: case ir_opcodes.IrFCmpPred::Ult: res = (au < bu); break;
-            case ir_opcodes.IrFCmpPred::Ole: case ir_opcodes.IrFCmpPred::Ule: res = (au <= bu); break;
-            case ir_opcodes.IrFCmpPred::Ogt: case ir_opcodes.IrFCmpPred::Ugt: res = (au > bu); break;
-            case ir_opcodes.IrFCmpPred::Oge: case ir_opcodes.IrFCmpPred::Uge: res = (au >= bu); break;
+            case wallvm.irOps.IrFCmpPred::Oeq: case wallvm.irOps.IrFCmpPred::Ueq: res = (au == bu); break;
+            case wallvm.irOps.IrFCmpPred::One: case wallvm.irOps.IrFCmpPred::Une: res = (au != bu); break;
+            case wallvm.irOps.IrFCmpPred::Olt: case wallvm.irOps.IrFCmpPred::Ult: res = (au < bu); break;
+            case wallvm.irOps.IrFCmpPred::Ole: case wallvm.irOps.IrFCmpPred::Ule: res = (au <= bu); break;
+            case wallvm.irOps.IrFCmpPred::Ogt: case wallvm.irOps.IrFCmpPred::Ugt: res = (au > bu); break;
+            case wallvm.irOps.IrFCmpPred::Oge: case wallvm.irOps.IrFCmpPred::Uge: res = (au >= bu); break;
             }
             return latticeConstInt((u64)(res ? 1 : 0));
         }
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Neg:
+    case wallvm.irOps.IrOpcode::Neg:
     {
         if (inst.nops < 1) return latticeTop();
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
         if (ac.kind == LatticeKind::Top) return latticeTop();
-        ir_types.IrType* ty = inst.base.type;
+        wallvm.ir_types.IrType* ty = inst.base.type;
         u32 bits = ty ? ty.width : 64;
-        if (ty && ty.kind == ir_types.IrTypeKind::Float)
+        if (ty && ty.kind == wallvm.ir_types.IrTypeKind::Float)
         {
             if (ac.kind == LatticeKind::ConstFloat)
             {
@@ -262,7 +254,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Not:
+    case wallvm.irOps.IrOpcode::Not:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -276,13 +268,13 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Abs:
+    case wallvm.irOps.IrOpcode::Abs:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
         if (ac.kind == LatticeKind::Top) return latticeTop();
-        ir_types.IrType* ty = inst.base.type;
-        if (ty && ty.kind == ir_types.IrTypeKind::Float)
+        wallvm.ir_types.IrType* ty = inst.base.type;
+        if (ty && ty.kind == wallvm.ir_types.IrTypeKind::Float)
         {
             if (ac.kind == LatticeKind::ConstFloat)
             {
@@ -306,7 +298,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::FAbs:
+    case wallvm.irOps.IrOpcode::FAbs:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -323,7 +315,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::FSqrt:
+    case wallvm.irOps.IrOpcode::FSqrt:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -340,7 +332,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Trunc:
+    case wallvm.irOps.IrOpcode::Trunc:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -354,7 +346,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Zext:
+    case wallvm.irOps.IrOpcode::Zext:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -368,7 +360,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Sext:
+    case wallvm.irOps.IrOpcode::Sext:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -382,7 +374,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Bitcast:
+    case wallvm.irOps.IrOpcode::Bitcast:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -391,7 +383,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::Bswap:
+    case wallvm.irOps.IrOpcode::Bswap:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -416,7 +408,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::CtPop:
+    case wallvm.irOps.IrOpcode::CtPop:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -431,7 +423,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::CtLz:
+    case wallvm.irOps.IrOpcode::CtLz:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -447,7 +439,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
         return latticeTop();
     }
 
-    case ir_opcodes.IrOpcode::CtTz:
+    case wallvm.irOps.IrOpcode::CtTz:
     {
         LatticeCell ac = getCell(inst.ops[0], cells);
         if (ac.kind == LatticeKind::Bottom) return latticeBottom();
@@ -476,8 +468,8 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             if (ac.kind == LatticeKind::Top || bc.kind == LatticeKind::Top)
                 return latticeTop();
 
-            ir_types.IrType* ty = inst.base.type;
-            bool isFloat = ty && ty.kind == ir_types.IrTypeKind::Float;
+            wallvm.ir_types.IrType* ty = inst.base.type;
+            bool isFloat = ty && ty.kind == wallvm.ir_types.IrTypeKind::Float;
 
             if (isFloat)
             {
@@ -490,14 +482,14 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
                 bool ok = true;
                 switch (inst.opcode)
                 {
-                case ir_opcodes.IrOpcode::FAdd: fr = fa + fb; break;
-                case ir_opcodes.IrOpcode::FSub: fr = fa - fb; break;
-                case ir_opcodes.IrOpcode::FMul: fr = fa * fb; break;
-                case ir_opcodes.IrOpcode::FDiv: if (fb == 0.0) { ok = false; break; } fr = fa / fb; break;
-                case ir_opcodes.IrOpcode::Add: fr = fa + fb; break;
-                case ir_opcodes.IrOpcode::Sub: fr = fa - fb; break;
-                case ir_opcodes.IrOpcode::Mul: fr = fa * fb; break;
-                case ir_opcodes.IrOpcode::SDiv: if (fb == 0.0) { ok = false; break; } fr = fa / fb; break;
+                case wallvm.irOps.IrOpcode::FAdd: fr = fa + fb; break;
+                case wallvm.irOps.IrOpcode::FSub: fr = fa - fb; break;
+                case wallvm.irOps.IrOpcode::FMul: fr = fa * fb; break;
+                case wallvm.irOps.IrOpcode::FDiv: if (fb == 0.0) { ok = false; break; } fr = fa / fb; break;
+                case wallvm.irOps.IrOpcode::Add: fr = fa + fb; break;
+                case wallvm.irOps.IrOpcode::Sub: fr = fa - fb; break;
+                case wallvm.irOps.IrOpcode::Mul: fr = fa * fb; break;
+                case wallvm.irOps.IrOpcode::SDiv: if (fb == 0.0) { ok = false; break; } fr = fa / fb; break;
                 default: ok = false; break;
                 }
                 if (!ok) return latticeTop();
@@ -517,38 +509,38 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
 
                 switch (inst.opcode)
                 {
-                case ir_opcodes.IrOpcode::Add:
+                case wallvm.irOps.IrOpcode::Add:
                     result = mask & (av + bv); break;
-                case ir_opcodes.IrOpcode::Sub:
+                case wallvm.irOps.IrOpcode::Sub:
                     result = mask & (av - bv); break;
-                case ir_opcodes.IrOpcode::Mul:
+                case wallvm.irOps.IrOpcode::Mul:
                     result = mask & (av * bv); break;
-                case ir_opcodes.IrOpcode::And:
+                case wallvm.irOps.IrOpcode::And:
                     result = mask & (av & bv); break;
-                case ir_opcodes.IrOpcode::Or:
+                case wallvm.irOps.IrOpcode::Or:
                     result = mask & (av | bv); break;
-                case ir_opcodes.IrOpcode::Xor:
+                case wallvm.irOps.IrOpcode::Xor:
                     result = mask & (av ^ bv); break;
-                case ir_opcodes.IrOpcode::Shl:
+                case wallvm.irOps.IrOpcode::Shl:
                     result = mask & (av << (bv & 0x3F)); break;
-                case ir_opcodes.IrOpcode::Lshr:
+                case wallvm.irOps.IrOpcode::Lshr:
                     result = mask & (av >> (bv & 0x3F)); break;
-                case ir_opcodes.IrOpcode::Ashr:
+                case wallvm.irOps.IrOpcode::Ashr:
                     result = (u64)((i64)av >> (bv & 0x3F)); break;
-                case ir_opcodes.IrOpcode::SDiv:
-                    if (bv == 0 || ((i64)av == limits.INT64_MIN && (i64)bv == -1)) return latticeTop();
+                case wallvm.irOps.IrOpcode::SDiv:
+                    if (bv == 0 || ((i64)av == core.limits.INT64_MIN && (i64)bv == -1)) return latticeTop();
                     result = (u64)((i64)av / (i64)bv); break;
-                case ir_opcodes.IrOpcode::UDiv:
+                case wallvm.irOps.IrOpcode::UDiv:
                     if (bv == 0) return latticeTop();
                     result = av / bv; break;
-                case ir_opcodes.IrOpcode::SRem:
+                case wallvm.irOps.IrOpcode::SRem:
                     if (bv == 0) return latticeTop();
-                    if ((i64)av == limits.INT64_MIN && (i64)bv == -1) { result = 0; break; }
+                    if ((i64)av == core.limits.INT64_MIN && (i64)bv == -1) { result = 0; break; }
                     result = (u64)((i64)av % (i64)bv); break;
-                case ir_opcodes.IrOpcode::URem:
+                case wallvm.irOps.IrOpcode::URem:
                     if (bv == 0) return latticeTop();
                     result = av % bv; break;
-                case ir_opcodes.IrOpcode::Rotl:
+                case wallvm.irOps.IrOpcode::Rotl:
                 {
                     u32 shift = (u32)(bv & (bits > 0 ? (bits - 1) : 0x3F));
                     if (bits > 0 && bits < 64)
@@ -564,7 +556,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
                     }
                     break;
                 }
-                case ir_opcodes.IrOpcode::Rotr:
+                case wallvm.irOps.IrOpcode::Rotr:
                 {
                     u32 shift = (u32)(bv & (bits > 0 ? (bits - 1) : 0x3F));
                     if (bits > 0 && bits < 64)
@@ -580,10 +572,10 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
                     }
                     break;
                 }
-                case ir_opcodes.IrOpcode::SMin: result = (i64)av < (i64)bv ? av : bv; break;
-                case ir_opcodes.IrOpcode::SMax: result = (i64)av > (i64)bv ? av : bv; break;
-                case ir_opcodes.IrOpcode::UMin: result = av < bv ? av : bv; break;
-                case ir_opcodes.IrOpcode::UMax: result = av > bv ? av : bv; break;
+                case wallvm.irOps.IrOpcode::SMin: result = (i64)av < (i64)bv ? av : bv; break;
+                case wallvm.irOps.IrOpcode::SMax: result = (i64)av > (i64)bv ? av : bv; break;
+                case wallvm.irOps.IrOpcode::UMin: result = av < bv ? av : bv; break;
+                case wallvm.irOps.IrOpcode::UMax: result = av > bv ? av : bv; break;
                 default: return latticeTop();
                 }
                 return latticeConstInt(mask & result);
@@ -596,8 +588,8 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             if (ac.kind == LatticeKind::Bottom) return latticeBottom();
             if (ac.kind == LatticeKind::Top) return latticeTop();
 
-            ir_types.IrType* ty = inst.base.type;
-            bool isFloat = ty && ty.kind == ir_types.IrTypeKind::Float;
+            wallvm.ir_types.IrType* ty = inst.base.type;
+            bool isFloat = ty && ty.kind == wallvm.ir_types.IrTypeKind::Float;
 
             if (isFloat)
             {
@@ -608,7 +600,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
                 bool ok = true;
                 switch (inst.opcode)
                 {
-                case ir_opcodes.IrOpcode::Fma:
+                case wallvm.irOps.IrOpcode::Fma:
                 {
                     ok = false;
                     break;
@@ -635,7 +627,7 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
             }
         }
 
-        if (inst.opcode == ir_opcodes.IrOpcode::Fma && inst.nops == 3)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Fma && inst.nops == 3)
         {
             LatticeCell ac = getCell(inst.ops[0], cells);
             LatticeCell bc = getCell(inst.ops[1], cells);
@@ -665,15 +657,15 @@ static LatticeCell evalInst(ir_types.IrInst* inst, LatticeCell* cells, bool* rea
 }
 
 // Propagate control flow from a terminator
-static void handleTerminator(ir_types.IrInst* inst, LatticeCell* cells, bool* reachable,
-    ir_types.IrInst** worklist, u32* wlSize, u32 wlCap, ir_types.IrFunc* func)
+static void handleTerminator(wallvm.ir_types.IrInst* inst, LatticeCell* cells, bool* reachable,
+    wallvm.ir_types.IrInst** worklist, u32* wlSize, u32 wlCap, wallvm.ir_types.IrFunc* func)
 {
     switch (inst.opcode)
     {
-    case ir_opcodes.IrOpcode::Br:
+    case wallvm.irOps.IrOpcode::Br:
     {
         if (inst.nops < 1) break;
-        ir_types.IrBlock* target = (ir_types.IrBlock*)inst.ops[0];
+        wallvm.ir_types.IrBlock* target = (wallvm.ir_types.IrBlock*)inst.ops[0];
         u32 tgtIdx = findBlockIdx(func, target);
         if (!reachable[tgtIdx])
         {
@@ -685,7 +677,7 @@ static void handleTerminator(ir_types.IrInst* inst, LatticeCell* cells, bool* re
         {
             for (u32 i = 0; i < target.ninsts && *wlSize < wlCap; i++)
             {
-                if (target.insts[i].opcode == ir_opcodes.IrOpcode::Phi)
+                if (target.insts[i].opcode == wallvm.irOps.IrOpcode::Phi)
                     worklist[(*wlSize)++] = target.insts[i];
                 else
                     break;
@@ -693,12 +685,12 @@ static void handleTerminator(ir_types.IrInst* inst, LatticeCell* cells, bool* re
         }
         break;
     }
-    case ir_opcodes.IrOpcode::CondBr:
+    case wallvm.irOps.IrOpcode::CondBr:
     {
         if (inst.nops < 3) break;
         LatticeCell cond = getCell(inst.ops[0], cells);
-        ir_types.IrBlock* trueBlock = (ir_types.IrBlock*)inst.ops[1];
-        ir_types.IrBlock* falseBlock = (ir_types.IrBlock*)inst.ops[2];
+        wallvm.ir_types.IrBlock* trueBlock = (wallvm.ir_types.IrBlock*)inst.ops[1];
+        wallvm.ir_types.IrBlock* falseBlock = (wallvm.ir_types.IrBlock*)inst.ops[2];
 
         bool trueEdge = true;
         bool falseEdge = true;
@@ -722,7 +714,7 @@ static void handleTerminator(ir_types.IrInst* inst, LatticeCell* cells, bool* re
             {
                 for (u32 i = 0; i < trueBlock.ninsts && *wlSize < wlCap; i++)
                 {
-                    if (trueBlock.insts[i].opcode == ir_opcodes.IrOpcode::Phi)
+                    if (trueBlock.insts[i].opcode == wallvm.irOps.IrOpcode::Phi)
                         worklist[(*wlSize)++] = trueBlock.insts[i];
                     else
                         break;
@@ -743,7 +735,7 @@ static void handleTerminator(ir_types.IrInst* inst, LatticeCell* cells, bool* re
             {
                 for (u32 i = 0; i < falseBlock.ninsts && *wlSize < wlCap; i++)
                 {
-                    if (falseBlock.insts[i].opcode == ir_opcodes.IrOpcode::Phi)
+                    if (falseBlock.insts[i].opcode == wallvm.irOps.IrOpcode::Phi)
                         worklist[(*wlSize)++] = falseBlock.insts[i];
                     else
                         break;
@@ -758,32 +750,32 @@ static void handleTerminator(ir_types.IrInst* inst, LatticeCell* cells, bool* re
 }
 
 // Add users of a value to the worklist
-static void addUsers(ir_types.IrValue* val, ir_types.IrInst** worklist, u32* wlSize, u32 wlCap)
+static void addUsers(wallvm.ir_types.IrValue* val, wallvm.ir_types.IrInst** worklist, u32* wlSize, u32 wlCap)
 {
     if (!val) return;
     for (u32 i = 0; i < val.nusers && *wlSize < wlCap; i++)
         worklist[(*wlSize)++] = val.users[i];
 }
 
-pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
+pub bool irPassSccp(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
 
     u32 maxId = 0;
     u32 totalInsts = 0;
     for (u32 bi = 0; bi < func.nblocks; bi++)
     {
-        ir_types.IrBlock* bb = func.blocks[bi];
+        wallvm.ir_types.IrBlock* bb = func.blocks[bi];
         if (bb.base.id > maxId) maxId = bb.base.id;
         totalInsts += bb.ninsts;
         for (u32 ii = 0; ii < bb.ninsts; ii++)
         {
-            ir_types.IrInst* inst = bb.insts[ii];
+            wallvm.ir_types.IrInst* inst = bb.insts[ii];
             if (inst.base.id > maxId) maxId = inst.base.id;
             for (u32 oi = 0; oi < inst.nops; oi++)
             {
-                ir_types.IrValue* op = inst.ops[oi];
+                wallvm.ir_types.IrValue* op = inst.ops[oi];
                 if (op && op.id > maxId) maxId = op.id;
             }
         }
@@ -791,12 +783,12 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
 
     if (maxId == 0 && totalInsts == 0) return false;
 
-    LatticeCell* cells = mman.alloc<LatticeCell>(maxId + 1);
+    LatticeCell* cells = std.mman.alloc<LatticeCell>(maxId + 1);
     for (u32 i = 0; i <= maxId; i++)
         cells[i] = latticeBottom();
 
     u32 nblocks = func.nblocks;
-    bool* reachable = mman.alloc<bool>(nblocks);
+    bool* reachable = std.mman.alloc<bool>(nblocks);
     for (u32 i = 0; i < nblocks; i++)
         reachable[i] = false;
     if (nblocks > 0)
@@ -805,12 +797,12 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
     // Worklist capacity, each value refines at most twice and each refinement
     // re-enqueues its users, so the generous headroom never truncates.
     u32 wlCap = totalInsts * 8 + 64;
-    ir_types.IrInst** worklist = mman.alloc<ir_types.IrInst*>(wlCap);
+    wallvm.ir_types.IrInst** worklist = std.mman.alloc<wallvm.ir_types.IrInst*>(wlCap);
     u32 wlSize = 0;
 
     if (nblocks > 0)
     {
-        ir_types.IrBlock* entry = func.blocks[0];
+        wallvm.ir_types.IrBlock* entry = func.blocks[0];
         for (u32 i = 0; i < entry.ninsts && wlSize < wlCap; i++)
             worklist[wlSize++] = entry.insts[i];
     }
@@ -819,7 +811,7 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
     u32 wlHead = 0;
     while (wlHead < wlSize)
     {
-        ir_types.IrInst* inst = worklist[wlHead++];
+        wallvm.ir_types.IrInst* inst = worklist[wlHead++];
         LatticeCell oldCell = cells[inst.base.id];
 
         if (oldCell.kind == LatticeKind::Top) continue;
@@ -832,7 +824,7 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
 
         addUsers(&inst.base, worklist, &wlSize, wlCap);
 
-        if (ir_opcodes.irOpcodeIsTerminator(inst.opcode))
+        if (wallvm.irOps.irOpcodeIsTerminator(inst.opcode))
             handleTerminator(inst, cells, reachable, worklist, &wlSize, wlCap, func);
     }
 
@@ -841,19 +833,19 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
 
     for (u32 bi = 0; bi < nblocks; bi++)
     {
-        ir_types.IrBlock* bb = func.blocks[bi];
+        wallvm.ir_types.IrBlock* bb = func.blocks[bi];
 
         if (!reachable[bi])
         {
             for (u32 i = 0; i < bb.ninsts; i++)
             {
-                ir_types.IrInst* inst = bb.insts[i];
+                wallvm.ir_types.IrInst* inst = bb.insts[i];
                 for (u32 j = 0; j < inst.nops; j++)
                     if (inst.ops[j])
                         inst.ops[j].removeUser(inst);
-                if (inst.capOps > 0) mman.dealloc<ir_types.IrValue*>(inst.ops);
-                if (inst.base.capUsers > 0) mman.dealloc<ir_types.IrInst*>(inst.base.users);
-                mman.dealloc<ir_types.IrInst>(inst);
+                if (inst.capOps > 0) std.mman.dealloc<wallvm.ir_types.IrValue*>(inst.ops);
+                if (inst.base.capUsers > 0) std.mman.dealloc<wallvm.ir_types.IrInst*>(inst.base.users);
+                std.mman.dealloc<wallvm.ir_types.IrInst>(inst);
             }
             bb.ninsts = 0;
             changed = true;
@@ -863,12 +855,12 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
         u32 ii = 0;
         while (ii < bb.ninsts)
         {
-            ir_types.IrInst* inst = bb.insts[ii];
+            wallvm.ir_types.IrInst* inst = bb.insts[ii];
             LatticeCell cell = cells[inst.base.id];
 
             if (latticeIsConstant(cell))
             {
-                ir_types.IrValue* cval = null;
+                wallvm.ir_types.IrValue* cval = null;
                 if (cell.kind == LatticeKind::ConstInt)
                 {
                     cval = ctx.constInt(inst.base.type, cell.valData);
@@ -881,7 +873,7 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
                 }
 
                 // Don't replace the terminator, control flow is not a constant.
-                if (!ir_opcodes.irOpcodeIsTerminator(inst.opcode))
+                if (!wallvm.irOps.irOpcodeIsTerminator(inst.opcode))
                 {
                     inst.base.replaceAllUses(cval);
                     inst.erase();
@@ -895,9 +887,9 @@ pub bool irPassSccp(ir_types.IrFunc* func, void* userdata)
     }
 
     // Clean up
-    mman.dealloc<LatticeCell>(cells);
-    mman.dealloc<bool>(reachable);
-    mman.dealloc<ir_types.IrInst*>(worklist);
+    std.mman.dealloc<LatticeCell>(cells);
+    std.mman.dealloc<bool>(reachable);
+    std.mman.dealloc<wallvm.ir_types.IrInst*>(worklist);
 
     return changed;
 }

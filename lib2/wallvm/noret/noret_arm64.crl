@@ -1,9 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 pub struct NoretArm64
 {
@@ -27,11 +22,11 @@ pub struct NoretArm64
         if (self.outLen + needed <= self.outCap) return;
         u32 newCap = self.outCap ? self.outCap * 2 : 64;
         while (self.outLen + needed > newCap) newCap *= 2;
-        char* newOut = mman.alloc<char>(newCap);
+        char* newOut = std.mman.alloc<char>(newCap);
         if (self.out)
         {
-            mman.copy<char>(newOut, self.out, self.outLen);
-            mman.dealloc<char>(self.out);
+            std.mman.copy<char>(newOut, self.out, self.outLen);
+            std.mman.dealloc<char>(self.out);
         }
         self.out = newOut;
         self.outCap = newCap;
@@ -66,7 +61,7 @@ pub struct NoretArm64
 
     void destroy()
     {
-        if (self.out) mman.dealloc<char>(self.out);
+        if (self.out) std.mman.dealloc<char>(self.out);
     }
 
     void emitLinuxSyscall()

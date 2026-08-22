@@ -1,15 +1,7 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
-mod loop_detect = import(lib, "wallvm/passes/loop_detect.crl");
-mod mman = import(lib, "std/memory/mman.crl");
-
-static bool isInsideLoop(ir_types.IrBlock* bb, loop_detect.IrLoop* lp)
+static bool isInsideLoop(wallvm.ir_types.IrBlock* bb, wallvm.passes.loopdetect.IrLoop* lp)
 {
     for (u32 i = 0; i < lp->nblocks; i++)
         if (lp->blocks[i] == bb) return true;
@@ -18,13 +10,13 @@ static bool isInsideLoop(ir_types.IrBlock* bb, loop_detect.IrLoop* lp)
 
 // Creates a preheader for the loop (or reuses the existing one) and rewires
 // the external predecessors and header phis accordingly.
-pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoop* lp, ir_types.IrFunc* func)
+pub wallvm.ir_types.IrBlock* createPreheader(wallvm.ir_types.IrContext* ctx, wallvm.passes.loopdetect.IrLoop* lp, wallvm.ir_types.IrFunc* func)
 {
-    ir_types.IrBlock* header = lp->header;
-    ir_types.IrValue* headerVal = &header.base;
+    wallvm.ir_types.IrBlock* header = lp->header;
+    wallvm.ir_types.IrValue* headerVal = &header.base;
 
     u32 extCap = header.npreds > 0 ? header.npreds : 4;
-    ir_types.IrBlock** extPreds = mman.alloc<ir_types.IrBlock*>(extCap);
+    wallvm.ir_types.IrBlock** extPreds = std.mman.alloc<wallvm.ir_types.IrBlock*>(extCap);
     u32 nextPreds = 0;
     for (u32 i = 0; i < header.npreds; i++)
     {
@@ -33,9 +25,9 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
             if (nextPreds >= extCap)
             {
                 u32 nc = extCap * 2;
-                ir_types.IrBlock** np = mman.alloc<ir_types.IrBlock*>(nc);
+                wallvm.ir_types.IrBlock** np = std.mman.alloc<wallvm.ir_types.IrBlock*>(nc);
                 for (u32 j = 0; j < nextPreds; j++) np[j] = extPreds[j];
-                mman.dealloc<ir_types.IrBlock*>(extPreds);
+                std.mman.dealloc<wallvm.ir_types.IrBlock*>(extPreds);
                 extPreds = np;
                 extCap = nc;
             }
@@ -44,30 +36,30 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
     }
     if (nextPreds == 0)
     {
-        mman.dealloc<ir_types.IrBlock*>(extPreds);
+        std.mman.dealloc<wallvm.ir_types.IrBlock*>(extPreds);
         return null;
     }
 
-    ir_types.IrBlock* preheader = ctx.createBlock("preheader");
+    wallvm.ir_types.IrBlock* preheader = ctx.createBlock("preheader");
     func.addBlock(preheader);
-    ir_types.IrValue* preVal = &preheader.base;
+    wallvm.ir_types.IrValue* preVal = &preheader.base;
 
     u32 i = 0;
     while (i < header.npreds)
     {
-        ir_types.IrBlock* pred = header.preds[i];
+        wallvm.ir_types.IrBlock* pred = header.preds[i];
         if (!isInsideLoop(pred, lp))
         {
-            ir_types.IrInst* term = pred.terminator();
+            wallvm.ir_types.IrInst* term = pred.terminator();
             if (term)
             {
-                if (term.opcode == ir_opcodes.IrOpcode::Br && term.ops[0] == headerVal)
+                if (term.opcode == wallvm.irOps.IrOpcode::Br && term.ops[0] == headerVal)
                 {
                     headerVal.removeUser(term);
                     term.ops[0] = preVal;
                     preVal.addUser(term);
                 }
-                else if (term.opcode == ir_opcodes.IrOpcode::CondBr)
+                else if (term.opcode == wallvm.irOps.IrOpcode::CondBr)
                 {
                     for (u32 j = 1; j <= 2; j++)
                     {
@@ -93,10 +85,10 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
 
     preheader.addSucc(header);
 
-    ir_types.IrValue** ops = mman.alloc<ir_types.IrValue*>(1);
+    wallvm.ir_types.IrValue** ops = std.mman.alloc<wallvm.ir_types.IrValue*>(1);
     ops[0] = headerVal;
-    ir_types.IrInst* brInst = ctx.createInst(ir_opcodes.IrOpcode::Br, ctx.tyVoid(), ops, 1, 0, 0);
-    mman.dealloc<ir_types.IrValue*>(ops);
+    wallvm.ir_types.IrInst* brInst = ctx.createInst(wallvm.irOps.IrOpcode::Br, ctx.tyVoid(), ops, 1, 0, 0);
+    std.mman.dealloc<wallvm.ir_types.IrValue*>(ops);
     brInst.parent = preheader;
     preheader.addInst(brInst);
     headerVal.addUser(brInst);
@@ -105,8 +97,8 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
     // the header's phis must be rewired to take their values via the preheader.
     for (u32 ii = 0; ii < header.ninsts; ii++)
     {
-        ir_types.IrInst* phi = header.insts[ii];
-        if (phi.opcode != ir_opcodes.IrOpcode::Phi) break;
+        wallvm.ir_types.IrInst* phi = header.insts[ii];
+        if (phi.opcode != wallvm.irOps.IrOpcode::Phi) break;
 
         if (nextPreds == 1)
         {
@@ -125,10 +117,10 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
         {
             // Merge the external incoming values in a phi inside the preheader
             u32 nExt = nextPreds;
-            ir_types.IrValue** phOps = mman.alloc<ir_types.IrValue*>(nExt * 2);
+            wallvm.ir_types.IrValue** phOps = std.mman.alloc<wallvm.ir_types.IrValue*>(nExt * 2);
             for (u32 pi = 0; pi < nExt; pi++)
             {
-                ir_types.IrValue* v = phi.nops > 0 ? phi.ops[0] : null;
+                wallvm.ir_types.IrValue* v = phi.nops > 0 ? phi.ops[0] : null;
                 for (u32 oi = 1; oi < phi.nops; oi += 2)
                 {
                     if (phi.ops[oi] == &extPreds[pi].base)
@@ -140,11 +132,11 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
                 phOps[pi * 2] = v;
                 phOps[pi * 2 + 1] = &extPreds[pi].base;
             }
-            ir_types.IrInst* ph = ctx.createInst(ir_opcodes.IrOpcode::Phi, phi.base.type, phOps, nExt * 2, 0, 0);
+            wallvm.ir_types.IrInst* ph = ctx.createInst(wallvm.irOps.IrOpcode::Phi, phi.base.type, phOps, nExt * 2, 0, 0);
             for (u32 oi = 0; oi < nExt * 2; oi++)
                 if (phOps[oi])
                     phOps[oi].addUser(ph);
-            mman.dealloc<ir_types.IrValue*>(phOps);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(phOps);
 
             // Insert the phi at the front of the preheader (before its br)
             for (u32 j = preheader.ninsts; j > 0; j--)
@@ -156,13 +148,13 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
             // Rebuild the header phi with internal pairs + (preheader phi, preheader)
             u32 ninternal = 0;
             for (u32 oi = 1; oi < phi.nops; oi += 2)
-                if (isInsideLoop((ir_types.IrBlock*)phi.ops[oi], lp)) ninternal++;
+                if (isInsideLoop((wallvm.ir_types.IrBlock*)phi.ops[oi], lp)) ninternal++;
             u32 newOpsCount = ninternal * 2 + 2;
-            ir_types.IrValue** newOps = mman.alloc<ir_types.IrValue*>(newOpsCount);
+            wallvm.ir_types.IrValue** newOps = std.mman.alloc<wallvm.ir_types.IrValue*>(newOpsCount);
             u32 k = 0;
             for (u32 oi = 0; oi < phi.nops; oi += 2)
             {
-                ir_types.IrBlock* pb = (ir_types.IrBlock*)phi.ops[oi + 1];
+                wallvm.ir_types.IrBlock* pb = (wallvm.ir_types.IrBlock*)phi.ops[oi + 1];
                 if (isInsideLoop(pb, lp))
                 {
                     newOps[k++] = phi.ops[oi];
@@ -179,38 +171,38 @@ pub ir_types.IrBlock* createPreheader(ir_types.IrContext* ctx, loop_detect.IrLoo
             ph.base.addUser(phi);
             preVal.addUser(phi);
 
-            if (phi.capOps > 0) mman.dealloc<ir_types.IrValue*>(phi.ops);
+            if (phi.capOps > 0) std.mman.dealloc<wallvm.ir_types.IrValue*>(phi.ops);
             phi.ops = newOps;
             phi.nops = newOpsCount;
             phi.capOps = newOpsCount;
         }
     }
 
-    mman.dealloc<ir_types.IrBlock*>(extPreds);
+    std.mman.dealloc<wallvm.ir_types.IrBlock*>(extPreds);
 
     lp->preheader = preheader;
     return preheader;
 }
 
-pub bool isLoopInvariant(ir_types.IrInst* inst, loop_detect.IrLoop* lp)
+pub bool isLoopInvariant(wallvm.ir_types.IrInst* inst, wallvm.passes.loopdetect.IrLoop* lp)
 {
-    if (ir_opcodes.irOpcodeIsTerminator(inst.opcode)) return false;
-    if (inst.opcode == ir_opcodes.IrOpcode::Phi) return false;
-    if (ir_opcodes.irOpcodeIsMemory(inst.opcode)) return false;
-    if (inst.opcode == ir_opcodes.IrOpcode::Call) return false;
+    if (wallvm.irOps.irOpcodeIsTerminator(inst.opcode)) return false;
+    if (inst.opcode == wallvm.irOps.IrOpcode::Phi) return false;
+    if (wallvm.irOps.irOpcodeIsMemory(inst.opcode)) return false;
+    if (inst.opcode == wallvm.irOps.IrOpcode::Call) return false;
 
     for (u32 i = 0; i < inst.nops; i++)
     {
-        ir_types.IrValue* op = inst.ops[i];
+        wallvm.ir_types.IrValue* op = inst.ops[i];
         if (!op) continue;
-        if (op.kind == ir_types.IrValueKind::ConstInt) continue;
-        if (op.kind == ir_types.IrValueKind::ConstFloat) continue;
-        if (op.kind == ir_types.IrValueKind::Block) continue;
-        if (op.kind == ir_types.IrValueKind::Func) continue;
+        if (op.kind == wallvm.ir_types.IrValueKind::ConstInt) continue;
+        if (op.kind == wallvm.ir_types.IrValueKind::ConstFloat) continue;
+        if (op.kind == wallvm.ir_types.IrValueKind::Block) continue;
+        if (op.kind == wallvm.ir_types.IrValueKind::Func) continue;
 
-        if (op.kind == ir_types.IrValueKind::Inst)
+        if (op.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* opInst = (ir_types.IrInst*)op;
+            wallvm.ir_types.IrInst* opInst = (wallvm.ir_types.IrInst*)op;
             if (isInsideLoop(opInst.parent, lp))
                 return false;
             continue;
@@ -222,20 +214,20 @@ pub bool isLoopInvariant(ir_types.IrInst* inst, loop_detect.IrLoop* lp)
     return true;
 }
 
-static bool loopHasInvariantInst(loop_detect.IrLoop* lp)
+static bool loopHasInvariantInst(wallvm.passes.loopdetect.IrLoop* lp)
 {
     for (u32 bi = 0; bi < lp->nblocks; bi++)
     {
-        ir_types.IrBlock* bb = lp->blocks[bi];
+        wallvm.ir_types.IrBlock* bb = lp->blocks[bi];
         for (u32 ii = 0; ii < bb.ninsts; ii++)
             if (isLoopInvariant(bb.insts[ii], lp)) return true;
     }
     return false;
 }
 
-pub void hoistToPreheader(ir_types.IrInst* inst, ir_types.IrBlock* preheader)
+pub void hoistToPreheader(wallvm.ir_types.IrInst* inst, wallvm.ir_types.IrBlock* preheader)
 {
-    ir_types.IrBlock* oldBlock = inst.parent;
+    wallvm.ir_types.IrBlock* oldBlock = inst.parent;
     if (!oldBlock) return;
 
     bool found = false;
@@ -252,7 +244,7 @@ pub void hoistToPreheader(ir_types.IrInst* inst, ir_types.IrBlock* preheader)
     }
     if (!found) return;
 
-    ir_types.IrInst* term = preheader.terminator();
+    wallvm.ir_types.IrInst* term = preheader.terminator();
     u32 insertPos = preheader.ninsts;
     if (term)
     {
@@ -266,10 +258,10 @@ pub void hoistToPreheader(ir_types.IrInst* inst, ir_types.IrBlock* preheader)
     if (preheader.ninsts >= preheader.capInsts)
     {
         u32 newCap = preheader.capInsts ? preheader.capInsts * 2 : 8;
-        ir_types.IrInst** newInsts = mman.alloc<ir_types.IrInst*>(newCap);
+        wallvm.ir_types.IrInst** newInsts = std.mman.alloc<wallvm.ir_types.IrInst*>(newCap);
         for (u32 i = 0; i < preheader.ninsts; i++)
             newInsts[i] = preheader.insts[i];
-        if (preheader.insts) mman.dealloc<ir_types.IrInst*>(preheader.insts);
+        if (preheader.insts) std.mman.dealloc<wallvm.ir_types.IrInst*>(preheader.insts);
         preheader.insts = newInsts;
         preheader.capInsts = newCap;
     }
@@ -282,33 +274,33 @@ pub void hoistToPreheader(ir_types.IrInst* inst, ir_types.IrBlock* preheader)
     preheader.ninsts++;
 }
 
-pub bool irPassLicm(ir_types.IrFunc* func, void* userdata)
+pub bool irPassLicm(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
 
-    loop_detect.IrLoop** loops = loop_detect.irLoopDetectNatural(func);
+    wallvm.passes.loopdetect.IrLoop** loops = wallvm.passes.loopdetect.irLoopDetectNatural(func);
     if (!loops) return false;
 
     bool changed = false;
 
     for (u32 li = 0; loops[li]; li++)
     {
-        loop_detect.IrLoop* lp = loops[li];
+        wallvm.passes.loopdetect.IrLoop* lp = loops[li];
         if (!loopHasInvariantInst(lp)) continue;
 
-        ir_types.IrBlock* preheader = createPreheader(ctx, lp, func);
+        wallvm.ir_types.IrBlock* preheader = createPreheader(ctx, lp, func);
         if (!preheader) continue;
 
         bool loopChanged = false;
 
         for (u32 bi = 0; bi < lp->nblocks; bi++)
         {
-            ir_types.IrBlock* bb = lp->blocks[bi];
+            wallvm.ir_types.IrBlock* bb = lp->blocks[bi];
             u32 ii = 0;
             while (ii < bb.ninsts)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
                 if (isLoopInvariant(inst, lp))
                 {
                     hoistToPreheader(inst, preheader);
@@ -324,6 +316,6 @@ pub bool irPassLicm(ir_types.IrFunc* func, void* userdata)
         if (loopChanged) changed = true;
     }
 
-    mman.dealloc<loop_detect.IrLoop*>(loops);
+    std.mman.dealloc<wallvm.passes.loopdetect.IrLoop*>(loops);
     return changed;
 }

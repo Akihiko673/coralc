@@ -1,13 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod asm_rules = import("wallvm/rules/asm_rules.crl");
-mod mman = import("std/memory/mman.crl");
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 // genFunc always consumes lsra's valData assignments (SPILL_BIT/FLOAT_BIT
 // encoding), chosen per-target by the switch in wallvm.crl.
@@ -19,15 +11,15 @@ pub char* X86_64_RESERVED_FLOAT[] = { "xmm0", "xmm1", "xmm2" };
 
 pub struct X86_64Codegen
 {
-    ir_types.IrContext* ctx;
-    asm_rules.ABIRules abi;
+    wallvm.ir_types.IrContext* ctx;
+    wallvm.asm_rules.ABIRules abi;
     // Output syntax: true = AT&T (gas), false = Intel (nasm). The rules
     // table for the platform picks the default.
     bool att;
     char* out;
     u32 outLen;
     u32 outCap;
-    ir_types.IrFunc* func;
+    wallvm.ir_types.IrFunc* func;
     u32 frameSize;
     u32 floatScratchSlot;
     u32* stackSlots;
@@ -56,14 +48,14 @@ pub struct X86_64Codegen
     u32 externNamesLen;
     u32 externNamesCap;
 
-    X86_64Codegen new(ir_types.IrContext* ctx, u32 cc, bool att)
+    X86_64Codegen new(wallvm.ir_types.IrContext* ctx, u32 cc, bool att)
     {
         X86_64Codegen c;
         c.ctx = ctx;
-        if (cc == (u32)asm_rules.CallingConvention::Win64)
-            c.abi = asm_rules.win64Abi();
+        if (cc == (u32)wallvm.asm_rules.CallingConvention::Win64)
+            c.abi = wallvm.asm_rules.win64Abi();
         else
-            c.abi = asm_rules.sysvAbi();
+            c.abi = wallvm.asm_rules.sysvAbi();
         c.att = att;
         c.out = null;
         c.outLen = 0;
@@ -99,11 +91,11 @@ pub struct X86_64Codegen
         if (self.outCap >= self.outLen + n) return;
         u32 nc = self.outCap ? self.outCap * 2 : 4096;
         while (nc < self.outLen + n) nc *= 2;
-        char* nb = mman.alloc<char>(nc);
+        char* nb = std.mman.alloc<char>(nc);
         if (self.out)
         {
             for (u32 i = 0; i < self.outLen; i++) nb[i] = self.out[i];
-            mman.dealloc<char>(self.out);
+            std.mman.dealloc<char>(self.out);
         }
         self.out = nb;
         self.outCap = nc;
@@ -147,9 +139,9 @@ pub struct X86_64Codegen
         if (self.externNamesLen == self.externNamesCap)
         {
             u32 nc = self.externNamesCap == 0 ? 8u : self.externNamesCap * 2u;
-            char** nb = mman.alloc<char*>(nc);
+            char** nb = std.mman.alloc<char*>(nc);
             for (u32 i = 0; i < self.externNamesLen; i++) nb[i] = self.externNames[i];
-            if (self.externNames) mman.dealloc<char*>(self.externNames);
+            if (self.externNames) std.mman.dealloc<char*>(self.externNames);
             self.externNames = nb;
             self.externNamesCap = nc;
         }
@@ -272,11 +264,11 @@ pub struct X86_64Codegen
         self.c('e'); self.c(r64[1]); self.c('x');
     }
 
-    void emitSize(ir_types.IrType* ty)
+    void emitSize(wallvm.ir_types.IrType* ty)
     {
         if (!ty) { self.s("qword "); return; }
-        if (ty->kind == ir_types.IrTypeKind::Ptr) { self.s("qword "); return; }
-        if (ty->kind == ir_types.IrTypeKind::Float)
+        if (ty->kind == wallvm.ir_types.IrTypeKind::Ptr) { self.s("qword "); return; }
+        if (ty->kind == wallvm.ir_types.IrTypeKind::Float)
         { self.s(ty->width == 64 ? "qword " : "dword "); return; }
         u32 w = ty->width;
         if (w <= 8) self.s("byte ");
@@ -292,16 +284,16 @@ pub struct X86_64Codegen
         if (id < self.stackSlotsCap) return;
         u32 nc = self.stackSlotsCap ? self.stackSlotsCap * 2 : 64;
         while (nc <= id) nc *= 2;
-        u32* ns = mman.alloc<u32>(nc);
+        u32* ns = std.mman.alloc<u32>(nc);
         for (u32 i = 0; i < self.stackSlotsCap; i++) ns[i] = self.stackSlots[i];
         for (u32 i = self.stackSlotsCap; i < nc; i++) ns[i] = 0;
-        if (self.stackSlots) mman.dealloc<u32>(self.stackSlots);
+        if (self.stackSlots) std.mman.dealloc<u32>(self.stackSlots);
         self.stackSlots = ns;
         self.stackSlotsCap = nc;
         if (id >= self.stackSlotsLen) self.stackSlotsLen = id + 1;
     }
 
-    u32 slot(ir_types.IrValue* v)
+    u32 slot(wallvm.ir_types.IrValue* v)
     {
         if (!v) return 0;
         u32 id = v->id;
@@ -314,14 +306,14 @@ pub struct X86_64Codegen
         return self.stackSlots[id];
     }
 
-    bool isConst(ir_types.IrValue* v)
+    bool isConst(wallvm.ir_types.IrValue* v)
     {
         if (!v) return true;
-        ir_types.IrValueKind k = v->kind;
-        return k == ir_types.IrValueKind::ConstInt || k == ir_types.IrValueKind::ConstFloat;
+        wallvm.ir_types.IrValueKind k = v->kind;
+        return k == wallvm.ir_types.IrValueKind::ConstInt || k == wallvm.ir_types.IrValueKind::ConstFloat;
     }
 
-    void emitImm(ir_types.IrValue* v)
+    void emitImm(wallvm.ir_types.IrValue* v)
     {
         u64 n = v->valData;
         if (n <= 0x7FFFFFFF) { self.u(n); return; }
@@ -366,10 +358,10 @@ pub struct X86_64Codegen
         {
             u32 nc = self.intHoldsCap ? self.intHoldsCap * 2 : 8;
             while (nc <= ai) nc *= 2;
-            u32* nh = mman.alloc<u32>(nc);
+            u32* nh = std.mman.alloc<u32>(nc);
             for (u32 i = 0; i < self.intHoldsCap; i++) nh[i] = self.intHolds[i];
             for (u32 i = self.intHoldsCap; i < nc; i++) nh[i] = 0;
-            if (self.intHolds) mman.dealloc<u32>(self.intHolds);
+            if (self.intHolds) std.mman.dealloc<u32>(self.intHolds);
             self.intHolds = nh;
             self.intHoldsCap = nc;
         }
@@ -383,10 +375,10 @@ pub struct X86_64Codegen
         {
             u32 nc = self.floatHoldsCap ? self.floatHoldsCap * 2 : 8;
             while (nc <= ai) nc *= 2;
-            u32* nh = mman.alloc<u32>(nc);
+            u32* nh = std.mman.alloc<u32>(nc);
             for (u32 i = 0; i < self.floatHoldsCap; i++) nh[i] = self.floatHolds[i];
             for (u32 i = self.floatHoldsCap; i < nc; i++) nh[i] = 0;
-            if (self.floatHolds) mman.dealloc<u32>(self.floatHolds);
+            if (self.floatHolds) std.mman.dealloc<u32>(self.floatHolds);
             self.floatHolds = nh;
             self.floatHoldsCap = nc;
         }
@@ -423,7 +415,7 @@ pub struct X86_64Codegen
         }
         if (self.numAllocInt > 0)
         {
-            self.allocIntNames = mman.alloc<const char*>(self.numAllocInt);
+            self.allocIntNames = std.mman.alloc<const char*>(self.numAllocInt);
             u32 k = 0;
             for (u32 i = 0; i < self.abi.numCallerSaveRegs; i++)
             {
@@ -436,7 +428,7 @@ pub struct X86_64Codegen
         }
         if (self.numAllocFloat > 0)
         {
-            self.allocFloatNames = mman.alloc<const char*>(self.numAllocFloat);
+            self.allocFloatNames = std.mman.alloc<const char*>(self.numAllocFloat);
             u32 k = 0;
             for (u32 i = 0; i < self.abi.numFloatArgRegs; i++)
             {
@@ -449,12 +441,12 @@ pub struct X86_64Codegen
         }
     }
 
-    bool isRegValue(ir_types.IrValue* v)
+    bool isRegValue(wallvm.ir_types.IrValue* v)
     {
-        return v && v->kind == ir_types.IrValueKind::Inst;
+        return v && v->kind == wallvm.ir_types.IrValueKind::Inst;
     }
 
-    u64 valEnc(ir_types.IrValue* v)
+    u64 valEnc(wallvm.ir_types.IrValue* v)
     {
         return v->valData;
     }
@@ -506,7 +498,7 @@ pub struct X86_64Codegen
     }
 
     // Load constant into the width form of register r.
-    void loadW(ir_types.IrValue* v, const char* r, u32 w)
+    void loadW(wallvm.ir_types.IrValue* v, const char* r, u32 w)
     {
         u64 n = v->valData;
         if (self.att)
@@ -559,13 +551,13 @@ pub struct X86_64Codegen
     }
 
     // Loads value v into register r (r <- v).
-    void load(ir_types.IrValue* v, const char* r)
+    void load(wallvm.ir_types.IrValue* v, const char* r)
     {
         if (!v) { self.inst2("xor", r, r); return; }
         if (self.isConst(v))
         {
             u32 w = v->type ? v->type->width : 64;
-            if (v->kind == ir_types.IrValueKind::ConstFloat) w = 64;
+            if (v->kind == wallvm.ir_types.IrValueKind::ConstFloat) w = 64;
             if (w <= 32) { self.loadW(v, r, 32); return; }
             self.movImm(r, v->valData, 64);
             return;
@@ -600,11 +592,11 @@ pub struct X86_64Codegen
 
     // Load for arithmetic: zero-extends sub-32-bit values so the upper
     // register bits are never garbage.
-    void loadArith(ir_types.IrValue* v, const char* r)
+    void loadArith(wallvm.ir_types.IrValue* v, const char* r)
     {
         if (!v) { self.inst2("xor", r, r); return; }
         if (self.isConst(v)) { self.load(v, r); return; }
-        ir_types.IrType* ty = v->type;
+        wallvm.ir_types.IrType* ty = v->type;
         u32 w = ty ? ty->width : 64;
         u64 e = self.valEnc(v);
         if ((e & 0x80000000UL) != 0)
@@ -639,7 +631,7 @@ pub struct X86_64Codegen
             self.movzxEmit(32, w, self.regW(r, 32), self.regW(r, w));
     }
 
-    void store(ir_types.IrValue* v, const char* r)
+    void store(wallvm.ir_types.IrValue* v, const char* r)
     {
         if (!v) return;
         u64 e = self.valEnc(v);
@@ -749,7 +741,7 @@ pub struct X86_64Codegen
 
     // Emits a memory-or-register operand for a non-constant value (used by
     // div/rem divisors). Text only, no instruction or size.
-    void emitIntOperand(ir_types.IrValue* v)
+    void emitIntOperand(wallvm.ir_types.IrValue* v)
     {
         u64 e = self.valEnc(v);
         if ((e & 0x80000000UL) != 0)
@@ -767,7 +759,7 @@ pub struct X86_64Codegen
         self.emitSpillRefSlot(v);
     }
 
-    void emitSpillRefSlot(ir_types.IrValue* v)
+    void emitSpillRefSlot(wallvm.ir_types.IrValue* v)
     {
         if (self.att) { self.c('-'); self.u((u64)self.slot(v)); self.s("(%rbp)"); return; }
         self.c('['); self.s("rbp-"); self.u((u64)self.slot(v)); self.c(']');
@@ -775,7 +767,7 @@ pub struct X86_64Codegen
 
     // Float helpers
 
-    void floatLoad(ir_types.IrValue* v, const char* xd)
+    void floatLoad(wallvm.ir_types.IrValue* v, const char* xd)
     {
         if (v && self.isConst(v))
         {
@@ -816,7 +808,7 @@ pub struct X86_64Codegen
         self.inst2("xorpd", xd, xd);
     }
 
-    void floatStore(ir_types.IrValue* v, const char* xs)
+    void floatStore(wallvm.ir_types.IrValue* v, const char* xs)
     {
         if (!v) return;
         u64 e = self.valEnc(v);
@@ -841,7 +833,7 @@ pub struct X86_64Codegen
     }
     // Block labels
 
-    u32 resolveBlock(ir_types.IrValue* bv)
+    u32 resolveBlock(wallvm.ir_types.IrValue* bv)
     {
         for (u32 i = 0; i < self.func.nblocks; i++)
             if (&self.func.blocks[i].base == bv) return i;
@@ -866,7 +858,7 @@ pub struct X86_64Codegen
     // The value's destination when it is a plain allocated int register
     // (not spilled, not float); null otherwise. Computations that target a
     // register run directly into it, skipping the rax round trip.
-    const char* destReg(ir_types.IrValue* res)
+    const char* destReg(wallvm.ir_types.IrValue* res)
     {
         if (!res || !self.isRegValue(res)) return null;
         u64 e = self.valEnc(res);
@@ -875,7 +867,7 @@ pub struct X86_64Codegen
         return self.allocIntNames[self.valLow(e)];
     }
 
-    void markDest(const char* dreg, ir_types.IrValue* res)
+    void markDest(const char* dreg, wallvm.ir_types.IrValue* res)
     {
         if (!dreg) return;
         u32 ai = self.intIdxOf(dreg);
@@ -886,11 +878,11 @@ pub struct X86_64Codegen
     // register when it is an allocated register; falls back to the
     // rax round trip for spilled destinations.
 
-    void emitArith(ir_types.IrInst* inst, const char* mne)
+    void emitArith(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 w = res->type ? res->type->width : 64;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
@@ -921,10 +913,10 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitUnary(ir_types.IrInst* inst, const char* mne)
+    void emitUnary(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 w = res->type ? res->type->width : 64;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
@@ -937,11 +929,11 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitDivRem(ir_types.IrInst* inst, const char* mne, bool sig, bool rem)
+    void emitDivRem(wallvm.ir_types.IrInst* inst, const char* mne, bool sig, bool rem)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 w = res->type ? res->type->width : 64;
         self.load(lhs, "rax");
         if (sig)
@@ -990,11 +982,11 @@ pub struct X86_64Codegen
         else self.store(res, "rax");
     }
 
-    void emitShift(ir_types.IrInst* inst, const char* mne)
+    void emitShift(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 w = res->type ? res->type->width : 64;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
@@ -1015,12 +1007,12 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitICmp(ir_types.IrInst* inst)
+    void emitICmp(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_opcodes.IrICmpPred p = inst->icmpPred;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.irOps.IrICmpPred p = inst->icmpPred;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.loadArith(lhs, acc);
@@ -1029,16 +1021,16 @@ pub struct X86_64Codegen
         const char* cc;
         switch (p)
         {
-        case ir_opcodes.IrICmpPred::Eq: cc = "sete"; break;
-        case ir_opcodes.IrICmpPred::Ne: cc = "setne"; break;
-        case ir_opcodes.IrICmpPred::Slt: cc = "setl"; break;
-        case ir_opcodes.IrICmpPred::Sle: cc = "setle"; break;
-        case ir_opcodes.IrICmpPred::Sgt: cc = "setg"; break;
-        case ir_opcodes.IrICmpPred::Sge: cc = "setge"; break;
-        case ir_opcodes.IrICmpPred::Ult: cc = "setb"; break;
-        case ir_opcodes.IrICmpPred::Ule: cc = "setbe"; break;
-        case ir_opcodes.IrICmpPred::Ugt: cc = "seta"; break;
-        case ir_opcodes.IrICmpPred::Uge: cc = "setae"; break;
+        case wallvm.irOps.IrICmpPred::Eq: cc = "sete"; break;
+        case wallvm.irOps.IrICmpPred::Ne: cc = "setne"; break;
+        case wallvm.irOps.IrICmpPred::Slt: cc = "setl"; break;
+        case wallvm.irOps.IrICmpPred::Sle: cc = "setle"; break;
+        case wallvm.irOps.IrICmpPred::Sgt: cc = "setg"; break;
+        case wallvm.irOps.IrICmpPred::Sge: cc = "setge"; break;
+        case wallvm.irOps.IrICmpPred::Ult: cc = "setb"; break;
+        case wallvm.irOps.IrICmpPred::Ule: cc = "setbe"; break;
+        case wallvm.irOps.IrICmpPred::Ugt: cc = "seta"; break;
+        case wallvm.irOps.IrICmpPred::Uge: cc = "setae"; break;
         default: cc = "sete"; break;
         }
         self.inst1(cc, self.regW(acc, 8));
@@ -1049,12 +1041,12 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitFCmp(ir_types.IrInst* inst)
+    void emitFCmp(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_opcodes.IrFCmpPred p = inst->fcmpPred;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.irOps.IrFCmpPred p = inst->fcmpPred;
         bool isDouble = lhs && lhs->type && lhs->type->width == 64;
         const char* cmpOp = (const char*)(isDouble ? "comisd" : "comiss");
         self.floatLoad(lhs, "xmm0");
@@ -1063,18 +1055,18 @@ pub struct X86_64Codegen
         const char* cc;
         switch (p)
         {
-        case ir_opcodes.IrFCmpPred::Oeq: cc = "sete"; break;
-        case ir_opcodes.IrFCmpPred::One: cc = "setne"; break;
-        case ir_opcodes.IrFCmpPred::Olt: cc = "setb"; break;
-        case ir_opcodes.IrFCmpPred::Ole: cc = "setbe"; break;
-        case ir_opcodes.IrFCmpPred::Ogt: cc = "seta"; break;
-        case ir_opcodes.IrFCmpPred::Oge: cc = "setae"; break;
-        case ir_opcodes.IrFCmpPred::Ueq: cc = "sete"; break;
-        case ir_opcodes.IrFCmpPred::Une: cc = "setne"; break;
-        case ir_opcodes.IrFCmpPred::Ult: cc = "setb"; break;
-        case ir_opcodes.IrFCmpPred::Ule: cc = "setbe"; break;
-        case ir_opcodes.IrFCmpPred::Ugt: cc = "seta"; break;
-        case ir_opcodes.IrFCmpPred::Uge: cc = "setae"; break;
+        case wallvm.irOps.IrFCmpPred::Oeq: cc = "sete"; break;
+        case wallvm.irOps.IrFCmpPred::One: cc = "setne"; break;
+        case wallvm.irOps.IrFCmpPred::Olt: cc = "setb"; break;
+        case wallvm.irOps.IrFCmpPred::Ole: cc = "setbe"; break;
+        case wallvm.irOps.IrFCmpPred::Ogt: cc = "seta"; break;
+        case wallvm.irOps.IrFCmpPred::Oge: cc = "setae"; break;
+        case wallvm.irOps.IrFCmpPred::Ueq: cc = "sete"; break;
+        case wallvm.irOps.IrFCmpPred::Une: cc = "setne"; break;
+        case wallvm.irOps.IrFCmpPred::Ult: cc = "setb"; break;
+        case wallvm.irOps.IrFCmpPred::Ule: cc = "setbe"; break;
+        case wallvm.irOps.IrFCmpPred::Ugt: cc = "seta"; break;
+        case wallvm.irOps.IrFCmpPred::Uge: cc = "setae"; break;
         default: cc = "sete"; break;
         }
         self.inst1(cc, "al");
@@ -1085,18 +1077,18 @@ pub struct X86_64Codegen
     // value is read from its home before any argument register is written
     // (all pushes happen first, all pops after), so aliasing between a
     // value's register and another argument's register cannot corrupt it.
-    void emitCall(ir_types.IrInst* inst)
+    void emitCall(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* callee = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* callee = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 nArgs = inst->nops > 0 ? inst->nops - 1 : 0;
         u32 k = nArgs < self.abi.numArgRegs ? nArgs : self.abi.numArgRegs;
 
         u32 fc = 0;
         for (u32 i = 0; i < nArgs; i++)
         {
-            ir_types.IrValue* arg = inst->ops[i + 1];
-            if (arg && arg->type && arg->type->kind == ir_types.IrTypeKind::Float)
+            wallvm.ir_types.IrValue* arg = inst->ops[i + 1];
+            if (arg && arg->type && arg->type->kind == wallvm.ir_types.IrTypeKind::Float)
             {
                 if (fc < self.abi.numFloatArgRegs)
                 {
@@ -1111,8 +1103,8 @@ pub struct X86_64Codegen
         u32 m = 0;
         for (u32 i = k; i < nArgs; i++)
         {
-            ir_types.IrValue* arg = inst->ops[i + 1];
-            if (!arg || !arg->type || arg->type->kind != ir_types.IrTypeKind::Float) m++;
+            wallvm.ir_types.IrValue* arg = inst->ops[i + 1];
+            if (!arg || !arg->type || arg->type->kind != wallvm.ir_types.IrTypeKind::Float) m++;
         }
         u32 align = self.abi.stackAlignment ? self.abi.stackAlignment : 16;
         u32 pad = 0;
@@ -1127,24 +1119,24 @@ pub struct X86_64Codegen
         // [rsp+8] at the callee.
         for (u32 i = nArgs; i > k; i--)
         {
-            ir_types.IrValue* arg = inst->ops[i];
-            if (arg && arg->type && arg->type->kind == ir_types.IrTypeKind::Float) continue;
+            wallvm.ir_types.IrValue* arg = inst->ops[i];
+            if (arg && arg->type && arg->type->kind == wallvm.ir_types.IrTypeKind::Float) continue;
             self.load(arg, "rax");
             self.inst1("push", "rax");
         }
         // Register args, ascending index.
         for (u32 i = 0; i < k; i++)
         {
-            ir_types.IrValue* arg = inst->ops[i + 1];
-            if (arg && arg->type && arg->type->kind == ir_types.IrTypeKind::Float) continue;
+            wallvm.ir_types.IrValue* arg = inst->ops[i + 1];
+            if (arg && arg->type && arg->type->kind == wallvm.ir_types.IrTypeKind::Float) continue;
             self.load(arg, "rax");
             self.inst1("push", "rax");
         }
         // Pop into argument registers, descending index.
         for (u32 i = k; i > 0; i--)
         {
-            ir_types.IrValue* arg = inst->ops[i];
-            if (arg && arg->type && arg->type->kind == ir_types.IrTypeKind::Float) continue;
+            wallvm.ir_types.IrValue* arg = inst->ops[i];
+            if (arg && arg->type && arg->type->kind == wallvm.ir_types.IrTypeKind::Float) continue;
             const char* reg = self.abi.argRegs[i - 1];
             self.inst1("pop", reg);
             u32 ai = self.intIdxOf(reg);
@@ -1156,7 +1148,7 @@ pub struct X86_64Codegen
 
         if (callee)
         {
-            if (callee->kind == ir_types.IrValueKind::Func && callee->name && callee->name[0])
+            if (callee->kind == wallvm.ir_types.IrValueKind::Func && callee->name && callee->name[0])
             {
                 self.externSym(callee->name);
                 self.pad(); self.s("call "); self.s(callee->name); self.c('\n');
@@ -1174,9 +1166,9 @@ pub struct X86_64Codegen
         if (self.abi.shadowSpaceBytes > 0)
             self.addRsp(self.abi.shadowSpaceBytes);
 
-        if (res->type && res->type->kind != ir_types.IrTypeKind::Void)
+        if (res->type && res->type->kind != wallvm.ir_types.IrTypeKind::Void)
         {
-            if (res->type->kind == ir_types.IrTypeKind::Float)
+            if (res->type->kind == wallvm.ir_types.IrTypeKind::Float)
                 self.floatStore(res, "xmm0");
             else
                 self.store(res, "rax");
@@ -1199,11 +1191,11 @@ pub struct X86_64Codegen
         else { self.pad(); self.s("add rsp, "); self.u(n); self.c('\n'); }
     }
 
-    void emitLoad(ir_types.IrInst* inst)
+    void emitLoad(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_types.IrType* ty = res->type;
+        wallvm.ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrType* ty = res->type;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.load(ptr, "rax");
@@ -1217,13 +1209,13 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitStore(ir_types.IrInst* inst)
+    void emitStore(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* ptr = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrType* ty = val ? val->type : null;
+        wallvm.ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* ptr = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrType* ty = val ? val->type : null;
         u32 w = ty ? ty->width : 64;
-        if (ty && ty->kind == ir_types.IrTypeKind::Float)
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Float)
         {
             self.load(ptr, "rcx");
             self.floatLoad(val, "xmm0");
@@ -1233,7 +1225,7 @@ pub struct X86_64Codegen
             { self.pad(); self.s("mov"); self.c(' '); self.emitSize(ty); self.s("[rcx], "); self.s("xmm0\n"); }
             return;
         }
-        if (ty && ty->kind == ir_types.IrTypeKind::Ptr)
+        if (ty && ty->kind == wallvm.ir_types.IrTypeKind::Ptr)
             w = 64;
         self.load(ptr, "rcx");
         self.load(val, "rax");
@@ -1243,11 +1235,11 @@ pub struct X86_64Codegen
         { self.pad(); self.s("mov "); self.emitSize(ty); self.s("[rcx], "); self.emitRegW("rax", w); self.c('\n'); }
     }
 
-    void emitAlloca(ir_types.IrInst* inst)
+    void emitAlloca(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 sz = 8;
-        if (res->type && res->type->kind == ir_types.IrTypeKind::Ptr && res->type->elem)
+        if (res->type && res->type->kind == wallvm.ir_types.IrTypeKind::Ptr && res->type->elem)
         {
             // Full element size: arrays (and struct byte-blocks mapped to
             // array(i8,N)) reserve N bytes, scalars round up to 8.
@@ -1266,17 +1258,17 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitGep(ir_types.IrInst* inst)
+    void emitGep(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* ptr = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 nidxs = inst->nops > 1 ? inst->nops - 1 : 0;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.load(ptr, acc);
         for (u32 i = 0; i < nidxs; i++)
         {
-            ir_types.IrValue* idx = inst->ops[i + 1];
+            wallvm.ir_types.IrValue* idx = inst->ops[i + 1];
             if (self.isConst(idx))
             {
                 u64 off = idx->valData * 8;
@@ -1303,20 +1295,20 @@ pub struct X86_64Codegen
         else
             self.store(res, "rax");
     }
-    void emitCast(ir_types.IrInst* inst)
+    void emitCast(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
-        ir_types.IrType* st = src ? src->type : null;
-        ir_types.IrType* dt = res->type;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrType* st = src ? src->type : null;
+        wallvm.ir_types.IrType* dt = res->type;
         u32 sw = st ? st->width : 64;
         u32 dw = dt ? dt->width : 64;
 
         switch (inst->opcode)
         {
-        case ir_opcodes.IrOpcode::Trunc:
+        case wallvm.irOps.IrOpcode::Trunc:
             self.load(src, "rax"); self.store(res, "rax"); break;
-        case ir_opcodes.IrOpcode::Zext:
+        case wallvm.irOps.IrOpcode::Zext:
             self.load(src, "rax");
             if (dw > sw)
             {
@@ -1331,7 +1323,7 @@ pub struct X86_64Codegen
             }
             self.store(res, "rax");
             break;
-        case ir_opcodes.IrOpcode::Sext:
+        case wallvm.irOps.IrOpcode::Sext:
             self.load(src, "rax");
             if (dw > sw)
             {
@@ -1341,42 +1333,42 @@ pub struct X86_64Codegen
             }
             self.store(res, "rax");
             break;
-        case ir_opcodes.IrOpcode::FpTrunc:
+        case wallvm.irOps.IrOpcode::FpTrunc:
             self.floatLoad(src, "xmm0");
             self.inst2("cvtsd2ss", "xmm0", "xmm0");
             self.floatStore(res, "xmm0");
             break;
-        case ir_opcodes.IrOpcode::FpExt:
+        case wallvm.irOps.IrOpcode::FpExt:
             self.floatLoad(src, "xmm0");
             self.inst2("cvtss2sd", "xmm0", "xmm0");
             self.floatStore(res, "xmm0");
             break;
-        case ir_opcodes.IrOpcode::FpToSi:
-        case ir_opcodes.IrOpcode::FpToUi:
+        case wallvm.irOps.IrOpcode::FpToSi:
+        case wallvm.irOps.IrOpcode::FpToUi:
             self.floatLoad(src, "xmm0");
             if (dw == 64) self.inst2("cvttsd2si", "rax", "xmm0");
             else self.inst2("cvttss2si", "eax", "xmm0");
             self.store(res, "rax");
             break;
-        case ir_opcodes.IrOpcode::SiToFp:
-        case ir_opcodes.IrOpcode::UiToFp:
+        case wallvm.irOps.IrOpcode::SiToFp:
+        case wallvm.irOps.IrOpcode::UiToFp:
             self.load(src, "rax");
             if (dw == 64) self.inst2("cvtsi2sd", "xmm0", "rax");
             else self.inst2("cvtsi2ss", "xmm0", "rax");
             self.floatStore(res, "xmm0");
             break;
-        case ir_opcodes.IrOpcode::Bitcast:
+        case wallvm.irOps.IrOpcode::Bitcast:
             self.load(src, "rax"); self.store(res, "rax"); break;
         default: break;
         }
     }
 
-    void emitSelect(ir_types.IrInst* inst)
+    void emitSelect(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* tval = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* fval = inst->nops > 2 ? inst->ops[2] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* tval = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* fval = inst->nops > 2 ? inst->ops[2] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.loadArith(fval, acc);
@@ -1390,26 +1382,26 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitPhi(ir_types.IrInst* inst)
+    void emitPhi(wallvm.ir_types.IrInst* inst)
     {
         // Phi results are materialized on incoming edges (emitPhiEdges).
     }
 
-    void emitPhiEdges(ir_types.IrBlock* pred, ir_types.IrValue* tgt)
+    void emitPhiEdges(wallvm.ir_types.IrBlock* pred, wallvm.ir_types.IrValue* tgt)
     {
         if (!pred || !tgt) return;
         u32 tbi = self.resolveBlock(tgt);
         if (tbi == ~0u) return;
-        ir_types.IrBlock* tb = self.func.blocks[tbi];
+        wallvm.ir_types.IrBlock* tb = self.func.blocks[tbi];
         for (u32 i = 0; i < tb->ninsts; i++)
         {
-            ir_types.IrInst* phi = tb->insts[i];
-            if (phi->opcode != ir_opcodes.IrOpcode::Phi) break;
+            wallvm.ir_types.IrInst* phi = tb->insts[i];
+            if (phi->opcode != wallvm.irOps.IrOpcode::Phi) break;
             for (u32 j = 0; j + 1 < phi->nops; j += 2)
             {
                 if (phi->ops[j + 1] == &pred->base)
                 {
-                    if (phi->base.type && phi->base.type->kind == ir_types.IrTypeKind::Float)
+                    if (phi->base.type && phi->base.type->kind == wallvm.ir_types.IrTypeKind::Float)
                     {
                         self.floatLoad(phi->ops[j], "xmm0");
                         self.floatStore(&phi->base, "xmm0");
@@ -1425,10 +1417,10 @@ pub struct X86_64Codegen
         }
     }
 
-    void emitCtZero(ir_types.IrInst* inst, const char* mne)
+    void emitCtZero(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.loadArith(src, acc);
@@ -1439,10 +1431,10 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitBswap(ir_types.IrInst* inst)
+    void emitBswap(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.loadArith(src, acc);
@@ -1453,11 +1445,11 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitRot(ir_types.IrInst* inst, const char* mne)
+    void emitRot(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* val = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* cnt = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         const char* dreg = self.destReg(res);
         const char* acc = dreg ? dreg : "rax";
         self.load(val, acc);
@@ -1477,11 +1469,11 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitMinMax(ir_types.IrInst* inst, bool sig, bool max)
+    void emitMinMax(wallvm.ir_types.IrInst* inst, bool sig, bool max)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         const char* op;
         if (max) op = sig ? "cmovg" : "cmova";
         else op = sig ? "cmovl" : "cmovb";
@@ -1497,10 +1489,10 @@ pub struct X86_64Codegen
             self.store(res, "rax");
     }
 
-    void emitAbs(ir_types.IrInst* inst)
+    void emitAbs(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         u32 w = res->type ? res->type->width : 64;
         self.loadArith(src, "rax");
         if (w <= 32) { self.inst0("cdq"); self.inst2("xor", "eax", "edx"); self.inst2("sub", "eax", "edx"); }
@@ -1508,12 +1500,12 @@ pub struct X86_64Codegen
         self.store(res, "rax");
     }
 
-    void emitFma(ir_types.IrInst* inst)
+    void emitFma(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* a = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* b = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* c = inst->nops > 2 ? inst->ops[2] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* a = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* b = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* c = inst->nops > 2 ? inst->ops[2] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
         self.floatLoad(c, "xmm0");
         self.floatLoad(b, "xmm2");
@@ -1522,11 +1514,11 @@ pub struct X86_64Codegen
         self.floatStore(res, "xmm0");
     }
 
-    void emitFpArith(ir_types.IrInst* inst, const char* mne)
+    void emitFpArith(wallvm.ir_types.IrInst* inst, const char* mne)
     {
-        ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* lhs = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* rhs = inst->nops > 1 ? inst->ops[1] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
         const char* op;
         if (mne[0] == 'a') op = isDouble ? "addsd" : "addss";
@@ -1539,10 +1531,10 @@ pub struct X86_64Codegen
         self.floatStore(res, "xmm0");
     }
 
-    void emitFAbs(ir_types.IrInst* inst)
+    void emitFAbs(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
         if (isDouble)
         {
@@ -1561,10 +1553,10 @@ pub struct X86_64Codegen
         self.floatStore(res, "xmm0");
     }
 
-    void emitFSqrt(ir_types.IrInst* inst)
+    void emitFSqrt(wallvm.ir_types.IrInst* inst)
     {
-        ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
-        ir_types.IrValue* res = &inst->base;
+        wallvm.ir_types.IrValue* src = inst->nops > 0 ? inst->ops[0] : null;
+        wallvm.ir_types.IrValue* res = &inst->base;
         bool isDouble = res->type && res->type->width == 64;
         self.floatLoad(src, "xmm0");
         self.inst2(isDouble ? "sqrtsd" : "sqrtss", "xmm0", "xmm0");
@@ -1588,7 +1580,7 @@ pub struct X86_64Codegen
         }
     }
 
-    bool genFunc(ir_types.IrFunc* func)
+    bool genFunc(wallvm.ir_types.IrFunc* func)
     {
         if (!func) return false;
         if (func->isExtern)
@@ -1613,25 +1605,25 @@ pub struct X86_64Codegen
         bool hasFloatConst = false;
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
-            ir_types.IrBlock* blk = func->blocks[bi];
+            wallvm.ir_types.IrBlock* blk = func->blocks[bi];
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
-                ir_types.IrInst* inst = blk->insts[ii];
-                ir_types.IrValue* res = &inst->base;
-                if (res->type && res->type->kind != ir_types.IrTypeKind::Void && self.isRegValue(res) && (self.valEnc(res) & 0x80000000UL) != 0)
+                wallvm.ir_types.IrInst* inst = blk->insts[ii];
+                wallvm.ir_types.IrValue* res = &inst->base;
+                if (res->type && res->type->kind != wallvm.ir_types.IrTypeKind::Void && self.isRegValue(res) && (self.valEnc(res) & 0x80000000UL) != 0)
                 {
                     u32 s = self.valLow(self.valEnc(res)) + 1;
                     if (s > maxSpill) maxSpill = s;
                 }
                 for (u32 oi = 0; oi < inst->nops; oi++)
                 {
-                    ir_types.IrValue* op = inst->ops[oi];
-                    if (op && self.isRegValue(op) && op->kind != ir_types.IrValueKind::Block && (self.valEnc(op) & 0x80000000UL) != 0)
+                    wallvm.ir_types.IrValue* op = inst->ops[oi];
+                    if (op && self.isRegValue(op) && op->kind != wallvm.ir_types.IrValueKind::Block && (self.valEnc(op) & 0x80000000UL) != 0)
                     {
                         u32 s = self.valLow(self.valEnc(op)) + 1;
                         if (s > maxSpill) maxSpill = s;
                     }
-                    if (op && op->kind == ir_types.IrValueKind::ConstFloat)
+                    if (op && op->kind == wallvm.ir_types.IrValueKind::ConstFloat)
                         hasFloatConst = true;
                 }
             }
@@ -1660,10 +1652,10 @@ pub struct X86_64Codegen
         {
             u32 nc = self.blockLabelsCap ? self.blockLabelsCap * 2 : 16;
             while (nc < func->nblocks) nc *= 2;
-            u32* nm = mman.alloc<u32>(nc);
+            u32* nm = std.mman.alloc<u32>(nc);
             for (u32 i = 0; i < self.blockLabelsCap; i++) nm[i] = self.blockLabels[i];
             for (u32 i = self.blockLabelsCap; i < nc; i++) nm[i] = ~0u;
-            if (self.blockLabels) mman.dealloc<u32>(self.blockLabels);
+            if (self.blockLabels) std.mman.dealloc<u32>(self.blockLabels);
             self.blockLabels = nm;
             self.blockLabelsCap = nc;
         }
@@ -1676,21 +1668,21 @@ pub struct X86_64Codegen
         // Emit blocks
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
-            ir_types.IrBlock* blk = func->blocks[bi];
+            wallvm.ir_types.IrBlock* blk = func->blocks[bi];
             if (bi > 0) self.c('\n');
             self.emitBlockLabel(bi);
 
             lastBlockTerminates = false;
             for (u32 ii = 0; ii < blk->ninsts; ii++)
             {
-                ir_types.IrInst* inst = blk->insts[ii];
+                wallvm.ir_types.IrInst* inst = blk->insts[ii];
 
                 switch (inst->opcode)
                 {
                 // Terminators
-                case ir_opcodes.IrOpcode::Br:
+                case wallvm.irOps.IrOpcode::Br:
                 {
-                    ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null;
+                    wallvm.ir_types.IrValue* tgt = inst->nops > 0 ? inst->ops[0] : null;
                     if (tgt)
                     {
                         self.emitPhiEdges(blk, tgt);
@@ -1701,11 +1693,11 @@ pub struct X86_64Codegen
                     lastBlockTerminates = true;
                     break;
                 }
-                case ir_opcodes.IrOpcode::CondBr:
+                case wallvm.irOps.IrOpcode::CondBr:
                 {
-                    ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
-                    ir_types.IrValue* tv = inst->nops > 1 ? inst->ops[1] : null;
-                    ir_types.IrValue* ev = inst->nops > 2 ? inst->ops[2] : null;
+                    wallvm.ir_types.IrValue* cond = inst->nops > 0 ? inst->ops[0] : null;
+                    wallvm.ir_types.IrValue* tv = inst->nops > 1 ? inst->ops[1] : null;
+                    wallvm.ir_types.IrValue* ev = inst->nops > 2 ? inst->ops[2] : null;
                     u32 tbi = tv ? self.resolveBlock(tv) : ~0u;
                     u32 ebi = ev ? self.resolveBlock(ev) : ~0u;
                     self.emitPhiEdges(blk, tv);
@@ -1719,13 +1711,13 @@ pub struct X86_64Codegen
                     lastBlockTerminates = true;
                     break;
                 }
-                case ir_opcodes.IrOpcode::Ret:
+                case wallvm.irOps.IrOpcode::Ret:
                 {
-                    ir_types.IrValue* rv = inst->nops > 0 ? inst->ops[0] : null;
-                    ir_types.IrType* rt = func->retType;
-                    if (rv && rt && rt->kind != ir_types.IrTypeKind::Void)
+                    wallvm.ir_types.IrValue* rv = inst->nops > 0 ? inst->ops[0] : null;
+                    wallvm.ir_types.IrType* rt = func->retType;
+                    if (rv && rt && rt->kind != wallvm.ir_types.IrTypeKind::Void)
                     {
-                        if (rt->kind == ir_types.IrTypeKind::Float)
+                        if (rt->kind == wallvm.ir_types.IrTypeKind::Float)
                             self.floatLoad(rv, "xmm0");
                         else
                             self.load(rv, "rax");
@@ -1734,13 +1726,13 @@ pub struct X86_64Codegen
                     lastBlockTerminates = true;
                     break;
                 }
-                case ir_opcodes.IrOpcode::Unreachable:
+                case wallvm.irOps.IrOpcode::Unreachable:
                     self.inst0("ud2");
                     lastBlockTerminates = true;
                     break;
-                case ir_opcodes.IrOpcode::Noret:
+                case wallvm.irOps.IrOpcode::Noret:
                 {
-                    const char* tmpl = asm_rules.noretTemplate(&self.abi);
+                    const char* tmpl = wallvm.asm_rules.noretTemplate(&self.abi);
                     for (u32 i = 0; tmpl[i]; i++)
                     {
                         if (tmpl[i] == '$' && tmpl[i+1] == 'e' && tmpl[i+2] == 'x' && tmpl[i+3] == 'i' && tmpl[i+4] == 't' && tmpl[i+5] == '_' && tmpl[i+6] == 'c' && tmpl[i+7] == 'o' && tmpl[i+8] == 'd' && tmpl[i+9] == 'e')
@@ -1757,83 +1749,83 @@ pub struct X86_64Codegen
                 }
 
                 // Unary
-                case ir_opcodes.IrOpcode::Neg: self.emitUnary(inst, "neg"); break;
-                case ir_opcodes.IrOpcode::Not: self.emitUnary(inst, "not"); break;
+                case wallvm.irOps.IrOpcode::Neg: self.emitUnary(inst, "neg"); break;
+                case wallvm.irOps.IrOpcode::Not: self.emitUnary(inst, "not"); break;
 
                 // Binary arithmetic
-                case ir_opcodes.IrOpcode::Add: self.emitArith(inst, "add"); break;
-                case ir_opcodes.IrOpcode::Sub: self.emitArith(inst, "sub"); break;
-                case ir_opcodes.IrOpcode::Mul: self.emitArith(inst, "imul"); break;
-                case ir_opcodes.IrOpcode::SDiv: self.emitDivRem(inst, "idiv", true, false); break;
-                case ir_opcodes.IrOpcode::UDiv: self.emitDivRem(inst, "div", false, false); break;
-                case ir_opcodes.IrOpcode::SRem: self.emitDivRem(inst, "idiv", true, true); break;
-                case ir_opcodes.IrOpcode::URem: self.emitDivRem(inst, "div", false, true); break;
+                case wallvm.irOps.IrOpcode::Add: self.emitArith(inst, "add"); break;
+                case wallvm.irOps.IrOpcode::Sub: self.emitArith(inst, "sub"); break;
+                case wallvm.irOps.IrOpcode::Mul: self.emitArith(inst, "imul"); break;
+                case wallvm.irOps.IrOpcode::SDiv: self.emitDivRem(inst, "idiv", true, false); break;
+                case wallvm.irOps.IrOpcode::UDiv: self.emitDivRem(inst, "div", false, false); break;
+                case wallvm.irOps.IrOpcode::SRem: self.emitDivRem(inst, "idiv", true, true); break;
+                case wallvm.irOps.IrOpcode::URem: self.emitDivRem(inst, "div", false, true); break;
 
                 // Binary bitwise
-                case ir_opcodes.IrOpcode::And: self.emitArith(inst, "and"); break;
-                case ir_opcodes.IrOpcode::Or: self.emitArith(inst, "or"); break;
-                case ir_opcodes.IrOpcode::Xor: self.emitArith(inst, "xor"); break;
-                case ir_opcodes.IrOpcode::Shl: self.emitShift(inst, "shl"); break;
-                case ir_opcodes.IrOpcode::Ashr: self.emitShift(inst, "sar"); break;
-                case ir_opcodes.IrOpcode::Lshr: self.emitShift(inst, "shr"); break;
+                case wallvm.irOps.IrOpcode::And: self.emitArith(inst, "and"); break;
+                case wallvm.irOps.IrOpcode::Or: self.emitArith(inst, "or"); break;
+                case wallvm.irOps.IrOpcode::Xor: self.emitArith(inst, "xor"); break;
+                case wallvm.irOps.IrOpcode::Shl: self.emitShift(inst, "shl"); break;
+                case wallvm.irOps.IrOpcode::Ashr: self.emitShift(inst, "sar"); break;
+                case wallvm.irOps.IrOpcode::Lshr: self.emitShift(inst, "shr"); break;
 
                 // Bit manipulation
-                case ir_opcodes.IrOpcode::CtPop: self.emitCtZero(inst, "popcnt"); break;
-                case ir_opcodes.IrOpcode::CtLz: self.emitCtZero(inst, "lzcnt"); break;
-                case ir_opcodes.IrOpcode::CtTz: self.emitCtZero(inst, "tzcnt"); break;
-                case ir_opcodes.IrOpcode::Rotl: self.emitRot(inst, "rol"); break;
-                case ir_opcodes.IrOpcode::Rotr: self.emitRot(inst, "ror"); break;
-                case ir_opcodes.IrOpcode::Bswap: self.emitBswap(inst); break;
+                case wallvm.irOps.IrOpcode::CtPop: self.emitCtZero(inst, "popcnt"); break;
+                case wallvm.irOps.IrOpcode::CtLz: self.emitCtZero(inst, "lzcnt"); break;
+                case wallvm.irOps.IrOpcode::CtTz: self.emitCtZero(inst, "tzcnt"); break;
+                case wallvm.irOps.IrOpcode::Rotl: self.emitRot(inst, "rol"); break;
+                case wallvm.irOps.IrOpcode::Rotr: self.emitRot(inst, "ror"); break;
+                case wallvm.irOps.IrOpcode::Bswap: self.emitBswap(inst); break;
 
                 // Integer min/max/abs
-                case ir_opcodes.IrOpcode::SMin: self.emitMinMax(inst, true, false); break;
-                case ir_opcodes.IrOpcode::SMax: self.emitMinMax(inst, true, true); break;
-                case ir_opcodes.IrOpcode::UMin: self.emitMinMax(inst, false, false); break;
-                case ir_opcodes.IrOpcode::UMax: self.emitMinMax(inst, false, true); break;
-                case ir_opcodes.IrOpcode::Abs: self.emitAbs(inst); break;
+                case wallvm.irOps.IrOpcode::SMin: self.emitMinMax(inst, true, false); break;
+                case wallvm.irOps.IrOpcode::SMax: self.emitMinMax(inst, true, true); break;
+                case wallvm.irOps.IrOpcode::UMin: self.emitMinMax(inst, false, false); break;
+                case wallvm.irOps.IrOpcode::UMax: self.emitMinMax(inst, false, true); break;
+                case wallvm.irOps.IrOpcode::Abs: self.emitAbs(inst); break;
 
                 // Float
-                case ir_opcodes.IrOpcode::FAdd: self.emitFpArith(inst, "add"); break;
-                case ir_opcodes.IrOpcode::FSub: self.emitFpArith(inst, "sub"); break;
-                case ir_opcodes.IrOpcode::FMul: self.emitFpArith(inst, "mul"); break;
-                case ir_opcodes.IrOpcode::FDiv: self.emitFpArith(inst, "div"); break;
-                case ir_opcodes.IrOpcode::Fma: self.emitFma(inst); break;
-                case ir_opcodes.IrOpcode::FAbs: self.emitFAbs(inst); break;
-                case ir_opcodes.IrOpcode::FSqrt: self.emitFSqrt(inst); break;
+                case wallvm.irOps.IrOpcode::FAdd: self.emitFpArith(inst, "add"); break;
+                case wallvm.irOps.IrOpcode::FSub: self.emitFpArith(inst, "sub"); break;
+                case wallvm.irOps.IrOpcode::FMul: self.emitFpArith(inst, "mul"); break;
+                case wallvm.irOps.IrOpcode::FDiv: self.emitFpArith(inst, "div"); break;
+                case wallvm.irOps.IrOpcode::Fma: self.emitFma(inst); break;
+                case wallvm.irOps.IrOpcode::FAbs: self.emitFAbs(inst); break;
+                case wallvm.irOps.IrOpcode::FSqrt: self.emitFSqrt(inst); break;
 
                 // Memory
-                case ir_opcodes.IrOpcode::Alloca: self.emitAlloca(inst); break;
-                case ir_opcodes.IrOpcode::Load: self.emitLoad(inst); break;
-                case ir_opcodes.IrOpcode::Store: self.emitStore(inst); break;
-                case ir_opcodes.IrOpcode::Gep: self.emitGep(inst); break;
+                case wallvm.irOps.IrOpcode::Alloca: self.emitAlloca(inst); break;
+                case wallvm.irOps.IrOpcode::Load: self.emitLoad(inst); break;
+                case wallvm.irOps.IrOpcode::Store: self.emitStore(inst); break;
+                case wallvm.irOps.IrOpcode::Gep: self.emitGep(inst); break;
 
                 // Cast
-                case ir_opcodes.IrOpcode::Trunc:
-                case ir_opcodes.IrOpcode::Zext:
-                case ir_opcodes.IrOpcode::Sext:
-                case ir_opcodes.IrOpcode::FpTrunc:
-                case ir_opcodes.IrOpcode::FpExt:
-                case ir_opcodes.IrOpcode::FpToSi:
-                case ir_opcodes.IrOpcode::SiToFp:
-                case ir_opcodes.IrOpcode::FpToUi:
-                case ir_opcodes.IrOpcode::UiToFp:
-                case ir_opcodes.IrOpcode::Bitcast:
+                case wallvm.irOps.IrOpcode::Trunc:
+                case wallvm.irOps.IrOpcode::Zext:
+                case wallvm.irOps.IrOpcode::Sext:
+                case wallvm.irOps.IrOpcode::FpTrunc:
+                case wallvm.irOps.IrOpcode::FpExt:
+                case wallvm.irOps.IrOpcode::FpToSi:
+                case wallvm.irOps.IrOpcode::SiToFp:
+                case wallvm.irOps.IrOpcode::FpToUi:
+                case wallvm.irOps.IrOpcode::UiToFp:
+                case wallvm.irOps.IrOpcode::Bitcast:
                     self.emitCast(inst); break;
 
                 // Compare
-                case ir_opcodes.IrOpcode::ICmp: self.emitICmp(inst); break;
-                case ir_opcodes.IrOpcode::FCmp: self.emitFCmp(inst); break;
+                case wallvm.irOps.IrOpcode::ICmp: self.emitICmp(inst); break;
+                case wallvm.irOps.IrOpcode::FCmp: self.emitFCmp(inst); break;
 
                 // Other
-                case ir_opcodes.IrOpcode::Call: self.emitCall(inst); break;
-                case ir_opcodes.IrOpcode::Phi: self.emitPhi(inst); break;
-                case ir_opcodes.IrOpcode::Select: self.emitSelect(inst); break;
+                case wallvm.irOps.IrOpcode::Call: self.emitCall(inst); break;
+                case wallvm.irOps.IrOpcode::Phi: self.emitPhi(inst); break;
+                case wallvm.irOps.IrOpcode::Select: self.emitSelect(inst); break;
 
                 // Opcodes without a lowering must fail loudly instead of
                 // silently emitting nothing (wrong results).
                 default:
                     self.pad(); self.s("; unsupported opcode: ");
-                    self.s(ir_opcodes.irOpcodeStr(inst->opcode)); self.c('\n');
+                    self.s(wallvm.irOps.irOpcodeStr(inst->opcode)); self.c('\n');
                     self.unsupported = true;
                     break;
                 }
@@ -1849,7 +1841,7 @@ pub struct X86_64Codegen
         return true;
     }
 
-    bool generate(ir_types.IrModule* modd)
+    bool generate(wallvm.ir_types.IrModule* modd)
     {
         if (!modd) return false;
         if (self.att)
@@ -1873,21 +1865,21 @@ pub struct X86_64Codegen
     }
 }
 
-pub bool irCodegenX86_64(ir_types.IrModule* modd, void* userdata, bool att)
+pub bool irCodegenX86_64(wallvm.ir_types.IrModule* modd, void* userdata, bool att)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !modd) return false;
-    X86_64Codegen cg = X86_64Codegen::new(ctx, (u32)asm_rules.CallingConvention::SystemV, att);
+    X86_64Codegen cg = X86_64Codegen::new(ctx, (u32)wallvm.asm_rules.CallingConvention::SystemV, att);
     return cg.generate(modd);
 }
 
 // Test-support export, returns the generated assembly text instead of
 // discarding it. The buffer lives for the program lifetime.
-pub const char* irCodegenX86_64Asm(ir_types.IrModule* modd, void* userdata, bool att)
+pub const char* irCodegenX86_64Asm(wallvm.ir_types.IrModule* modd, void* userdata, bool att)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !modd) return null;
-    X86_64Codegen cg = X86_64Codegen::new(ctx, (u32)asm_rules.CallingConvention::SystemV, att);
+    X86_64Codegen cg = X86_64Codegen::new(ctx, (u32)wallvm.asm_rules.CallingConvention::SystemV, att);
     if (!cg.generate(modd)) return null;
     return cg.out;
 }

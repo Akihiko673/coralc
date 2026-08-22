@@ -1,9 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod tlsf = import(lib, "std/memory/tlsf.crl");
+mod std = import(lib, "std");
 
 pub struct Allocator
 {
@@ -32,10 +27,10 @@ pub void initDefaultAllocator()
     _defaultAllocHeap = heap;
     _defaultAllocHeapSize = heapSize;
 
-    tlsf.Tlsf* _tlsf = (tlsf.Tlsf*)heap;
-    _tlsf.init((u8*)heap + sizeof(tlsf.Tlsf), heapSize - sizeof(tlsf.Tlsf));
+    std.tlsf.Tlsf* _tlsf = (std.tlsf.Tlsf*)heap;
+    _tlsf.init((u8*)heap + sizeof(std.tlsf.Tlsf), heapSize - sizeof(std.tlsf.Tlsf));
 
-    // Allocate a small block to hold the tlsf.Tlsf, then use the rest as heap
+    // Allocate a small block to hold the std.tlsf.Tlsf, then use the rest as heap
     Allocator* allocPtr = _tlsf.alloc(sizeof(Allocator));
     if (allocPtr == null) return;
 
@@ -69,17 +64,17 @@ pub void ensureDefaultAllocator()
 
 void* _tlsfAlloc(void* ctx, u64 size)
 {
-    return ((tlsf.Tlsf*)ctx)->alloc(size);
+    return ((std.tlsf.Tlsf*)ctx)->alloc(size);
 }
 
 void _tlsfFree(void* ctx, void* ptr)
 {
-    if (ctx && ptr) ((tlsf.Tlsf*)ctx)->free(ptr);
+    if (ctx && ptr) ((std.tlsf.Tlsf*)ctx)->free(ptr);
 }
 
 void* _tlsfRealloc(void* ctx, void* ptr, u64 newSize)
 {
-    return ((tlsf.Tlsf*)ctx)->realloc(ptr, newSize);
+    return ((std.tlsf.Tlsf*)ctx)->realloc(ptr, newSize);
 }
 
 // Coral memory primitives (libc-free)

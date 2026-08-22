@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 pub struct pool<T>
 {
@@ -29,7 +23,7 @@ pub struct pool<T>
 
     void dispose()
     {
-        mman.dealloc<u8>(self.blocks);
+        std.mman.dealloc<u8>(self.blocks);
         self.blocks = null;
         self.freeList = null;
         self.blockCount = 0;
@@ -40,13 +34,13 @@ pub struct pool<T>
     {
         u64 newCount = self.blockCount > 0 ? self.blockCount : 64;
         u64 allocSize = self.blockSize * newCount;
-        u8* newBlocks = mman.alloc<u8>(allocSize);
+        u8* newBlocks = std.mman.alloc<u8>(allocSize);
         if (newBlocks == null) return false;
         u8* oldBase = self.blocks;
         if (self.blocks != null)
         {
-            mman.copy<u8>(newBlocks, self.blocks, self.blockSize * self.blockCount);
-            mman.dealloc<u8>(self.blocks);
+            std.mman.copy<u8>(newBlocks, self.blocks, self.blockSize * self.blockCount);
+            std.mman.dealloc<u8>(self.blocks);
         }
         self.blocks = newBlocks;
         void* oldFree = self.freeList;

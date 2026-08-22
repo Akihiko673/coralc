@@ -43,17 +43,17 @@ i32 _b64Val(u8 c)
     return -1;
 }
 
-pub u64 decode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+pub u64 decode(std.string.strView src, u8* dst, u64 dstCap)
 {
     u64 pos = 0;
     u64 i = 0;
-    while (i < srcLen)
+    while (i < src.len)
     {
         u32 b = 0;
         u64 n = 0;
-        while (n < 4 && i < srcLen)
+        while (n < 4 && i < src.len)
         {
-            u8 c = src[i];
+            u8 c = (u8)src.ptr[i];
             if (c == '=') break;
             i32 val = _b64Val(c);
             if (val < 0) return 0;
@@ -81,7 +81,7 @@ pub u64 decode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
             dst[pos++] = (u8)(b >> 8);
             dst[pos++] = (u8)b;
         }
-        if (i < srcLen && src[i] == '=') break;
+        if (i < src.len && src.ptr[i] == '=') break;
     }
     return pos;
 }

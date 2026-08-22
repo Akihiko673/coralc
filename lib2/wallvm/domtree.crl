@@ -1,17 +1,11 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import("std/memory/mman.crl");
-mod ir_types = import("wallvm/ir_types.crl");
+mod ir_types = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 pub struct IrDomTree
 {
-    ir_types.IrBlock** blocks;
+    wallvm.ir_types.IrBlock** blocks;
     u32 nblocks;
-    ir_types.IrBlock** idoms;
+    wallvm.ir_types.IrBlock** idoms;
 }
 
 // Helper: EVAL operation from Lengauer-Tarjan with path compression.
@@ -47,15 +41,15 @@ u32 _domEval(u32 v, u32 n, u32* ancestor, u32* label, u32* semi, u32* dfn, u32* 
 //   - Link vertex into forest, process bucket of its parent.
 // Phase 3: Final pass to set immediate dominators.
 
-pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
+pub IrDomTree* irDomtreeNew(wallvm.ir_types.IrFunc* func)
 {
     if (!func || func.nblocks == 0) return null;
 
     u32 n = func.nblocks;
 
-    IrDomTree* dt = mman.alloc<IrDomTree>(1);
-    dt->blocks = mman.alloc<ir_types.IrBlock*>(n);
-    dt->idoms = mman.alloc<ir_types.IrBlock*>(n);
+    IrDomTree* dt = std.mman.alloc<IrDomTree>(1);
+    dt->blocks = std.mman.alloc<wallvm.ir_types.IrBlock*>(n);
+    dt->idoms = std.mman.alloc<wallvm.ir_types.IrBlock*>(n);
     dt->nblocks = n;
 
     // Copy block pointers
@@ -63,15 +57,15 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
         dt->blocks[i] = func.blocks[i];
 
     // Arrays indexed by block index
-    u32* parent = mman.alloc<u32>(n); // DFS parent
-    u32* dfn = mman.alloc<u32>(n); // DFS number (block->index)
-    u32* vertex = mman.alloc<u32>(n); // index->block (reverse mapping)
-    u32* semi = mman.alloc<u32>(n); // semi-dominator (store block index)
-    u32* idom = mman.alloc<u32>(n); // immediate dominator (block index)
-    u32* ancestor = mman.alloc<u32>(n); // union-find parent
-    u32* label = mman.alloc<u32>(n); // label for EVAL
-    u32* bucket = mman.alloc<u32>(n); // bucket head (singly linked list)
-    u32* next = mman.alloc<u32>(n); // bucket next pointer
+    u32* parent = std.mman.alloc<u32>(n); // DFS parent
+    u32* dfn = std.mman.alloc<u32>(n); // DFS number (block->index)
+    u32* vertex = std.mman.alloc<u32>(n); // index->block (reverse mapping)
+    u32* semi = std.mman.alloc<u32>(n); // semi-dominator (store block index)
+    u32* idom = std.mman.alloc<u32>(n); // immediate dominator (block index)
+    u32* ancestor = std.mman.alloc<u32>(n); // union-find parent
+    u32* label = std.mman.alloc<u32>(n); // label for EVAL
+    u32* bucket = std.mman.alloc<u32>(n); // bucket head (singly linked list)
+    u32* next = std.mman.alloc<u32>(n); // bucket next pointer
 
     for (u32 i = 0; i < n; i++)
     {
@@ -87,18 +81,18 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
     }
 
     // Build block index maps — dt->blocks[i] == func.blocks[i] by construction
-    u32* blockIdx = mman.alloc<u32>(n);
+    u32* blockIdx = std.mman.alloc<u32>(n);
     for (u32 i = 0; i < n; i++)
         blockIdx[i] = i;
 
-    // Reverse map, ir_types.IrBlock* → index in func.blocks
+    // Reverse map, wallvm.ir_types.IrBlock* → index in func.blocks
     // Store block pointer → index into func.blocks by scanning once
-    u32* revIdx = mman.alloc<u32>(n);
+    u32* revIdx = std.mman.alloc<u32>(n);
     for (u32 i = 0; i < n; i++) revIdx[i] = n;
 
     // Iterative DFS from entry (assumes entry is func.blocks[0])
-    u32* stack = mman.alloc<u32>(n);
-    u32* state = mman.alloc<u32>(n); // 0=unvisited, 1=in-stack, 2=processed
+    u32* stack = std.mman.alloc<u32>(n);
+    u32* state = std.mman.alloc<u32>(n); // 0=unvisited, 1=in-stack, 2=processed
     for (u32 i = 0; i < n; i++) state[i] = 0;
 
     u32 time = 0;
@@ -120,10 +114,10 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
             revIdx[cur] = cur;
             time++;
 
-            ir_types.IrBlock* curBlock = func.blocks[cur];
+            wallvm.ir_types.IrBlock* curBlock = func.blocks[cur];
             for (u32 j = 0; j < curBlock.nsuccs; j++)
             {
-                ir_types.IrBlock* succBlock = curBlock.succs[j];
+                wallvm.ir_types.IrBlock* succBlock = curBlock.succs[j];
                 u32 succ = n;
                 // Find succ index in func.blocks
                 for (u32 k = 0; k < n; k++)
@@ -157,12 +151,12 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
         u32 w = vertex[wIdx]; // block index
 
         // Step 1: Compute semi-dominator of w
-        ir_types.IrBlock* wBlock = func.blocks[blockIdx[w]];
+        wallvm.ir_types.IrBlock* wBlock = func.blocks[blockIdx[w]];
         semi[w] = parent[w]; // default semi = parent in DFS tree
 
         for (u32 j = 0; j < wBlock.npreds; j++)
         {
-            ir_types.IrBlock* vBlock = wBlock.preds[j];
+            wallvm.ir_types.IrBlock* vBlock = wBlock.preds[j];
             u32 v = n;
             for (u32 k = 0; k < n; k++)
                 if (func.blocks[k] == vBlock) { v = k; break; }
@@ -218,7 +212,7 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
     }
     idom[0] = 0; // entry dominates itself
 
-    // Convert block indices to ir_types.IrBlock* pointers
+    // Convert block indices to wallvm.ir_types.IrBlock* pointers
     for (u32 i = 0; i < n; i++)
     {
         if (i == 0)
@@ -230,18 +224,18 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
     }
 
     // Cleanup
-    mman.dealloc<u32>(stack);
-    mman.dealloc<u32>(state);
-    mman.dealloc<u32>(blockIdx);
-    mman.dealloc<u32>(parent);
-    mman.dealloc<u32>(dfn);
-    mman.dealloc<u32>(vertex);
-    mman.dealloc<u32>(semi);
-    mman.dealloc<u32>(idom);
-    mman.dealloc<u32>(ancestor);
-    mman.dealloc<u32>(label);
-    mman.dealloc<u32>(bucket);
-    mman.dealloc<u32>(next);
+    std.mman.dealloc<u32>(stack);
+    std.mman.dealloc<u32>(state);
+    std.mman.dealloc<u32>(blockIdx);
+    std.mman.dealloc<u32>(parent);
+    std.mman.dealloc<u32>(dfn);
+    std.mman.dealloc<u32>(vertex);
+    std.mman.dealloc<u32>(semi);
+    std.mman.dealloc<u32>(idom);
+    std.mman.dealloc<u32>(ancestor);
+    std.mman.dealloc<u32>(label);
+    std.mman.dealloc<u32>(bucket);
+    std.mman.dealloc<u32>(next);
 
     return dt;
 }
@@ -249,12 +243,12 @@ pub IrDomTree* irDomtreeNew(ir_types.IrFunc* func)
 pub void irDomtreeFree(IrDomTree* dt)
 {
     if (!dt) return;
-    if (dt->blocks) mman.dealloc<ir_types.IrBlock*>(dt->blocks);
-    if (dt->idoms) mman.dealloc<ir_types.IrBlock*>(dt->idoms);
-    mman.dealloc<IrDomTree>(dt);
+    if (dt->blocks) std.mman.dealloc<wallvm.ir_types.IrBlock*>(dt->blocks);
+    if (dt->idoms) std.mman.dealloc<wallvm.ir_types.IrBlock*>(dt->idoms);
+    std.mman.dealloc<IrDomTree>(dt);
 }
 
-pub ir_types.IrBlock* irDomtreeIdom(IrDomTree* dt, ir_types.IrBlock* bb)
+pub wallvm.ir_types.IrBlock* irDomtreeIdom(IrDomTree* dt, wallvm.ir_types.IrBlock* bb)
 {
     if (!dt || !bb) return null;
     for (u32 i = 0; i < dt->nblocks; i++)
@@ -265,14 +259,14 @@ pub ir_types.IrBlock* irDomtreeIdom(IrDomTree* dt, ir_types.IrBlock* bb)
     return null;
 }
 
-pub bool irDomtreeDominates(IrDomTree* dt, ir_types.IrBlock* a, ir_types.IrBlock* b)
+pub bool irDomtreeDominates(IrDomTree* dt, wallvm.ir_types.IrBlock* a, wallvm.ir_types.IrBlock* b)
 {
     if (!dt || !a || !b) return false;
     if (a == b) return true;
     // The idom chain of the root is the root itself, so walks from a
     // self-dominated block must be bounded or they would never terminate.
     u32 guard = 0;
-    ir_types.IrBlock* current = irDomtreeIdom(dt, b);
+    wallvm.ir_types.IrBlock* current = irDomtreeIdom(dt, b);
     while (current && guard <= dt->nblocks)
     {
         if (current == a) return true;
@@ -282,10 +276,10 @@ pub bool irDomtreeDominates(IrDomTree* dt, ir_types.IrBlock* a, ir_types.IrBlock
     return false;
 }
 
-pub u32 irDomtreeLevel(IrDomTree* dt, ir_types.IrBlock* bb)
+pub u32 irDomtreeLevel(IrDomTree* dt, wallvm.ir_types.IrBlock* bb)
 {
     u32 level = 0;
-    ir_types.IrBlock* current = irDomtreeIdom(dt, bb);
+    wallvm.ir_types.IrBlock* current = irDomtreeIdom(dt, bb);
     while (current)
     {
         level++;

@@ -1,7 +1,4 @@
-@[[no_drop]]
-mod random = import(lib, "std/math/random.crl");
-mod string = import(lib, "std/text/string.crl");
-mod hex = import(lib, "std/crypto/hex.crl");
+mod std = import(lib, "std");
 
 pub struct Uuid
 {
@@ -18,16 +15,16 @@ pub struct Uuid
     {
         Uuid u;
         for (u64 i = 0; i < 16; i++)
-            u.bytes[i] = (u8)(random.nextU64() & 0xFF);
+            u.bytes[i] = (u8)(std.random.nextU64() & 0xFF);
 
         u.bytes[6] = (u.bytes[6] & 0x0F) | 0x40;
         u.bytes[8] = (u.bytes[8] & 0x3F) | 0x80;
         return u;
     }
 
-    String toString()
+    std.string.String toString()
     {
-        String s = String::new();
+        std.string.String s = std.string.String::new();
         for (u64 i = 0; i < 16; i++)
         {
             if (i == 4 || i == 6 || i == 8 || i == 10) s.pushChar('-');
@@ -39,9 +36,9 @@ pub struct Uuid
         return s;
     }
 
-    String toHex()
+    std.string.String toHex()
     {
-        String s = String::new();
+        std.string.String s = std.string.String::new();
         for (u64 i = 0; i < 16; i++)
         {
             u8 hi = self.bytes[i] >> 4;
@@ -87,7 +84,7 @@ pub struct Uuid
     }
 }
 
-pub String uuidV4()
+pub std.string.String uuidV4()
 {
     Uuid u = Uuid::v4();
     return u.toString();

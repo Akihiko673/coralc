@@ -1,10 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod mman = import(lib, "std/memory/mman.crl");
-mod sha256 = import(lib, "std/crypto/sha256.crl");
+mod std = import(lib, "std");
+mod sha256 = import(lib, "std/crypto/std.sha256.crl");
 
 const u64 BLOCK_SIZE = 64;
 const u64 HASH_SIZE = 32;
@@ -18,18 +13,18 @@ pub struct HmacSha256
     {
         if (keyLen > BLOCK_SIZE)
         {
-            sha256.sha256 hasher;
+            std.sha256.sha256 hasher;
             hasher.init();
             hasher.update(key, keyLen);
             u8 digest[HASH_SIZE];
             hasher.final(digest);
-            mman.zero<u8>(self.keyBlock, BLOCK_SIZE);
-            mman.copy<u8>(self.keyBlock, digest, HASH_SIZE);
+            std.mman.zero<u8>(self.keyBlock, BLOCK_SIZE);
+            std.mman.copy<u8>(self.keyBlock, digest, HASH_SIZE);
         }
         else
         {
-            mman.zero<u8>(self.keyBlock, BLOCK_SIZE);
-            mman.copy<u8>(self.keyBlock, key, keyLen);
+            std.mman.zero<u8>(self.keyBlock, BLOCK_SIZE);
+            std.mman.copy<u8>(self.keyBlock, key, keyLen);
         }
         self.initialized = true;
     }
@@ -46,14 +41,14 @@ pub struct HmacSha256
             opad[i] = self.keyBlock[i] ^ 0x5C;
         }
 
-        sha256.sha256 inner;
+        std.sha256.sha256 inner;
         inner.init();
         inner.update(ipad, BLOCK_SIZE);
         inner.update(msg, msgLen);
         u8 innerHash[HASH_SIZE];
         inner.final(innerHash);
 
-        sha256.sha256 outer;
+        std.sha256.sha256 outer;
         outer.init();
         outer.update(opad, BLOCK_SIZE);
         outer.update(innerHash, HASH_SIZE);

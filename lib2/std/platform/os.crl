@@ -1,4 +1,4 @@
-mod string = import("std/text/string.crl");
+mod std = import("std");
 
 flag (platform) {
 LINUX:
@@ -11,9 +11,9 @@ LINUX:
     pub constexpr bool IS_POSIX = true;
     pub constexpr char PATH_SEP = '/';
     pub constexpr bool USES_CRLF = false;
-    pub constexpr string.strView EXE_EXT = string.strView::fromCstr("");
-    pub constexpr string.strView DLL_EXT = string.strView::fromCstr(".so");
-    pub constexpr string.strView NULL_DEV = string.strView::fromCstr("/dev/null");
+    pub constexpr std.string.strView EXE_EXT = std.string.strView::fromCstr("");
+    pub constexpr std.string.strView DLL_EXT = std.string.strView::fromCstr(".so");
+    pub constexpr std.string.strView NULL_DEV = std.string.strView::fromCstr("/dev/null");
 MACOS:
     pub constexpr bool IS_LINUX = false;
     pub constexpr bool IS_MACOS = true;
@@ -24,9 +24,9 @@ MACOS:
     pub constexpr bool IS_POSIX = true;
     pub constexpr char PATH_SEP = '/';
     pub constexpr bool USES_CRLF = false;
-    pub constexpr string.strView EXE_EXT = string.strView::fromCstr("");
-    pub constexpr string.strView DLL_EXT = string.strView::fromCstr(".dylib");
-    pub constexpr string.strView NULL_DEV = string.strView::fromCstr("/dev/null");
+    pub constexpr std.string.strView EXE_EXT = std.string.strView::fromCstr("");
+    pub constexpr std.string.strView DLL_EXT = std.string.strView::fromCstr(".dylib");
+    pub constexpr std.string.strView NULL_DEV = std.string.strView::fromCstr("/dev/null");
 WINDOWS:
     pub constexpr bool IS_LINUX = false;
     pub constexpr bool IS_MACOS = false;
@@ -37,9 +37,9 @@ WINDOWS:
     pub constexpr bool IS_POSIX = false;
     pub constexpr char PATH_SEP = '\\';
     pub constexpr bool USES_CRLF = true;
-    pub constexpr string.strView EXE_EXT = string.strView::fromCstr(".exe");
-    pub constexpr string.strView DLL_EXT = string.strView::fromCstr(".dll");
-    pub constexpr string.strView NULL_DEV = string.strView::fromCstr("NUL");
+    pub constexpr std.string.strView EXE_EXT = std.string.strView::fromCstr(".exe");
+    pub constexpr std.string.strView DLL_EXT = std.string.strView::fromCstr(".dll");
+    pub constexpr std.string.strView NULL_DEV = std.string.strView::fromCstr("NUL");
 default:
     pub constexpr bool IS_LINUX = false;
     pub constexpr bool IS_MACOS = false;
@@ -50,9 +50,9 @@ default:
     pub constexpr bool IS_POSIX = true;
     pub constexpr char PATH_SEP = '/';
     pub constexpr bool USES_CRLF = false;
-    pub constexpr string.strView EXE_EXT = string.strView::fromCstr("");
-    pub constexpr string.strView DLL_EXT = string.strView::fromCstr(".so");
-    pub constexpr string.strView NULL_DEV = string.strView::fromCstr("/dev/null");
+    pub constexpr std.string.strView EXE_EXT = std.string.strView::fromCstr("");
+    pub constexpr std.string.strView DLL_EXT = std.string.strView::fromCstr(".so");
+    pub constexpr std.string.strView NULL_DEV = std.string.strView::fromCstr("/dev/null");
 }
 
 pub constexpr u64 SYS_PAGE_SIZE = 4096;

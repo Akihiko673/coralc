@@ -1,30 +1,22 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
+mod std = import(lib, "std");
 
-mod libc = import(lib, "std/platform/libc.crl");
-mod string = import(lib, "std/text/string.crl");
-mod mman = import(lib, "std/memory/mman.crl");
-
-pub const i32 O_RDONLY = 0;
-pub const i32 O_WRONLY = 1;
-pub const i32 O_RDWR = 2;
-pub const i32 O_CREAT = 64;
-pub const i32 O_TRUNC = 512;
-pub const i32 O_APPEND = 1024;
-pub const i32 S_IRWXU = 448;
-pub const i32 S_IRUSR = 256;
-pub const i32 S_IWUSR = 128;
-pub const i32 S_IXUSR = 64;
-pub const i32 SEEK_SET = 0;
-pub const i32 SEEK_CUR = 1;
-pub const i32 SEEK_END = 2;
-pub const i32 F_OK = 0;
-pub const i32 R_OK = 4;
-pub const i32 W_OK = 2;
-pub const i32 X_OK = 1;
+pub constexpr i32 O_RDONLY = 0;
+pub constexpr i32 O_WRONLY = 1;
+pub constexpr i32 O_RDWR = 2;
+pub constexpr i32 O_CREAT = 64;
+pub constexpr i32 O_TRUNC = 512;
+pub constexpr i32 O_APPEND = 1024;
+pub constexpr i32 S_IRWXU = 448;
+pub constexpr i32 S_IRUSR = 256;
+pub constexpr i32 S_IWUSR = 128;
+pub constexpr i32 S_IXUSR = 64;
+pub constexpr i32 SEEK_SET = 0;
+pub constexpr i32 SEEK_CUR = 1;
+pub constexpr i32 SEEK_END = 2;
+pub constexpr i32 F_OK = 0;
+pub constexpr i32 R_OK = 4;
+pub constexpr i32 W_OK = 2;
+pub constexpr i32 X_OK = 1;
 
 pub distinct File = i32;
 pub distinct Dir = void*;
@@ -64,11 +56,11 @@ pub enum FileType
     Socket,
 }
 
-pub File fileOpen(string.strView path, string.strView mode)
+pub File fileOpen(std.string.strView path, std.string.strView mode)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
 
     i32 flags = -1;
@@ -84,46 +76,46 @@ pub File fileOpen(string.strView path, string.strView mode)
     {
         if (mode.ptr[i] == '+') { flags = (flags & ~(O_RDONLY | O_WRONLY)) | O_RDWR; }
     }
-    i32 fd = libc.open(pbuf, flags, create ? 420 : 0);
+    i32 fd = std.libc.open(pbuf, flags, create ? 420 : 0);
     return (File)fd;
 }
 
 pub void fileClose(File f)
 {
-    libc.close((i32)f);
+    std.libc.close((i32)f);
 }
 
 pub i64 fileRead(File f, u8* buf, u64 count)
 {
-    return libc.read((i32)f, buf, count);
+    return std.libc.read((i32)f, buf, count);
 }
 
 pub i64 fileWrite(File f, const u8* buf, u64 count)
 {
-    return libc.write((i32)f, buf, count);
+    return std.libc.write((i32)f, buf, count);
 }
 
 pub i64 fileSeek(File f, i64 offset, i32 whence)
 {
-    return libc.lseek((i32)f, offset, whence);
+    return std.libc.lseek((i32)f, offset, whence);
 }
 
-pub bool fileExists(string.strView path)
+pub bool fileExists(std.string.strView path)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return libc.access(pbuf, F_OK) == 0;
+    return std.libc.access(pbuf, F_OK) == 0;
 }
 
-pub bool statPath(string.strView path, Stat* out)
+pub bool statPath(std.string.strView path, Stat* out)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return libc.stat(pbuf, (void*)out) == 0;
+    return std.libc.stat(pbuf, (void*)out) == 0;
 }
 
 pub FileType getFileType(const Stat* s)
@@ -139,84 +131,84 @@ pub FileType getFileType(const Stat* s)
     return FileType::Unknown;
 }
 
-pub bool createDir(string.strView path, i32 mode)
+pub bool createDir(std.string.strView path, i32 mode)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return libc.mkdir(pbuf, mode) == 0;
+    return std.libc.mkdir(pbuf, mode) == 0;
 }
 
-pub bool removeDir(string.strView path)
+pub bool removeDir(std.string.strView path)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return libc.rmdir(pbuf) == 0;
+    return std.libc.rmdir(pbuf) == 0;
 }
 
-pub bool deleteFile(string.strView path)
+pub bool deleteFile(std.string.strView path)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return libc.unlink(pbuf) == 0;
+    return std.libc.unlink(pbuf) == 0;
 }
 
-pub bool renameFile(string.strView oldPath, string.strView newPath)
+pub bool renameFile(std.string.strView oldPath, std.string.strView newPath)
 {
     u8 oldBuf[4096];
     u8 newBuf[4096];
     u64 olen = oldPath.len < 4095 ? oldPath.len : 4095;
     u64 nlen = newPath.len < 4095 ? newPath.len : 4095;
-    mman.copy<u8>(oldBuf, (const u8*)oldPath.ptr, olen);
-    mman.copy<u8>(newBuf, (const u8*)newPath.ptr, nlen);
+    std.mman.copy<u8>(oldBuf, (const u8*)oldPath.ptr, olen);
+    std.mman.copy<u8>(newBuf, (const u8*)newPath.ptr, nlen);
     oldBuf[olen] = 0; newBuf[nlen] = 0;
-    return libc.rename(oldBuf, newBuf) == 0;
+    return std.libc.rename(oldBuf, newBuf) == 0;
 }
 
-pub bool canAccess(string.strView path, i32 mode)
+pub bool canAccess(std.string.strView path, i32 mode)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return libc.access(pbuf, mode) == 0;
+    return std.libc.access(pbuf, mode) == 0;
 }
 
-pub Dir openDir(string.strView path)
+pub Dir openDir(std.string.strView path)
 {
     u8 pbuf[4096];
     u64 plen = path.len < 4095 ? path.len : 4095;
-    mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
+    std.mman.copy<u8>(pbuf, (const u8*)path.ptr, plen);
     pbuf[plen] = 0;
-    return (Dir)libc.opendir(pbuf);
+    return (Dir)std.libc.opendir(pbuf);
 }
 
 pub void* readDir(Dir dir)
 {
-    return libc.readdir((void*)dir);
+    return std.libc.readdir((void*)dir);
 }
 
 pub void closeDir(Dir dir)
 {
-    libc.closedir((void*)dir);
+    std.libc.closedir((void*)dir);
 }
 
-pub string.String readFileToString(string.strView path)
+pub std.string.String readFileToString(std.string.strView path)
 {
-    File f = fileOpen(path, string.strView::fromCstr("r"));
-    if ((i32)f < 0) return string.String::new();
-     string.String out = string.String::new();
+    File f = fileOpen(path, std.string.strView::fromCstr("r"));
+    if ((i32)f < 0) return std.string.String::new();
+     std.string.String out = std.string.String::new();
     char chunk[4096];
     for (;;)
     {
         i64 n = fileRead(f, (u8*)chunk, 4096);
         if (n <= 0) break;
-        out.appendView(string.strView::fromParts(chunk, (u64)n));
+        out.appendView(std.string.strView::fromParts(chunk, (u64)n));
     }
     fileClose(f);
     return out;

@@ -1,18 +1,11 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod wallvm = import(lib, "wallvm");
 
 pub struct AlgebraicSimplifyPass
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u64 simplifications;
 
-    AlgebraicSimplifyPass new(ir_types.IrContext* ctx)
+    AlgebraicSimplifyPass new(wallvm.ir_types.IrContext* ctx)
     {
         AlgebraicSimplifyPass p;
         p.ctx = ctx;
@@ -20,18 +13,18 @@ pub struct AlgebraicSimplifyPass
         return p;
     }
 
-    bool run(ir_types.IrFunc* func)
+    bool run(wallvm.ir_types.IrFunc* func)
     {
         self.simplifications = 0;
         bool changed = false;
 
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             u32 ii = 0;
             while (ii < bb.ninsts)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
                 if (self.simplify(inst))
                 {
                     self.simplifications++;
@@ -46,27 +39,27 @@ pub struct AlgebraicSimplifyPass
         return changed;
     }
 
-    bool simplify(ir_types.IrInst* inst)
+    bool simplify(wallvm.ir_types.IrInst* inst)
     {
         // extension elimination collapse chains of sext/zext/trunc
         // Replacement results always keep the outer instruction result
         // width, so value semantics are preserved on every target
-        if (inst.opcode == ir_opcodes.IrOpcode::Sext ||
-            inst.opcode == ir_opcodes.IrOpcode::Zext ||
-            inst.opcode == ir_opcodes.IrOpcode::Trunc)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Sext ||
+            inst.opcode == wallvm.irOps.IrOpcode::Zext ||
+            inst.opcode == wallvm.irOps.IrOpcode::Trunc)
         {
             if (inst.nops != 1) return false;
-            ir_types.IrValue* s = inst.ops[0];
-            if (!s || s.kind != ir_types.IrValueKind::Inst) return false;
-            ir_types.IrInst* src = (ir_types.IrInst*)s;
+            wallvm.ir_types.IrValue* s = inst.ops[0];
+            if (!s || s.kind != wallvm.ir_types.IrValueKind::Inst) return false;
+            wallvm.ir_types.IrInst* src = (wallvm.ir_types.IrInst*)s;
             if (src->nops != 1) return false;
             u32 outW = inst.base.type ? inst.base.type.width : 64;
 
             // zext(zext(x)) -> zext(x, outW), same for sext and trunc
             if (src->opcode == inst.opcode)
             {
-                ir_types.IrValue* ops[1] = { src->ops[0] };
-                ir_types.IrInst* ni = self.ctx.createInst(inst.opcode, inst.base.type, ops, 1, 0, 0);
+                wallvm.ir_types.IrValue* ops[1] = { src->ops[0] };
+                wallvm.ir_types.IrInst* ni = self.ctx.createInst(inst.opcode, inst.base.type, ops, 1, 0, 0);
                 ops[0].addUser(ni);
                 inst.parent.insertBefore(ni, inst);
                 inst.base.replaceAllUses(&ni.base);
@@ -76,11 +69,11 @@ pub struct AlgebraicSimplifyPass
 
             // sext(zext(x)) -> zext(x, outW); the sign bit is zero, so
             // sign extension never changes the valu
-            if (inst.opcode == ir_opcodes.IrOpcode::Sext &&
-                src->opcode == ir_opcodes.IrOpcode::Zext)
+            if (inst.opcode == wallvm.irOps.IrOpcode::Sext &&
+                src->opcode == wallvm.irOps.IrOpcode::Zext)
             {
-                ir_types.IrValue* ops[1] = { src->ops[0] };
-                ir_types.IrInst* ni = self.ctx.createInst(ir_opcodes.IrOpcode::Zext, inst.base.type, ops, 1, 0, 0);
+                wallvm.ir_types.IrValue* ops[1] = { src->ops[0] };
+                wallvm.ir_types.IrInst* ni = self.ctx.createInst(wallvm.irOps.IrOpcode::Zext, inst.base.type, ops, 1, 0, 0);
                 ops[0].addUser(ni);
                 inst.parent.insertBefore(ni, inst);
                 inst.base.replaceAllUses(&ni.base);
@@ -90,8 +83,8 @@ pub struct AlgebraicSimplifyPass
 
             // trunc(zext/sext(y)) if the truncation stays within y's width
             // the extension is irrelevant; otherwise re-extend y directly
-            if (inst.opcode == ir_opcodes.IrOpcode::Trunc &&
-                (src->opcode == ir_opcodes.IrOpcode::Zext || src->opcode == ir_opcodes.IrOpcode::Sext))
+            if (inst.opcode == wallvm.irOps.IrOpcode::Trunc &&
+                (src->opcode == wallvm.irOps.IrOpcode::Zext || src->opcode == wallvm.irOps.IrOpcode::Sext))
             {
                 u32 innerW = src->ops[0].type ? src->ops[0].type.width : 64;
                 if (outW == innerW)
@@ -100,9 +93,9 @@ pub struct AlgebraicSimplifyPass
                     inst.erase();
                     return true;
                 }
-                ir_opcodes.IrOpcode op = (outW < innerW) ? ir_opcodes.IrOpcode::Trunc : src->opcode;
-                ir_types.IrValue* ops[1] = { src->ops[0] };
-                ir_types.IrInst* ni = self.ctx.createInst(op, inst.base.type, ops, 1, 0, 0);
+                wallvm.irOps.IrOpcode op = (outW < innerW) ? wallvm.irOps.IrOpcode::Trunc : src->opcode;
+                wallvm.ir_types.IrValue* ops[1] = { src->ops[0] };
+                wallvm.ir_types.IrInst* ni = self.ctx.createInst(op, inst.base.type, ops, 1, 0, 0);
                 ops[0].addUser(ni);
                 inst.parent.insertBefore(ni, inst);
                 inst.base.replaceAllUses(&ni.base);
@@ -114,15 +107,15 @@ pub struct AlgebraicSimplifyPass
 
         if (inst.nops != 2) return false;
 
-        ir_types.IrValue* a = inst.ops[0];
-        ir_types.IrValue* b = inst.ops[1];
+        wallvm.ir_types.IrValue* a = inst.ops[0];
+        wallvm.ir_types.IrValue* b = inst.ops[1];
         if (!a || !b) return false;
 
-        bool aConst = a.kind == ir_types.IrValueKind::ConstInt;
-        bool bConst = b.kind == ir_types.IrValueKind::ConstInt;
+        bool aConst = a.kind == wallvm.ir_types.IrValueKind::ConstInt;
+        bool bConst = b.kind == wallvm.ir_types.IrValueKind::ConstInt;
 
         // x + 0 = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Add && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Add && bConst && b.valData == 0)
         {
             inst.base.replaceAllUses(a);
             inst.erase();
@@ -130,7 +123,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // 0 + x = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Add && aConst && a.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Add && aConst && a.valData == 0)
         {
             inst.base.replaceAllUses(b);
             inst.erase();
@@ -138,7 +131,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x - 0 = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Sub && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Sub && bConst && b.valData == 0)
         {
             inst.base.replaceAllUses(a);
             inst.erase();
@@ -146,16 +139,16 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x * 0 = 0
-        if (inst.opcode == ir_opcodes.IrOpcode::Mul && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Mul && bConst && b.valData == 0)
         {
-            ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
+            wallvm.ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
             inst.base.replaceAllUses(zero);
             inst.erase();
             return true;
         }
 
         // x * 1 = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Mul && bConst && b.valData == 1)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Mul && bConst && b.valData == 1)
         {
             inst.base.replaceAllUses(a);
             inst.erase();
@@ -163,16 +156,16 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x & 0 = 0
-        if (inst.opcode == ir_opcodes.IrOpcode::And && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::And && bConst && b.valData == 0)
         {
-            ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
+            wallvm.ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
             inst.base.replaceAllUses(zero);
             inst.erase();
             return true;
         }
 
         // x & -1 = x (all bits set)
-        if (inst.opcode == ir_opcodes.IrOpcode::And && bConst)
+        if (inst.opcode == wallvm.irOps.IrOpcode::And && bConst)
         {
             u32 bits = inst.base.type ? inst.base.type.width : 64;
             u64 allOnes = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1);
@@ -185,7 +178,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x | 0 = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Or && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Or && bConst && b.valData == 0)
         {
             inst.base.replaceAllUses(a);
             inst.erase();
@@ -193,13 +186,13 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x | -1 = -1
-        if (inst.opcode == ir_opcodes.IrOpcode::Or && bConst)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Or && bConst)
         {
             u32 bits = inst.base.type ? inst.base.type.width : 64;
             u64 allOnes = (bits >= 64) ? ~0ULL : ((1ULL << bits) - 1);
             if (b.valData == allOnes)
             {
-                ir_types.IrValue* ones = self.ctx.constInt(inst.base.type, allOnes);
+                wallvm.ir_types.IrValue* ones = self.ctx.constInt(inst.base.type, allOnes);
                 inst.base.replaceAllUses(ones);
                 inst.erase();
                 return true;
@@ -207,7 +200,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x ^ 0 = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Xor && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Xor && bConst && b.valData == 0)
         {
             inst.base.replaceAllUses(a);
             inst.erase();
@@ -215,16 +208,16 @@ pub struct AlgebraicSimplifyPass
         }
 
         // x ^ x = 0
-        if (inst.opcode == ir_opcodes.IrOpcode::Xor && a == b)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Xor && a == b)
         {
-            ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
+            wallvm.ir_types.IrValue* zero = self.ctx.constInt(inst.base.type, 0);
             inst.base.replaceAllUses(zero);
             inst.erase();
             return true;
         }
 
         // shl x, 0 = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Shl && bConst && b.valData == 0)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Shl && bConst && b.valData == 0)
         {
             inst.base.replaceAllUses(a);
             inst.erase();
@@ -232,7 +225,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // shr x, 0 = x
-        if ((inst.opcode == ir_opcodes.IrOpcode::Lshr || inst.opcode == ir_opcodes.IrOpcode::Ashr)
+        if ((inst.opcode == wallvm.irOps.IrOpcode::Lshr || inst.opcode == wallvm.irOps.IrOpcode::Ashr)
             && bConst && b.valData == 0)
         {
             inst.base.replaceAllUses(a);
@@ -241,7 +234,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // select true, x, y = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Select && aConst && a.valData == 1)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Select && aConst && a.valData == 1)
         {
             inst.base.replaceAllUses(b);
             inst.erase();
@@ -249,7 +242,7 @@ pub struct AlgebraicSimplifyPass
         }
 
         // select false, x, y = y
-        if (inst.opcode == ir_opcodes.IrOpcode::Select && aConst && a.valData == 0
+        if (inst.opcode == wallvm.irOps.IrOpcode::Select && aConst && a.valData == 0
             && inst.nops >= 3)
         {
             inst.base.replaceAllUses(inst.ops[2]);
@@ -258,10 +251,10 @@ pub struct AlgebraicSimplifyPass
         }
 
         // neg(neg(x)) = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Neg && a.kind == ir_types.IrValueKind::Inst)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Neg && a.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* aInst = (ir_types.IrInst*)a;
-            if (aInst->opcode == ir_opcodes.IrOpcode::Neg)
+            wallvm.ir_types.IrInst* aInst = (wallvm.ir_types.IrInst*)a;
+            if (aInst->opcode == wallvm.irOps.IrOpcode::Neg)
             {
                 inst.base.replaceAllUses(aInst->ops[0]);
                 inst.erase();
@@ -270,10 +263,10 @@ pub struct AlgebraicSimplifyPass
         }
 
         // not(not(x)) = x
-        if (inst.opcode == ir_opcodes.IrOpcode::Not && a.kind == ir_types.IrValueKind::Inst)
+        if (inst.opcode == wallvm.irOps.IrOpcode::Not && a.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrInst* aInst = (ir_types.IrInst*)a;
-            if (aInst->opcode == ir_opcodes.IrOpcode::Not)
+            wallvm.ir_types.IrInst* aInst = (wallvm.ir_types.IrInst*)a;
+            if (aInst->opcode == wallvm.irOps.IrOpcode::Not)
             {
                 inst.base.replaceAllUses(aInst->ops[0]);
                 inst.erase();
@@ -285,9 +278,9 @@ pub struct AlgebraicSimplifyPass
     }
 }
 
-pub bool irPassSimplify(ir_types.IrFunc* func, void* userdata)
+pub bool irPassSimplify(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     AlgebraicSimplifyPass pass = AlgebraicSimplifyPass::new(ctx);
     return pass.run(func);

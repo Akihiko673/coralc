@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 pub struct smart_ptr<T>
 {
@@ -12,7 +6,7 @@ pub struct smart_ptr<T>
 
     void init(T value)
     {
-        self.ptr = mman.alloc<T>(1);
+        self.ptr = std.mman.alloc<T>(1);
         *self.ptr = value;
     }
 
@@ -20,7 +14,7 @@ pub struct smart_ptr<T>
     {
         if (self.ptr != null)
         {
-            mman.dealloc<T>(self.ptr);
+            std.mman.dealloc<T>(self.ptr);
             self.ptr = null;
         }
     }
@@ -56,7 +50,7 @@ pub struct smart_ptr<T>
     {
         assert(self.ptr != null);
         T value = *self->ptr;
-        mman.dealloc<T>(self.ptr);
+        std.mman.dealloc<T>(self.ptr);
         self.ptr = null;
         return value;
     }

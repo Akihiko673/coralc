@@ -6,36 +6,36 @@ pub struct rwlock
 
     void init()
     {
-        std.platform.libc.pthread_rwlock_init(self.impl, null);
+        std.libc.pthread_rwlock_init(self.impl, null);
     }
 
     void destroy()
     {
-        std.platform.libc.pthread_rwlock_destroy(self.impl);
+        std.libc.pthread_rwlock_destroy(self.impl);
     }
 
     void readLock()
     {
-        std.platform.libc.pthread_rwlock_rdlock(self.impl);
+        std.libc.pthread_rwlock_rdlock(self.impl);
     }
 
     void writeLock()
     {
-        std.platform.libc.pthread_rwlock_wrlock(self.impl);
+        std.libc.pthread_rwlock_wrlock(self.impl);
     }
 
     bool tryReadLock()
     {
-        return std.platform.libc.pthread_rwlock_tryrdlock(self.impl) == 0;
+        return std.libc.pthread_rwlock_tryrdlock(self.impl) == 0;
     }
 
     bool tryWriteLock()
     {
-        return std.platform.libc.pthread_rwlock_trywrlock(self.impl) == 0;
+        return std.libc.pthread_rwlock_trywrlock(self.impl) == 0;
     }
 
     void unlock()
     {
-        std.platform.libc.pthread_rwlock_unlock(self.impl);
+        std.libc.pthread_rwlock_unlock(self.impl);
     }
 }

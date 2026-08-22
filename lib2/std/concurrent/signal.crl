@@ -37,25 +37,25 @@ pub void(i32) SigHandler;
 
 pub void(i32) handle(i32 sig, SigHandler* handler)
 {
-    return std.platform.libc.signal(sig, handler);
+    return std.libc.signal(sig, handler);
 }
 
 pub void ignore(i32 sig)
 {
-    std.platform.libc.signal(sig, (SigHandler*)(u64)SIG_IGN);
+    std.libc.signal(sig, (SigHandler*)(u64)SIG_IGN);
 }
 
 pub void defaultHandler(i32 sig)
 {
-    std.platform.libc.signal(sig, (SigHandler*)(u64)SIG_DFL);
+    std.libc.signal(sig, (SigHandler*)(u64)SIG_DFL);
 }
 
 pub i32 send(i32 pid, i32 sig)
 {
-    return std.platform.libc.kill(pid, sig);
+    return std.libc.kill(pid, sig);
 }
 
 pub i32 raiseSig(i32 sig)
 {
-    return std.platform.libc.raise(sig);
+    return std.libc.raise(sig);
 }

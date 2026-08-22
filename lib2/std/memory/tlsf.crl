@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 const u32 FLI_COUNT = 32; // still thinking of adding a constexpr or final keyword
 const u32 SLI_COUNT = 32;
@@ -372,9 +366,9 @@ pub struct Tlsf
         return total;
     }
 
-    mman.Allocator allocator()
+    std.mman.Allocator allocator()
     {
-        mman.Allocator a;
+        std.mman.Allocator a;
         a.ctx = (void*)self;
         a.alloc = _tlsfWrapAlloc;
         a.free = _tlsfWrapFree;

@@ -201,9 +201,13 @@ i32 main(u32 argc, char** argv)
         else if (BUILD_ARCH_ID == 12) ba = str.strView::fromCstr("wasm32");
         if (nflags < 16) { flagNames[nflags] = str.strView::fromCstr("platform"); flagVals[nflags] = bp; nflags++; }
         if (nflags < 16) { flagNames[nflags] = str.strView::fromCstr("arch"); flagVals[nflags] = ba; nflags++; }
+        bool enableUnroll = false;
+        bool enableBorrowCheck = false;
         for (u32 ai = 2; ai < argc; ai++)
         {
             str.strView a = str.strView::fromCstr(argv[ai]);
+            if (a.len == 9 && a.ptr[0]==(u8)'-' && a.ptr[1]==(u8)'-' && a.ptr[2]==(u8)'f' && a.ptr[3]==(u8)'u' && a.ptr[4]==(u8)'n' && a.ptr[5]==(u8)'r' && a.ptr[6]==(u8)'o' && a.ptr[7]==(u8)'l' && a.ptr[8]==(u8)'l') { enableUnroll = true; continue; }
+            if (a.len == 13 && a.ptr[0]==(u8)'-' && a.ptr[1]==(u8)'-' && a.ptr[2]==(u8)'f' && a.ptr[3]==(u8)'b' && a.ptr[4]==(u8)'o' && a.ptr[5]==(u8)'r' && a.ptr[6]==(u8)'r' && a.ptr[7]==(u8)'o' && a.ptr[8]==(u8)'w' && a.ptr[9]==(u8)'c' && a.ptr[10]==(u8)'h' && a.ptr[11]==(u8)'e' && a.ptr[12]==(u8)'c' && a.ptr[13]==(u8)'k') { enableBorrowCheck = true; continue; }
             // --fcast: force every cast (escape hatch for code that needs
             // unchecked conversion). Off by default.
             if (a.len == 7 && a.ptr[0] == (u8)'-' && a.ptr[1] == (u8)'-' && a.ptr[2] == (u8)'f' && a.ptr[3] == (u8)'c' && a.ptr[4] == (u8)'a' && a.ptr[5] == (u8)'s' && a.ptr[6] == (u8)'t')
@@ -253,6 +257,15 @@ i32 main(u32 argc, char** argv)
             if (a.len == 11 && a.ptr[0]==(u8)'-' && a.ptr[1]==(u8)'-' && a.ptr[2]==(u8)'c' && a.ptr[3]==(u8)'o' && a.ptr[4]==(u8)'n' && a.ptr[5]==(u8)'t' && a.ptr[6]==(u8)'i' && a.ptr[7]==(u8)'n' && a.ptr[8]==(u8)'u' && a.ptr[9]==(u8)'e') { stopOnError = false; continue; }
             if (a.len == 19 && a.ptr[0]==(u8)'-' && a.ptr[1]==(u8)'-' && a.ptr[2]==(u8)'r' && a.ptr[3]==(u8)'e' && a.ptr[4]==(u8)'p' && a.ptr[5]==(u8)'o' && a.ptr[6]==(u8)'r' && a.ptr[7]==(u8)'t' && a.ptr[8]==(u8)'-' && a.ptr[9]==(u8)'a' && a.ptr[10]==(u8)'l' && a.ptr[11]==(u8)'l' && a.ptr[12]==(u8)'-' && a.ptr[13]==(u8)'e' && a.ptr[14]==(u8)'r' && a.ptr[15]==(u8)'r' && a.ptr[16]==(u8)'o' && a.ptr[17]==(u8)'r' && a.ptr[18]==(u8)'s') { reportAllErrors = true; continue; }
         }
+        // set pointer width for usize/isize based on arch
+        {
+            str.strView archVal = ba;
+            for (u32 _fi=0; _fi<nflags; _fi++) if (vEqCI(flagNames[_fi], strView::fromCstr("arch"))) archVal = flagVals[_fi];
+            bool is32 = vEqCI(archVal, strView::fromCstr("x86")) || vEqCI(archVal, strView::fromCstr("arm32")) || vEqCI(archVal, strView::fromCstr("riscv32")) || vEqCI(archVal, strView::fromCstr("ppc")) || vEqCI(archVal, strView::fromCstr("mips")) || vEqCI(archVal, strView::fromCstr("wasm32"));
+            types.setPointerWidth(is32 ? 32 : 64);
+        }
+        if (enableUnroll) { if (nflags<16) { flagNames[nflags]=strView::fromCstr("unroll"); flagVals[nflags]=strView::fromCstr("1"); nflags++; } }
+        if (enableBorrowCheck) { if (nflags<16) { flagNames[nflags]=strView::fromCstr("borrowcheck"); flagVals[nflags]=strView::fromCstr("1"); nflags++; } }
         check.Check ck = check.Check::new(prog, str.strView::fromParts((const char*)src, len), path, exeDir);
         for (u32 fi = 0; fi < nflags && fi < 16; fi++)
         {

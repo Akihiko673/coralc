@@ -8,50 +8,50 @@ pub struct ConditionVar
 
     void init()
     {
-        std.platform.libc.pthread_cond_init(self.impl, null);
+        std.libc.pthread_cond_init(self.impl, null);
     }
 
     void destroy()
     {
-        std.platform.libc.pthread_cond_destroy(self.impl);
+        std.libc.pthread_cond_destroy(self.impl);
     }
 
     void wait(Mutex* mutex)
     {
-        std.platform.libc.pthread_cond_wait(self.impl, mutex->impl);
+        std.libc.pthread_cond_wait(self.impl, mutex->impl);
     }
 
     void signal()
     {
-        std.platform.libc.pthread_cond_signal(self.impl);
+        std.libc.pthread_cond_signal(self.impl);
     }
 
     void broadcast()
     {
-        std.platform.libc.pthread_cond_broadcast(self.impl);
+        std.libc.pthread_cond_broadcast(self.impl);
     }
 }
 
 pub Thread threadCreate(void*(void*) fn, void* arg)
 {
     void* t;
-    if (std.platform.libc.pthread_create(&t, null, fn, arg) != 0) return (Thread)0;
+    if (std.libc.pthread_create(&t, null, fn, arg) != 0) return (Thread)0;
     return (Thread)t;
 }
 
 pub bool threadJoin(Thread t, void** retval)
 {
-    return std.platform.libc.pthread_join((void*)t, retval) == 0;
+    return std.libc.pthread_join((void*)t, retval) == 0;
 }
 
 pub void threadExit(void* retval)
 {
-    std.platform.libc.pthread_exit(retval);
+    std.libc.pthread_exit(retval);
 }
 
 pub Thread threadCurrent()
 {
-    return (Thread)std.platform.libc.pthread_self();
+    return (Thread)std.libc.pthread_self();
 }
 
 pub struct AtomicU64

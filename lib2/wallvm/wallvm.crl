@@ -1,9 +1,3 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
 mod constfold = import(lib, "wallvm/passes/constfold.crl");
 mod dce = import(lib, "wallvm/passes/dce.crl");
 mod cse = import(lib, "wallvm/passes/cse.crl");
@@ -37,9 +31,9 @@ mod sparc64 = import(lib, "wallvm/target/sparc64/sparc64.crl");
 mod wasm32 = import(lib, "wallvm/target/wasm32/wasm32.crl");
 mod wasm64 = import(lib, "wallvm/target/wasm64/wasm64.crl");
 mod lsra = import(lib, "wallvm/regalloc/lsra.crl");
-mod asm_rules = import(lib, "wallvm/rules/asm_rules.crl");
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod mman = import(lib, "std/memory/mman.crl");
+mod asm_rules = import(lib, "wallvm/rules/wallvm.asm_rules.crl");
+mod ir_types = import(lib, "wallvm/wallvm.ir_types.crl");
+mod std = import(lib, "std");
 
 pub const u32 WALLVM_VERSION_MAJOR = 0;
 pub const u32 WALLVM_VERSION_MINOR = 1;
@@ -69,15 +63,15 @@ pub struct PassPipeline
         if (self.count >= self.capacity)
         {
             u32 nc = self.capacity ? self.capacity * 2 : 8;
-            PassFn** np = mman.alloc<PassFn*>(nc);
-            char** nn = mman.alloc<char*>(nc);
+            PassFn** np = std.mman.alloc<PassFn*>(nc);
+            char** nn = std.mman.alloc<char*>(nc);
             for (u32 i = 0; i < self.count; i++)
             {
                 np[i] = self.passes[i];
                 nn[i] = self.names[i];
             }
-            if (self.passes) mman.dealloc<PassFn*>(self.passes);
-            if (self.names) mman.dealloc<char*>(self.names);
+            if (self.passes) std.mman.dealloc<PassFn*>(self.passes);
+            if (self.names) std.mman.dealloc<char*>(self.names);
             self.passes = np;
             self.names = nn;
             self.capacity = nc;
@@ -89,8 +83,8 @@ pub struct PassPipeline
 
     void clear()
     {
-        if (self.passes) mman.dealloc<PassFn*>(self.passes);
-        if (self.names) mman.dealloc<char*>(self.names);
+        if (self.passes) std.mman.dealloc<PassFn*>(self.passes);
+        if (self.names) std.mman.dealloc<char*>(self.names);
         self.passes = null;
         self.names = null;
         self.count = 0;
@@ -237,27 +231,27 @@ pub CompileResult compileError(const char* msg, u32 line)
 // True when the target's backend decodes lsra's valData assignments
 // (SPILL_BIT/FLOAT_BIT/reg index) directly. Until a backend is upgraded it
 // stays slot-based and lsra keeps rewriting spills in the IR.
-static bool targetConsumesRegAlloc(asm_rules.CallingConvention cc)
+static bool targetConsumesRegAlloc(wallvm.asm_rules.CallingConvention cc)
 {
     switch (cc)
     {
-    case asm_rules.CallingConvention::SystemV:
-    case asm_rules.CallingConvention::Win64:
-    case asm_rules.CallingConvention::SyscallWin64:
-    case asm_rules.CallingConvention::SyscallX86_64:
-    case asm_rules.CallingConvention::SyscallMacOS:
-    case asm_rules.CallingConvention::Cdecl:
-    case asm_rules.CallingConvention::Stdcall:
-    case asm_rules.CallingConvention::Fastcall:
-    case asm_rules.CallingConvention::SyscallX86:
-    case asm_rules.CallingConvention::WinX86_32:
+    case wallvm.asm_rules.CallingConvention::SystemV:
+    case wallvm.asm_rules.CallingConvention::Win64:
+    case wallvm.asm_rules.CallingConvention::SyscallWin64:
+    case wallvm.asm_rules.CallingConvention::SyscallX86_64:
+    case wallvm.asm_rules.CallingConvention::SyscallMacOS:
+    case wallvm.asm_rules.CallingConvention::Cdecl:
+    case wallvm.asm_rules.CallingConvention::Stdcall:
+    case wallvm.asm_rules.CallingConvention::Fastcall:
+    case wallvm.asm_rules.CallingConvention::SyscallX86:
+    case wallvm.asm_rules.CallingConvention::WinX86_32:
         return true;
     default:
         return false;
     }
 }
 
-static lsra.RegAllocConfig regallocConfigFor(asm_rules.CallingConvention cc)
+static lsra.RegAllocConfig regallocConfigFor(wallvm.asm_rules.CallingConvention cc)
 {
     lsra.RegAllocConfig cfg = lsra.defaultRegAllocConfig();
     // Caller-save registers only: values live across calls in spill slots,
@@ -271,21 +265,21 @@ static lsra.RegAllocConfig regallocConfigFor(asm_rules.CallingConvention cc)
     // sequences need as scratch; lsra never allocates them to values.
     switch (cc)
     {
-    case asm_rules.CallingConvention::SystemV:
-    case asm_rules.CallingConvention::Win64:
-    case asm_rules.CallingConvention::SyscallWin64:
-    case asm_rules.CallingConvention::SyscallX86_64:
-    case asm_rules.CallingConvention::SyscallMacOS:
+    case wallvm.asm_rules.CallingConvention::SystemV:
+    case wallvm.asm_rules.CallingConvention::Win64:
+    case wallvm.asm_rules.CallingConvention::SyscallWin64:
+    case wallvm.asm_rules.CallingConvention::SyscallX86_64:
+    case wallvm.asm_rules.CallingConvention::SyscallMacOS:
         cfg.reservedIntRegs = x86_64.X86_64_RESERVED_INT;
         cfg.numReservedIntRegs = 3;
         cfg.reservedFloatRegs = x86_64.X86_64_RESERVED_FLOAT;
         cfg.numReservedFloatRegs = 3;
         break;
-    case asm_rules.CallingConvention::Cdecl:
-    case asm_rules.CallingConvention::Stdcall:
-    case asm_rules.CallingConvention::Fastcall:
-    case asm_rules.CallingConvention::SyscallX86:
-    case asm_rules.CallingConvention::WinX86_32:
+    case wallvm.asm_rules.CallingConvention::Cdecl:
+    case wallvm.asm_rules.CallingConvention::Stdcall:
+    case wallvm.asm_rules.CallingConvention::Fastcall:
+    case wallvm.asm_rules.CallingConvention::SyscallX86:
+    case wallvm.asm_rules.CallingConvention::WinX86_32:
         // Caller-save set (eax/ecx/edx) is all backend scratch and ebp is
         // the frame pointer, so the allocatable int pool is the callee-save
         // set ebx/esi/edi. Floats use xmm3-7.
@@ -302,19 +296,19 @@ static lsra.RegAllocConfig regallocConfigFor(asm_rules.CallingConvention cc)
 }
 
 // Syntax for a calling convention's target, from the rules tables.
-static bool ccUsesAtt(asm_rules.CallingConvention cc)
+static bool ccUsesAtt(wallvm.asm_rules.CallingConvention cc)
 {
-    return asm_rules.formatForCc(cc) == asm_rules.AsmFormat::Att;
+    return wallvm.asm_rules.formatForCc(cc) == wallvm.asm_rules.AsmFormat::Att;
 }
 
-pub CompileResult irCompile(IrModule* modd, IrContext* ctx, asm_rules.CallingConvention cc, u32 optLevel)
+pub CompileResult irCompile(IrModule* modd, IrContext* ctx, wallvm.asm_rules.CallingConvention cc, u32 optLevel)
 {
     if (!modd) return compileError("null module", 0);
     if (!ctx) return compileError("null context", 0);
 
     // WASM is a stack machine — no register allocation needed
-    bool isWasm = (cc == asm_rules.CallingConvention::Wasm32 || cc == asm_rules.CallingConvention::Wasm64);
-    asm_rules.ABIRules abi = asm_rules.abiForCc(cc);
+    bool isWasm = (cc == wallvm.asm_rules.CallingConvention::Wasm32 || cc == wallvm.asm_rules.CallingConvention::Wasm64);
+    wallvm.asm_rules.ABIRules abi = wallvm.asm_rules.abiForCc(cc);
 
     // The register-allocation contract is chosen per target by switch, not
     // by a global. Each CPU target either consumes lsra's valData
@@ -351,11 +345,11 @@ pub CompileResult irCompile(IrModule* modd, IrContext* ctx, asm_rules.CallingCon
 // Same pipeline as irCompile, but returns the generated assembly text
 // instead of emitting it to a sink. Test-support export; the buffer lives
 // for the program lifetime.
-pub const char* irCompileAsm(IrModule* modd, IrContext* ctx, asm_rules.CallingConvention cc, u32 optLevel)
+pub const char* irCompileAsm(IrModule* modd, IrContext* ctx, wallvm.asm_rules.CallingConvention cc, u32 optLevel)
 {
     if (!modd || !ctx) return null;
-    bool isWasm = (cc == asm_rules.CallingConvention::Wasm32 || cc == asm_rules.CallingConvention::Wasm64);
-    asm_rules.ABIRules abi = asm_rules.abiForCc(cc);
+    bool isWasm = (cc == wallvm.asm_rules.CallingConvention::Wasm32 || cc == wallvm.asm_rules.CallingConvention::Wasm64);
+    wallvm.asm_rules.ABIRules abi = wallvm.asm_rules.abiForCc(cc);
     lsra.RegAllocConfig cfg = regallocConfigFor(cc);
 
     for (u32 fi = 0; fi < modd.nfuncs; fi++)
@@ -370,67 +364,67 @@ pub const char* irCompileAsm(IrModule* modd, IrContext* ctx, asm_rules.CallingCo
 
     switch (cc)
     {
-    case asm_rules.CallingConvention::SystemV:
-    case asm_rules.CallingConvention::Win64:
-    case asm_rules.CallingConvention::SyscallWin64:
-    case asm_rules.CallingConvention::SyscallX86_64:
-    case asm_rules.CallingConvention::SyscallMacOS:
+    case wallvm.asm_rules.CallingConvention::SystemV:
+    case wallvm.asm_rules.CallingConvention::Win64:
+    case wallvm.asm_rules.CallingConvention::SyscallWin64:
+    case wallvm.asm_rules.CallingConvention::SyscallX86_64:
+    case wallvm.asm_rules.CallingConvention::SyscallMacOS:
         return x86_64.irCodegenX86_64Asm(modd, (void*)ctx, ccUsesAtt(cc));
     default:
         return null;
     }
 }
 
-pub bool irCodegen(IrModule* modd, void* userdata, asm_rules.CallingConvention cc)
+pub bool irCodegen(IrModule* modd, void* userdata, wallvm.asm_rules.CallingConvention cc)
 {
     IrContext* ctx = (IrContext*)userdata;
     if (!ctx || !modd) return false;
     switch (cc)
     {
-    case asm_rules.CallingConvention::SystemV:
-    case asm_rules.CallingConvention::Win64:
-    case asm_rules.CallingConvention::SyscallWin64:
-    case asm_rules.CallingConvention::SyscallX86_64:
-    case asm_rules.CallingConvention::SyscallMacOS:
+    case wallvm.asm_rules.CallingConvention::SystemV:
+    case wallvm.asm_rules.CallingConvention::Win64:
+    case wallvm.asm_rules.CallingConvention::SyscallWin64:
+    case wallvm.asm_rules.CallingConvention::SyscallX86_64:
+    case wallvm.asm_rules.CallingConvention::SyscallMacOS:
         return x86_64.irCodegenX86_64(modd, userdata, ccUsesAtt(cc));
-    case asm_rules.CallingConvention::Aapcs64:
-    case asm_rules.CallingConvention::SyscallArm64:
+    case wallvm.asm_rules.CallingConvention::Aapcs64:
+    case wallvm.asm_rules.CallingConvention::SyscallArm64:
         return arm64.irCodegenArm64(modd, userdata);
-    case asm_rules.CallingConvention::Aapcs64MacOs:
+    case wallvm.asm_rules.CallingConvention::Aapcs64MacOs:
         return arm64.irCodegenArm64(modd, userdata);
-    case asm_rules.CallingConvention::Aapcs64Ios:
+    case wallvm.asm_rules.CallingConvention::Aapcs64Ios:
         return arm64.irCodegenArm64(modd, userdata);
-    case asm_rules.CallingConvention::Aapcs:
-    case asm_rules.CallingConvention::SyscallArm:
+    case wallvm.asm_rules.CallingConvention::Aapcs:
+    case wallvm.asm_rules.CallingConvention::SyscallArm:
         return arm.irCodegenArm(modd, userdata);
-    case asm_rules.CallingConvention::Riscv64:
-    case asm_rules.CallingConvention::SyscallRiscv64:
+    case wallvm.asm_rules.CallingConvention::Riscv64:
+    case wallvm.asm_rules.CallingConvention::SyscallRiscv64:
         return riscv.irCodegenRiscv(modd, userdata);
-    case asm_rules.CallingConvention::Cdecl:
-    case asm_rules.CallingConvention::Stdcall:
-    case asm_rules.CallingConvention::Fastcall:
-    case asm_rules.CallingConvention::SyscallX86:
+    case wallvm.asm_rules.CallingConvention::Cdecl:
+    case wallvm.asm_rules.CallingConvention::Stdcall:
+    case wallvm.asm_rules.CallingConvention::Fastcall:
+    case wallvm.asm_rules.CallingConvention::SyscallX86:
         return x86.irCodegenX86(modd, userdata);
-    case asm_rules.CallingConvention::WinX86_32:
+    case wallvm.asm_rules.CallingConvention::WinX86_32:
         return x86.irCodegenX86(modd, userdata);
-    case asm_rules.CallingConvention::Ppc64:
-    case asm_rules.CallingConvention::SyscallPpc64:
+    case wallvm.asm_rules.CallingConvention::Ppc64:
+    case wallvm.asm_rules.CallingConvention::SyscallPpc64:
         return ppc64.irCodegenPpc64(modd, userdata);
-    case asm_rules.CallingConvention::Ppc:
-    case asm_rules.CallingConvention::SyscallPpc:
+    case wallvm.asm_rules.CallingConvention::Ppc:
+    case wallvm.asm_rules.CallingConvention::SyscallPpc:
         return ppc.irCodegenPpc(modd, userdata);
-    case asm_rules.CallingConvention::Mips64:
-    case asm_rules.CallingConvention::SyscallMips64:
+    case wallvm.asm_rules.CallingConvention::Mips64:
+    case wallvm.asm_rules.CallingConvention::SyscallMips64:
         return mips64.irCodegenMips64(modd, userdata);
-    case asm_rules.CallingConvention::Mips:
-    case asm_rules.CallingConvention::SyscallMips:
+    case wallvm.asm_rules.CallingConvention::Mips:
+    case wallvm.asm_rules.CallingConvention::SyscallMips:
         return mips.irCodegenMips(modd, userdata);
-    case asm_rules.CallingConvention::SparcV9:
-    case asm_rules.CallingConvention::SyscallSparc64:
+    case wallvm.asm_rules.CallingConvention::SparcV9:
+    case wallvm.asm_rules.CallingConvention::SyscallSparc64:
         return sparc64.irCodegenSparc64(modd, userdata);
-    case asm_rules.CallingConvention::Wasm32:
+    case wallvm.asm_rules.CallingConvention::Wasm32:
         return wasm32.irCodegenWasm32(modd, userdata);
-    case asm_rules.CallingConvention::Wasm64:
+    case wallvm.asm_rules.CallingConvention::Wasm64:
         return wasm64.irCodegenWasm64(modd, userdata);
     }
     return false;

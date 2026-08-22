@@ -1,14 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod string = import(lib, "std/text/string.crl");
-mod libc = import(lib, "std/platform/libc.crl");
-mod vec = import(lib, "std/collections/vec.crl");
-mod strutil = import(lib, "std/text/strutil.crl");
+mod std = import(lib, "std");
 
 pub enum TomlValueType
 {
@@ -27,10 +17,10 @@ pub struct TomlValue
     i64 intVal;
     f64 floatVal;
     bool boolVal;
-    vec<TomlValue> arrVal;
-    vec<TomlPair> tableVal;
+    std.vec.vec<TomlValue> arrVal;
+    std.vec.vec<TomlPair> tableVal;
 
-    static TomlValue stringVal(strView s)
+    static TomlValue stringVal(std.string.strView s)
     {
         TomlValue v;
         v.type = TomlValueType::String;
@@ -66,7 +56,7 @@ pub struct TomlValue
     {
         TomlValue v;
         v.type = TomlValueType::Array;
-        v.arrVal = vec<TomlValue>::new();
+        v.arrVal = std.vec.vec<TomlValue>::new();
         return v;
     }
 
@@ -74,7 +64,7 @@ pub struct TomlValue
     {
         TomlValue v;
         v.type = TomlValueType::Table;
-        v.tableVal = vec<TomlPair>::new();
+        v.tableVal = std.vec.vec<TomlPair>::new();
         return v;
     }
 
@@ -107,12 +97,12 @@ pub struct TomlPair
 
 pub struct TomlDoc
 {
-    vec<TomlPair> root;
+    std.vec.vec<TomlPair> root;
 
     static TomlDoc new()
     {
         TomlDoc d;
-        d.root = vec<TomlPair>::new();
+        d.root = std.vec.vec<TomlPair>::new();
         return d;
     }
 
@@ -126,7 +116,7 @@ pub struct TomlDoc
         self.root.dispose();
     }
 
-    TomlValue* get(strView key)
+    TomlValue* get(std.string.strView key)
     {
         for (u64 i = 0; i < self.root.count(); i++)
         {
@@ -136,14 +126,14 @@ pub struct TomlDoc
         return null;
     }
 
-    TomlValue* getIn(strView table, strView key)
+    TomlValue* getIn(std.string.strView table, std.string.strView key)
     {
         for (u64 i = 0; i < self.root.count(); i++)
         {
             if (self.root.at(i).key.asView().equals(table) &&
                 self.root.at(i).value.type == TomlValueType::Table)
             {
-                vec<TomlPair>* t = &self.root.atPtr(i)->value.tableVal;
+                std.vec.vec<TomlPair>* t = &self.root.atPtr(i)->value.tableVal;
                 for (u64 j = 0; j < t->count(); j++)
                 {
                     if (t->at(j).key.asView().equals(key))
@@ -215,7 +205,7 @@ struct _TomlParser
             self.pos++;
         }
         if (self.pos == start) { self.error = true; return String::new(); }
-        return String::fromView(strView::fromParts((const char*)(self.data + start), self.pos - start));
+        return String::fromView(std.string.strView::fromParts((const char*)(self.data + start), self.pos - start));
     }
 
     String parseBasicString()
@@ -300,9 +290,9 @@ struct _TomlParser
                     if ((ch < '0' || ch > '9') && ch != '.' && ch != 'e' && ch != 'E' && ch != '+' && ch != '-') break;
                     self.pos++;
                 }
-                String s = String::fromView(strView::fromParts((const char*)(self.data + start), self.pos - start));
+                String s = String::fromView(std.string.strView::fromParts((const char*)(self.data + start), self.pos - start));
                 char* end;
-                f64 fv = libc.strtod(s.asView().ptr, &end);
+                f64 fv = std.libc.strtod(s.asView().ptr, &end);
                 if (end != s.asView().ptr + (self.pos - start))
                 {
                     s.free();
@@ -341,7 +331,7 @@ struct _TomlParser
     }
 }
 
-pub bool parseToml(strView input, TomlDoc* doc)
+pub bool parseToml(std.string.strView input, TomlDoc* doc)
 {
     _TomlParser p;
     p.data = (const u8*)input.ptr;
@@ -350,7 +340,7 @@ pub bool parseToml(strView input, TomlDoc* doc)
     p.line = 1;
     p.error = false;
 
-    vec<TomlPair>* currentTable = &doc->root;
+    std.vec.vec<TomlPair>* currentTable = &doc->root;
     String currentTableName = String::new();
 
     while (p.pos < p.len)

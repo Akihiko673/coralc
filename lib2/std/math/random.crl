@@ -1,7 +1,4 @@
-@[[no_drop]]
-
-mod libc = import(lib, "std/platform/libc.crl");
-mod mman = import(lib, "std/memory/mman.crl");
+mod  = import(lib, "std");
 
 const i32 O_RDONLY = 0;
 
@@ -12,7 +9,7 @@ void _ensureUrandom()
 {
     if (!_urandomReady)
     {
-        _urandomFd = libc.open("/dev/urandom", O_RDONLY, 0);
+        _urandomFd = std.libc.open("/dev/urandom", O_RDONLY, 0);
         _urandomReady = true;
     }
 }
@@ -25,7 +22,7 @@ pub u64 nextU64()
     u64 got = 0;
     while (got < 8)
     {
-        i64 n = libc.read(_urandomFd, (u8*)&val + got, 8u - got);
+        i64 n = std.libc.read(_urandomFd, (u8*)&val + got, 8u - got);
         if (n <= 0) return 0;
         got += (u64)n;
     }
@@ -51,7 +48,7 @@ pub f64 nextF64()
 {
     u64 bits = (u64)(nextU64() >> 12u) | 0x3FF0000000000000u;
     f64 result;
-    mman.copy<f64>(&result, &bits, 1u);
+    std.mman.copy<f64>(&result, &bits, 1u);
     return result - 1.0;
 }
 

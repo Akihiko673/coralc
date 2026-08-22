@@ -4,11 +4,12 @@ mod scopes = import("typecheck/scopes.crl");
 mod str = import("std/text/string.crl");
 mod mman = import("std/memory/mman.crl");
 mod emitir = import("emitir");
+mod error = import("error");
 mod wallvm = import("lib/wallvm/wallvm.crl");
 mod ir_types = import("lib/wallvm/ir_types.crl");
 mod asm_rules = import("lib/wallvm/rules/asm_rules.crl");
 
-pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug)
+pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods, str.strView path, u32 optLevel, bool debug, str.strView* flagNames, str.strView* flagVals, u32 nflags)
 {
     str.String opath = str.String::new();
     u32 lastDot = 0; bool dot = false;
@@ -17,8 +18,32 @@ pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods,
     if (dot) opath.pushView(str.strView::fromParts(path.ptr, lastDot));
     else opath.pushView(path);
     opath.pushCstr(".s");
+    for (u32 _fi=0; _fi<nflags; _fi++) {
+        bool isUnroll = flagNames[_fi].len==6; if(isUnroll) { const char* u="unroll"; for(u32 k=0;k<6;k++) if(flagNames[_fi].ptr[k]!= (u8)u[k]) {isUnroll=false; break;}}
+        bool isBorrow = flagNames[_fi].len==11; if(isBorrow) { const char* b="borrowcheck"; for(u32 k=0;k<11;k++) if(flagNames[_fi].ptr[k]!= (u8)b[k]) {isBorrow=false; break;}}
+        if(isUnroll && flagVals[_fi].len==1 && flagVals[_fi].ptr[0]=='1') wallvm.gEnableUnroll = true;
+        if(isBorrow && flagVals[_fi].len==1 && flagVals[_fi].ptr[0]=='1') wallvm.gEnableBorrowCheck = true;
+    }
     ir_types.IrContext* ctx = null;
     ir_types.IrModule* irMod = emitir.buildModule(prog, top, mods, path, optLevel, debug, &ctx);
+    // borrowcheck diagnostics when flag enabled
+    for (u32 _fi2=0; _fi2<nflags; _fi2++) {
+        bool isBorrow2=false; if(flagNames[_fi2].len==11) { const char* b="borrowcheck"; isBorrow2=true; for(u32 k=0;k<11;k++) if(flagNames[_fi2].ptr[k]!= (u8)b[k]) {isBorrow2=false; break;}} 
+        if(isBorrow2 && flagVals[_fi2].len==1 && flagVals[_fi2].ptr[0]=='1') {
+            for(u32 _f2=0; _f2<irMod.nfuncs; _f2++) {
+                ir_types.IrFunc* _func = irMod.funcs[_f2];
+                if(wallvm.borrowcheck.irPassBorrowCheck(_func, (void*)ctx)) {
+                    str.strView _code = str.strView::fromCstr("TC-BORROW");
+                    str.strView _msg = str.strView::fromCstr("borrow checker violation: use after move or aliasing call args");
+                    str.strView _help = str.strView::fromCstr("check for aliasing pointer args or stale live loads across calls; try `coralc --explain TC-BORROW`");
+                    // use first func's debug loc or 1,1
+                    u32 _line = 1; u32 _col = 1; const char* _file = _func.base.name ? _func.base.name : "unknown";
+                    if(_func.nblocks>0 && _func.blocks[0].ninsts>0 && _func.blocks[0].insts[0].debugLoc.file) { _file = _func.blocks[0].insts[0].debugLoc.file; _line = _func.blocks[0].insts[0].debugLoc.line; _col = _func.blocks[0].insts[0].debugLoc.col; }
+                    error.reportCode(_code, strView::fromCstr(_file), strView::fromParts((const char*)"",0), _line, _col, error.LVL_ERROR, _msg, _help);
+                }
+            }
+        }
+    }
     u32 cc = (u32)asm_rules.CallingConvention::SystemV;
     const char* asmText = wallvm.irCompileAsm(irMod, ctx, (asm_rules.CallingConvention)cc, optLevel);
     void* f = libc.fopen(opath.asCstr(), (const u8*)"wb");

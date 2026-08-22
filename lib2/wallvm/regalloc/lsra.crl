@@ -1,14 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-
-mod ir_types = import("wallvm/ir_types.crl");
-mod ir_opcodes = import("wallvm/ir_opcodes.crl");
-mod asm_rules = import("wallvm/rules/asm_rules.crl");
-mod mman = import("std/memory/mman.crl");
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 const u32 NO_REG = 0xFFFFFFFF;
 const i32 NO_SLOT = -1;
@@ -64,7 +55,7 @@ struct LiveInterval
 
 pub struct LinearScanRegAlloc
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u32 numRegs;
     u32 numFloatRegs;
     u32 numCallerSave;
@@ -75,7 +66,7 @@ pub struct LinearScanRegAlloc
 
     u32 numVregs;
 
-    ir_types.IrValue** vregValues;
+    wallvm.ir_types.IrValue** vregValues;
     u32 capVregs;
 
     LiveInterval* intervals;
@@ -85,14 +76,14 @@ pub struct LinearScanRegAlloc
     u32* regForVreg;
     i32* slotForVreg;
 
-    ir_types.IrBlock** blocks;
+    wallvm.ir_types.IrBlock** blocks;
     u32 numBlocks;
 
     u32* blockStartInst;
     u32 totalInsts;
     u32* instVreg;
     u32* instBlock;
-    ir_types.IrInst** linearInsts;
+    wallvm.ir_types.IrInst** linearInsts;
     u8* instIsCall;
 
     u32* active;
@@ -108,10 +99,10 @@ pub struct LinearScanRegAlloc
     IrType* wordType;
 
     // Per-spill-slot alloca, slotAlloca[slot] = alloca instruction base value
-    ir_types.IrValue** slotAllocas;
+    wallvm.ir_types.IrValue** slotAllocas;
     u32 numSlots;
 
-    LinearScanRegAlloc new(ir_types.IrContext* ctx, asm_rules.ABIRules* abi, RegAllocConfig* cfg)
+    LinearScanRegAlloc new(wallvm.ir_types.IrContext* ctx, wallvm.asm_rules.ABIRules* abi, RegAllocConfig* cfg)
     {
         LinearScanRegAlloc r;
         r.ctx = ctx;
@@ -149,7 +140,7 @@ pub struct LinearScanRegAlloc
             r.numCallerSave = keptCaller;
             if (r.numRegs > 0)
             {
-                r.intRegNames = mman.alloc<char*>(r.numRegs);
+                r.intRegNames = std.mman.alloc<char*>(r.numRegs);
                 u32 k = 0;
                 for (u32 i = 0; i < callerCount; i++)
                     if (!isReservedName(abi->callerSaveRegs[i], cfg ? cfg->reservedIntRegs : null, cfg ? cfg->numReservedIntRegs : 0))
@@ -160,7 +151,7 @@ pub struct LinearScanRegAlloc
             }
             if (r.numFloatRegs > 0)
             {
-                r.floatRegNames = mman.alloc<char*>(r.numFloatRegs);
+                r.floatRegNames = std.mman.alloc<char*>(r.numFloatRegs);
                 u32 k = 0;
                 for (u32 i = 0; i < fcount; i++)
                     if (!isReservedName(abi->floatArgRegs[i], cfg ? cfg->reservedFloatRegs : null, cfg ? cfg->numReservedFloatRegs : 0))
@@ -203,17 +194,17 @@ pub struct LinearScanRegAlloc
         {
             u32 newCap = self.capVregs ? self.capVregs * 2 : 64;
             if (newCap <= vreg) newCap = vreg + 64;
-            ir_types.IrValue** newVals = mman.alloc<ir_types.IrValue*>(newCap);
-            u32* newRegs = mman.alloc<u32>(newCap);
-            i32* newSlots = mman.alloc<i32>(newCap);
+            wallvm.ir_types.IrValue** newVals = std.mman.alloc<wallvm.ir_types.IrValue*>(newCap);
+            u32* newRegs = std.mman.alloc<u32>(newCap);
+            i32* newSlots = std.mman.alloc<i32>(newCap);
             if (self.vregValues)
             {
-                mman.copy<ir_types.IrValue*>(newVals, self.vregValues, self.capVregs);
-                mman.copy<u32>(newRegs, self.regForVreg, self.capVregs);
-                mman.copy<i32>(newSlots, self.slotForVreg, self.capVregs);
-                mman.dealloc<ir_types.IrValue*>(self.vregValues);
-                mman.dealloc<u32>(self.regForVreg);
-                mman.dealloc<i32>(self.slotForVreg);
+                std.mman.copy<wallvm.ir_types.IrValue*>(newVals, self.vregValues, self.capVregs);
+                std.mman.copy<u32>(newRegs, self.regForVreg, self.capVregs);
+                std.mman.copy<i32>(newSlots, self.slotForVreg, self.capVregs);
+                std.mman.dealloc<wallvm.ir_types.IrValue*>(self.vregValues);
+                std.mman.dealloc<u32>(self.regForVreg);
+                std.mman.dealloc<i32>(self.slotForVreg);
             }
             for (u32 i = self.capVregs; i < newCap; i++)
             {
@@ -233,11 +224,11 @@ pub struct LinearScanRegAlloc
         if (self.numIntervals >= self.capIntervals)
         {
             u32 newCap = self.capIntervals ? self.capIntervals * 2 : 64;
-            LiveInterval* newInts = mman.alloc<LiveInterval>(newCap);
+            LiveInterval* newInts = std.mman.alloc<LiveInterval>(newCap);
             if (self.intervals)
             {
-                mman.copy<LiveInterval>(newInts, self.intervals, self.numIntervals);
-                mman.dealloc<LiveInterval>(self.intervals);
+                std.mman.copy<LiveInterval>(newInts, self.intervals, self.numIntervals);
+                std.mman.dealloc<LiveInterval>(self.intervals);
             }
             self.intervals = newInts;
             self.capIntervals = newCap;
@@ -251,11 +242,11 @@ pub struct LinearScanRegAlloc
         {
             u32 oldNum = self.numSlots;
             self.numSlots = s + 1;
-            ir_types.IrValue** newSa = mman.alloc<ir_types.IrValue*>(self.numSlots);
+            wallvm.ir_types.IrValue** newSa = std.mman.alloc<wallvm.ir_types.IrValue*>(self.numSlots);
             if (self.slotAllocas)
             {
-                mman.copy<ir_types.IrValue*>(newSa, self.slotAllocas, oldNum);
-                mman.dealloc<ir_types.IrValue*>(self.slotAllocas);
+                std.mman.copy<wallvm.ir_types.IrValue*>(newSa, self.slotAllocas, oldNum);
+                std.mman.dealloc<wallvm.ir_types.IrValue*>(self.slotAllocas);
             }
             for (u32 i = oldNum; i < self.numSlots; i++)
                 newSa[i] = null;
@@ -263,7 +254,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void assignVregs(ir_types.IrFunc* func)
+    void assignVregs(wallvm.ir_types.IrFunc* func)
     {
         self.blocks = func->blocks;
         self.numBlocks = func->nblocks;
@@ -273,11 +264,11 @@ pub struct LinearScanRegAlloc
             total += self.blocks[b].ninsts;
         self.totalInsts = total;
 
-        self.blockStartInst = mman.alloc<u32>(self.numBlocks);
-        self.instVreg = mman.alloc<u32>(total);
-        self.instBlock = mman.alloc<u32>(total);
-        self.linearInsts = mman.alloc<ir_types.IrInst*>(total);
-        self.instIsCall = mman.alloc<u8>(total);
+        self.blockStartInst = std.mman.alloc<u32>(self.numBlocks);
+        self.instVreg = std.mman.alloc<u32>(total);
+        self.instBlock = std.mman.alloc<u32>(total);
+        self.linearInsts = std.mman.alloc<wallvm.ir_types.IrInst*>(total);
+        self.instIsCall = std.mman.alloc<u8>(total);
 
         for (u32 i = 0; i < total; i++)
         {
@@ -290,20 +281,20 @@ pub struct LinearScanRegAlloc
         u32 idx = 0;
         for (u32 b = 0; b < self.numBlocks; b++)
         {
-            ir_types.IrBlock* bb = self.blocks[b];
+            wallvm.ir_types.IrBlock* bb = self.blocks[b];
             self.blockStartInst[b] = idx;
             for (u32 i = 0; i < bb.ninsts; i++)
             {
-                ir_types.IrInst* inst = bb.insts[i];
+                wallvm.ir_types.IrInst* inst = bb.insts[i];
                 self.linearInsts[idx] = inst;
                 self.instBlock[idx] = b;
-                self.instIsCall[idx] = (inst.opcode == ir_opcodes.IrOpcode::Call ||
-                                        inst.opcode == ir_opcodes.IrOpcode::InlineAsm) ? 1 : 0;
+                self.instIsCall[idx] = (inst.opcode == wallvm.irOps.IrOpcode::Call ||
+                                        inst.opcode == wallvm.irOps.IrOpcode::InlineAsm) ? 1 : 0;
 
-                ir_opcodes.IrOpcode op = inst.opcode;
-                if (op == ir_opcodes.IrOpcode::Store || op == ir_opcodes.IrOpcode::Br ||
-                    op == ir_opcodes.IrOpcode::CondBr || op == ir_opcodes.IrOpcode::Ret ||
-                    op == ir_opcodes.IrOpcode::Unreachable || op == ir_opcodes.IrOpcode::Noret)
+                wallvm.irOps.IrOpcode op = inst.opcode;
+                if (op == wallvm.irOps.IrOpcode::Store || op == wallvm.irOps.IrOpcode::Br ||
+                    op == wallvm.irOps.IrOpcode::CondBr || op == wallvm.irOps.IrOpcode::Ret ||
+                    op == wallvm.irOps.IrOpcode::Unreachable || op == wallvm.irOps.IrOpcode::Noret)
                 {
                 }
                 else
@@ -319,7 +310,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void computeIntervals(ir_types.IrFunc* func)
+    void computeIntervals(wallvm.ir_types.IrFunc* func)
     {
         for (u32 i = 0; i < self.totalInsts; i++)
         {
@@ -334,34 +325,34 @@ pub struct LinearScanRegAlloc
                 li.physReg = NO_REG;
                 li.spillSlot = NO_SLOT;
                 li.isFloat = false;
-                ir_types.IrValue* vv = self.vregValues[vreg];
-                if (vv && vv->type && vv->type->kind == ir_types.IrTypeKind::Float)
+                wallvm.ir_types.IrValue* vv = self.vregValues[vreg];
+                if (vv && vv->type && vv->type->kind == wallvm.ir_types.IrTypeKind::Float)
                     li.isFloat = true;
             }
         }
 
         for (u32 b = 0; b < self.numBlocks; b++)
         {
-            ir_types.IrBlock* bb = self.blocks[b];
+            wallvm.ir_types.IrBlock* bb = self.blocks[b];
             u32 base = self.blockStartInst[b];
             for (u32 i = 0; i < bb.ninsts; i++)
             {
-                ir_types.IrInst* inst = bb.insts[i];
+                wallvm.ir_types.IrInst* inst = bb.insts[i];
                 u32 linearIdx = base + i;
 
                 // Handle phi, uses occur at the end of predecessor blocks
-                if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                if (inst.opcode == wallvm.irOps.IrOpcode::Phi)
                 {
                     // For phi, each value operand is "used" at the end of the corresponding predecessor
                     u32 numPairs = inst.nops / 2;
                     for (u32 j = 0; j < numPairs; j++)
                     {
-                        ir_types.IrValue* op = inst.ops[j * 2];
-                        if (!op || op->kind != ir_types.IrValueKind::Inst) continue;
+                        wallvm.ir_types.IrValue* op = inst.ops[j * 2];
+                        if (!op || op->kind != wallvm.ir_types.IrValueKind::Inst) continue;
                         u32 vreg = (u32)op->valData;
-                        ir_types.IrValue* predVal = inst.ops[j * 2 + 1];
-                        if (!predVal || predVal->kind != ir_types.IrValueKind::Block) continue;
-                        ir_types.IrBlock* predBlock = (ir_types.IrBlock*)predVal;
+                        wallvm.ir_types.IrValue* predVal = inst.ops[j * 2 + 1];
+                        if (!predVal || predVal->kind != wallvm.ir_types.IrValueKind::Block) continue;
+                        wallvm.ir_types.IrBlock* predBlock = (wallvm.ir_types.IrBlock*)predVal;
 
                         i32 predEnd = -1;
                         for (u32 pb = 0; pb < self.numBlocks; pb++)
@@ -389,8 +380,8 @@ pub struct LinearScanRegAlloc
                 {
                     for (u32 j = 0; j < inst.nops; j++)
                     {
-                        ir_types.IrValue* op = inst.ops[j];
-                        if (!op || op->kind != ir_types.IrValueKind::Inst) continue;
+                        wallvm.ir_types.IrValue* op = inst.ops[j];
+                        if (!op || op->kind != wallvm.ir_types.IrValueKind::Inst) continue;
                         u32 vreg = (u32)op->valData;
                         for (u32 k = 0; k < self.numIntervals; k++)
                         {
@@ -428,10 +419,10 @@ pub struct LinearScanRegAlloc
             }
         }
 
-        self.regIsFree = mman.alloc<u32>(self.numRegs);
-        self.active = mman.alloc<u32>(self.numRegs + 1);
-        self.floatRegIsFree = mman.alloc<u32>(self.numFloatRegs);
-        self.floatActive = mman.alloc<u32>(self.numFloatRegs + 1);
+        self.regIsFree = std.mman.alloc<u32>(self.numRegs);
+        self.active = std.mman.alloc<u32>(self.numRegs + 1);
+        self.floatRegIsFree = std.mman.alloc<u32>(self.numFloatRegs);
+        self.floatActive = std.mman.alloc<u32>(self.numFloatRegs + 1);
     }
 
     static void sortIntervals(LiveInterval* intervals, u32 count)
@@ -599,17 +590,17 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    static void insertInstAt(ir_types.IrBlock* bb, u32 idx, ir_types.IrInst* newInst)
+    static void insertInstAt(wallvm.ir_types.IrBlock* bb, u32 idx, wallvm.ir_types.IrInst* newInst)
     {
         if (idx > bb.ninsts) return;
         if (bb.ninsts + 1 > bb.capInsts)
         {
             u32 newCap = bb.capInsts ? bb.capInsts * 2 : 8;
-            ir_types.IrInst** newInsts = mman.alloc<ir_types.IrInst*>(newCap);
+            wallvm.ir_types.IrInst** newInsts = std.mman.alloc<wallvm.ir_types.IrInst*>(newCap);
             if (bb.insts)
             {
-                mman.copy<ir_types.IrInst*>(newInsts, bb.insts, bb.ninsts);
-                mman.dealloc<ir_types.IrInst*>(bb.insts);
+                std.mman.copy<wallvm.ir_types.IrInst*>(newInsts, bb.insts, bb.ninsts);
+                std.mman.dealloc<wallvm.ir_types.IrInst*>(bb.insts);
             }
             bb.insts = newInsts;
             bb.capInsts = newCap;
@@ -621,31 +612,31 @@ pub struct LinearScanRegAlloc
         bb.ninsts++;
     }
 
-    ir_types.IrValue* getOrCreateSlotAlloca(i32 slot, ir_types.IrBlock* insertBlock, u32 insertIdx)
+    wallvm.ir_types.IrValue* getOrCreateSlotAlloca(i32 slot, wallvm.ir_types.IrBlock* insertBlock, u32 insertIdx)
     {
         self.ensureSlotAllocas(slot);
         if (self.slotAllocas[slot])
             return self.slotAllocas[slot];
 
         IrType* ptrTy = self.ctx.tyPtr(self.wordType);
-        ir_types.IrInst* alloca = self.ctx.createInst(ir_opcodes.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
+        wallvm.ir_types.IrInst* alloca = self.ctx.createInst(wallvm.irOps.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
         insertInstAt(insertBlock, insertIdx, alloca);
         self.slotAllocas[slot] = &alloca->base;
         return &alloca->base;
     }
 
-    void handleSpills(ir_types.IrFunc* func)
+    void handleSpills(wallvm.ir_types.IrFunc* func)
     {
         // When the backend consumes valData directly, it decodes SPILL_BIT
         // itself, no IR-level load/store rewriting.
         if (self.backendHandlesSpills) return;
         if (self.nextSpillSlot == 0) return;
 
-        ir_types.IrBlock* entryBlock = self.blocks[0];
+        wallvm.ir_types.IrBlock* entryBlock = self.blocks[0];
         for (i32 s = 0; s < self.nextSpillSlot; s++)
         {
             IrType* ptrTy = self.ctx.tyPtr(self.wordType);
-            ir_types.IrInst* alloca = self.ctx.createInst(ir_opcodes.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
+            wallvm.ir_types.IrInst* alloca = self.ctx.createInst(wallvm.irOps.IrOpcode::Alloca, ptrTy, null, 0, 0, 0);
             insertInstAt(entryBlock, 0, alloca);
             self.ensureSlotAllocas(s);
             self.slotAllocas[s] = &alloca->base;
@@ -656,7 +647,7 @@ pub struct LinearScanRegAlloc
             i32 slot = self.slotForVreg[v];
             if (slot == NO_SLOT) continue;
 
-            ir_types.IrValue* val = self.vregValues[v];
+            wallvm.ir_types.IrValue* val = self.vregValues[v];
             if (!val) continue;
 
             u32 defLinearIdx = self.totalInsts;
@@ -664,23 +655,23 @@ pub struct LinearScanRegAlloc
             {
                 if (self.instVreg[i] == v) { defLinearIdx = i; break; }
             }
-            ir_types.IrInst* defStore = null;
+            wallvm.ir_types.IrInst* defStore = null;
             if (defLinearIdx < self.totalInsts)
             {
-                ir_types.IrInst* defInst = self.linearInsts[defLinearIdx];
-                ir_types.IrBlock* defBlock = self.blocks[self.instBlock[defLinearIdx]];
+                wallvm.ir_types.IrInst* defInst = self.linearInsts[defLinearIdx];
+                wallvm.ir_types.IrBlock* defBlock = self.blocks[self.instBlock[defLinearIdx]];
 
-                ir_types.IrValue* slotPtr = self.getOrCreateSlotAlloca(slot, defBlock, 0);
+                wallvm.ir_types.IrValue* slotPtr = self.getOrCreateSlotAlloca(slot, defBlock, 0);
                 if (!slotPtr) slotPtr = self.slotAllocas[(u32)slot];
                 if (!slotPtr) continue;
 
-                ir_types.IrValue* storeOps[2];
+                wallvm.ir_types.IrValue* storeOps[2];
                 storeOps[0] = val;
                 storeOps[1] = slotPtr;
-                ir_types.IrInst* storeInst = self.ctx.createInst(ir_opcodes.IrOpcode::Store, self.ctx.tyVoid(), storeOps, 2, 0, 0);
+                wallvm.ir_types.IrInst* storeInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Store, self.ctx.tyVoid(), storeOps, 2, 0, 0);
 
                 u32 defBlockIdx = self.instBlock[defLinearIdx];
-                ir_types.IrBlock* db = self.blocks[defBlockIdx];
+                wallvm.ir_types.IrBlock* db = self.blocks[defBlockIdx];
                 u32 storePos = db.ninsts;
                 for (u32 i = 0; i < db.ninsts; i++)
                 {
@@ -694,36 +685,36 @@ pub struct LinearScanRegAlloc
 
             for (u32 b = 0; b < self.numBlocks; b++)
             {
-                ir_types.IrBlock* bb = self.blocks[b];
+                wallvm.ir_types.IrBlock* bb = self.blocks[b];
                 for (u32 i = 0; i < bb.ninsts; i++)
                 {
-                    ir_types.IrInst* inst = bb.insts[i];
+                    wallvm.ir_types.IrInst* inst = bb.insts[i];
                     // Skip the spill store we just inserted, it is a def, not a
                     // use, and rewriting its operand would clobber the stored value
                     if (inst == defStore) continue;
-                    if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                    if (inst.opcode == wallvm.irOps.IrOpcode::Phi)
                     {
                         // For phi uses, insert load at end of predecessor block
                         u32 numPairs = inst.nops / 2;
                         for (u32 j = 0; j < numPairs; j++)
                         {
-                            ir_types.IrValue* op = inst.ops[j * 2];
+                            wallvm.ir_types.IrValue* op = inst.ops[j * 2];
                             if (op == val)
                             {
-                                ir_types.IrValue* predVal = inst.ops[j * 2 + 1];
-                                if (!predVal || predVal->kind != ir_types.IrValueKind::Block) continue;
-                                ir_types.IrBlock* predBlock = (ir_types.IrBlock*)predVal;
+                                wallvm.ir_types.IrValue* predVal = inst.ops[j * 2 + 1];
+                                if (!predVal || predVal->kind != wallvm.ir_types.IrValueKind::Block) continue;
+                                wallvm.ir_types.IrBlock* predBlock = (wallvm.ir_types.IrBlock*)predVal;
 
-                                ir_types.IrValue* slotPtr = self.slotAllocas[(u32)slot];
+                                wallvm.ir_types.IrValue* slotPtr = self.slotAllocas[(u32)slot];
                                 if (!slotPtr) continue;
 
-                                ir_types.IrValue* loadOps[1];
+                                wallvm.ir_types.IrValue* loadOps[1];
                                 loadOps[0] = slotPtr;
-                                ir_types.IrInst* loadInst = self.ctx.createInst(ir_opcodes.IrOpcode::Load, val->type, loadOps, 1, 0, 0);
+                                wallvm.ir_types.IrInst* loadInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Load, val->type, loadOps, 1, 0, 0);
                                 loadOps[0].addUser(loadInst);
 
                                 // Insert before terminator of predecessor block
-                                ir_types.IrInst* term = predBlock.terminator();
+                                wallvm.ir_types.IrInst* term = predBlock.terminator();
                                 u32 loadPos = predBlock.ninsts;
                                 if (term)
                                 {
@@ -744,15 +735,15 @@ pub struct LinearScanRegAlloc
                     {
                         for (u32 j = 0; j < inst.nops; j++)
                         {
-                            ir_types.IrValue* op = inst.ops[j];
+                            wallvm.ir_types.IrValue* op = inst.ops[j];
                             if (op == val)
                             {
-                                ir_types.IrValue* slotPtr = self.slotAllocas[(u32)slot];
+                                wallvm.ir_types.IrValue* slotPtr = self.slotAllocas[(u32)slot];
                                 if (!slotPtr) continue;
 
-                                ir_types.IrValue* loadOps[1];
+                                wallvm.ir_types.IrValue* loadOps[1];
                                 loadOps[0] = slotPtr;
-                                ir_types.IrInst* loadInst = self.ctx.createInst(ir_opcodes.IrOpcode::Load, val->type, loadOps, 1, 0, 0);
+                                wallvm.ir_types.IrInst* loadInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Load, val->type, loadOps, 1, 0, 0);
                                 loadOps[0].addUser(loadInst);
 
                                 insertInstAt(bb, i, loadInst);
@@ -769,14 +760,14 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    void rewrite(ir_types.IrFunc* func)
+    void rewrite(wallvm.ir_types.IrFunc* func)
     {
         // Store physreg assignments in valData for codegen consumption.
         // Bit 31, spilled (low 31 bits = spill slot index)
         // Bit 30, float register class (low 30 bits = float reg index)
         for (u32 v = 0; v < self.numVregs; v++)
         {
-            ir_types.IrValue* val = self.vregValues[v];
+            wallvm.ir_types.IrValue* val = self.vregValues[v];
             if (!val) continue;
             if (self.slotForVreg[v] != NO_SLOT)
             {
@@ -786,7 +777,7 @@ pub struct LinearScanRegAlloc
             {
                 u32 reg = self.regForVreg[v];
                 if (reg == NO_REG) reg = 0;
-                bool isF = val->type && val->type->kind == ir_types.IrTypeKind::Float;
+                bool isF = val->type && val->type->kind == wallvm.ir_types.IrTypeKind::Float;
                 if (isF)
                     val->valData = FLOAT_BIT | (u64)reg;
                 else
@@ -795,7 +786,7 @@ pub struct LinearScanRegAlloc
         }
     }
 
-    bool allocate(ir_types.IrFunc* func)
+    bool allocate(wallvm.ir_types.IrFunc* func)
     {
         if (!func || func->nblocks == 0) return false;
 
@@ -809,34 +800,34 @@ pub struct LinearScanRegAlloc
         self.handleSpills(func);
         self.rewrite(func);
 
-        if (self.instVreg) mman.dealloc<u32>(self.instVreg);
-        if (self.instBlock) mman.dealloc<u32>(self.instBlock);
-        if (self.linearInsts) mman.dealloc<ir_types.IrInst*>(self.linearInsts);
-        if (self.instIsCall) mman.dealloc<u8>(self.instIsCall);
-        if (self.blockStartInst) mman.dealloc<u32>(self.blockStartInst);
-        if (self.regIsFree) mman.dealloc<u32>(self.regIsFree);
-        if (self.floatRegIsFree) mman.dealloc<u32>(self.floatRegIsFree);
-        if (self.active) mman.dealloc<u32>(self.active);
-        if (self.floatActive) mman.dealloc<u32>(self.floatActive);
-        if (self.slotAllocas) mman.dealloc<ir_types.IrValue*>(self.slotAllocas);
+        if (self.instVreg) std.mman.dealloc<u32>(self.instVreg);
+        if (self.instBlock) std.mman.dealloc<u32>(self.instBlock);
+        if (self.linearInsts) std.mman.dealloc<wallvm.ir_types.IrInst*>(self.linearInsts);
+        if (self.instIsCall) std.mman.dealloc<u8>(self.instIsCall);
+        if (self.blockStartInst) std.mman.dealloc<u32>(self.blockStartInst);
+        if (self.regIsFree) std.mman.dealloc<u32>(self.regIsFree);
+        if (self.floatRegIsFree) std.mman.dealloc<u32>(self.floatRegIsFree);
+        if (self.active) std.mman.dealloc<u32>(self.active);
+        if (self.floatActive) std.mman.dealloc<u32>(self.floatActive);
+        if (self.slotAllocas) std.mman.dealloc<wallvm.ir_types.IrValue*>(self.slotAllocas);
 
         return true;
     }
 
     void destroy()
     {
-        if (self.vregValues) mman.dealloc<ir_types.IrValue*>(self.vregValues);
-        if (self.regForVreg) mman.dealloc<u32>(self.regForVreg);
-        if (self.slotForVreg) mman.dealloc<i32>(self.slotForVreg);
-        if (self.intervals) mman.dealloc<LiveInterval>(self.intervals);
-        if (self.intRegNames) mman.dealloc<char*>(self.intRegNames);
-        if (self.floatRegNames) mman.dealloc<char*>(self.floatRegNames);
+        if (self.vregValues) std.mman.dealloc<wallvm.ir_types.IrValue*>(self.vregValues);
+        if (self.regForVreg) std.mman.dealloc<u32>(self.regForVreg);
+        if (self.slotForVreg) std.mman.dealloc<i32>(self.slotForVreg);
+        if (self.intervals) std.mman.dealloc<LiveInterval>(self.intervals);
+        if (self.intRegNames) std.mman.dealloc<char*>(self.intRegNames);
+        if (self.floatRegNames) std.mman.dealloc<char*>(self.floatRegNames);
     }
 }
 
-pub bool irLinearScanRegAlloc(ir_types.IrFunc* func, void* userdata, asm_rules.ABIRules* abi, RegAllocConfig* cfg)
+pub bool irLinearScanRegAlloc(wallvm.ir_types.IrFunc* func, void* userdata, wallvm.asm_rules.ABIRules* abi, RegAllocConfig* cfg)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     LinearScanRegAlloc alloc = LinearScanRegAlloc::new(ctx, abi, cfg);
     bool result = alloc.allocate(func);

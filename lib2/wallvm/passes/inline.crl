@@ -1,19 +1,11 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
-mod mman = import(lib, "std/memory/mman.crl");
+mod wallvm = import(lib, "wallvm");
+mod std = import(lib, "std");
 
 // Simple key-value mapping table for value remapping during cloning
 struct ValMap
 {
-    ir_types.IrValue** keys;
-    ir_types.IrValue** vals;
+    wallvm.ir_types.IrValue** keys;
+    wallvm.ir_types.IrValue** vals;
     u32 count;
     u32 cap;
 
@@ -25,20 +17,20 @@ struct ValMap
         self.cap = 0;
     }
 
-    void put(ir_types.IrValue* k, ir_types.IrValue* v)
+    void put(wallvm.ir_types.IrValue* k, wallvm.ir_types.IrValue* v)
     {
         if (self.count >= self.cap)
         {
             u32 nc = self.cap ? self.cap * 2 : 32;
-            ir_types.IrValue** nk = mman.alloc<ir_types.IrValue*>(nc);
-            ir_types.IrValue** nv = mman.alloc<ir_types.IrValue*>(nc);
+            wallvm.ir_types.IrValue** nk = std.mman.alloc<wallvm.ir_types.IrValue*>(nc);
+            wallvm.ir_types.IrValue** nv = std.mman.alloc<wallvm.ir_types.IrValue*>(nc);
             for (u32 i = 0; i < self.count; i++)
             {
                 nk[i] = self.keys[i];
                 nv[i] = self.vals[i];
             }
-            if (self.keys) mman.dealloc<ir_types.IrValue*>(self.keys);
-            if (self.vals) mman.dealloc<ir_types.IrValue*>(self.vals);
+            if (self.keys) std.mman.dealloc<wallvm.ir_types.IrValue*>(self.keys);
+            if (self.vals) std.mman.dealloc<wallvm.ir_types.IrValue*>(self.vals);
             self.keys = nk;
             self.vals = nv;
             self.cap = nc;
@@ -48,7 +40,7 @@ struct ValMap
         self.count++;
     }
 
-    ir_types.IrValue* get(ir_types.IrValue* k)
+    wallvm.ir_types.IrValue* get(wallvm.ir_types.IrValue* k)
     {
         for (u32 i = 0; i < self.count; i++)
             if (self.keys[i] == k)
@@ -58,8 +50,8 @@ struct ValMap
 
     void free()
     {
-        if (self.keys) mman.dealloc<ir_types.IrValue*>(self.keys);
-        if (self.vals) mman.dealloc<ir_types.IrValue*>(self.vals);
+        if (self.keys) std.mman.dealloc<wallvm.ir_types.IrValue*>(self.keys);
+        if (self.vals) std.mman.dealloc<wallvm.ir_types.IrValue*>(self.vals);
         self.keys = null;
         self.vals = null;
         self.count = 0;
@@ -67,13 +59,13 @@ struct ValMap
     }
 };
 
-static u32 countBodyInsts(ir_types.IrFunc* f)
+static u32 countBodyInsts(wallvm.ir_types.IrFunc* f)
 {
     u32 n = 0;
     u32 skip = f.nparams;
     for (u32 bi = 0; bi < f.nblocks; bi++)
     {
-        ir_types.IrBlock* bb = f.blocks[bi];
+        wallvm.ir_types.IrBlock* bb = f.blocks[bi];
         u32 start = (bi == 0) ? skip : 0;
         if (start > bb.ninsts) start = bb.ninsts;
         n += bb.ninsts - start;
@@ -81,30 +73,30 @@ static u32 countBodyInsts(ir_types.IrFunc* f)
     return n;
 }
 
-static ir_types.IrInst* cloneInst(ir_types.IrInst* old, ir_types.IrBlock* newBlock, ValMap* valMap, ValMap* blkMap, ir_types.IrContext* ctx)
+static wallvm.ir_types.IrInst* cloneInst(wallvm.ir_types.IrInst* old, wallvm.ir_types.IrBlock* newBlock, ValMap* valMap, ValMap* blkMap, wallvm.ir_types.IrContext* ctx)
 {
-    ir_types.IrValue** newOps = mman.alloc<ir_types.IrValue*>(old.nops > 0 ? old.nops : 1);
+    wallvm.ir_types.IrValue** newOps = std.mman.alloc<wallvm.ir_types.IrValue*>(old.nops > 0 ? old.nops : 1);
 
     for (u32 i = 0; i < old.nops; i++)
     {
-        ir_types.IrValue* op = old.ops[i];
+        wallvm.ir_types.IrValue* op = old.ops[i];
         if (!op) { newOps[i] = null; continue; }
 
-        if (op.kind == ir_types.IrValueKind::Inst)
+        if (op.kind == wallvm.ir_types.IrValueKind::Inst)
         {
-            ir_types.IrValue* m = valMap.get(op);
+            wallvm.ir_types.IrValue* m = valMap.get(op);
             if (m) { newOps[i] = m; continue; }
         }
-        else if (op.kind == ir_types.IrValueKind::Block)
+        else if (op.kind == wallvm.ir_types.IrValueKind::Block)
         {
-            ir_types.IrValue* m = blkMap.get(op);
+            wallvm.ir_types.IrValue* m = blkMap.get(op);
             if (m) { newOps[i] = m; continue; }
         }
 
         newOps[i] = op;
     }
 
-    ir_types.IrInst* ni = ctx.createInst(old.opcode, old.base.type, newOps, old.nops,
+    wallvm.ir_types.IrInst* ni = ctx.createInst(old.opcode, old.base.type, newOps, old.nops,
                                 (u64)old.icmpPred, (u64)old.fcmpPred);
 
     newBlock.addInst(ni);
@@ -118,24 +110,24 @@ static ir_types.IrInst* cloneInst(ir_types.IrInst* old, ir_types.IrBlock* newBlo
     return ni;
 }
 
-static void eraseInstAt(ir_types.IrBlock* bb, u32 ii)
+static void eraseInstAt(wallvm.ir_types.IrBlock* bb, u32 ii)
 {
     for (u32 j = ii; j < bb.ninsts - 1; j++)
         bb.insts[j] = bb.insts[j + 1];
     bb.ninsts--;
 }
 
-static void transferSuccs(ir_types.IrBlock* src, ir_types.IrBlock* dst)
+static void transferSuccs(wallvm.ir_types.IrBlock* src, wallvm.ir_types.IrBlock* dst)
 {
     for (u32 i = 0; i < src.nsuccs; i++)
     {
-        ir_types.IrBlock* succ = src.succs[i];
+        wallvm.ir_types.IrBlock* succ = src.succs[i];
         succ.removePred(src);
         dst.addSucc(succ);
         for (u32 pi = 0; pi < succ.ninsts; pi++)
         {
-            ir_types.IrInst* phi = succ.insts[pi];
-            if (phi.opcode == ir_opcodes.IrOpcode::Phi)
+            wallvm.ir_types.IrInst* phi = succ.insts[pi];
+            if (phi.opcode == wallvm.irOps.IrOpcode::Phi)
             {
                 for (u32 oi = 1; oi < phi.nops; oi += 2)
                     if (phi.ops[oi] == &src.base)
@@ -146,31 +138,31 @@ static void transferSuccs(ir_types.IrBlock* src, ir_types.IrBlock* dst)
     src.nsuccs = 0;
     if (src.succs)
     {
-        mman.dealloc<ir_types.IrBlock*>(src.succs);
+        std.mman.dealloc<wallvm.ir_types.IrBlock*>(src.succs);
         src.succs = null;
     }
     src.capSuccs = 0;
 }
 
-static void moveInstsAfter(ir_types.IrBlock* src, u32 startIdx, ir_types.IrBlock* dst)
+static void moveInstsAfter(wallvm.ir_types.IrBlock* src, u32 startIdx, wallvm.ir_types.IrBlock* dst)
 {
     u32 nToMove = src.ninsts - startIdx;
     for (u32 i = 0; i < nToMove; i++)
     {
-        ir_types.IrInst* inst = src.insts[startIdx];
+        wallvm.ir_types.IrInst* inst = src.insts[startIdx];
         eraseInstAt(src, startIdx);
         inst.parent = dst;
         dst.addInst(inst);
     }
 }
 
-static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_types.IrInst* callInst,
-                        u32 instIdx, ir_types.IrFunc* callee, ir_types.IrContext* ctx)
+static bool inlineCall(wallvm.ir_types.IrFunc* caller, wallvm.ir_types.IrBlock* callBlock, wallvm.ir_types.IrInst* callInst,
+                        u32 instIdx, wallvm.ir_types.IrFunc* callee, wallvm.ir_types.IrContext* ctx)
 {
     u32 nCallArgs = (callInst.nops > 0) ? callInst.nops - 1 : 0;
-    ir_types.IrValue** callArgs = (callInst.nops > 1) ? &callInst.ops[1] : null;
+    wallvm.ir_types.IrValue** callArgs = (callInst.nops > 1) ? &callInst.ops[1] : null;
 
-    ir_types.IrBlock* afterBlock = ctx.createBlock("after_inline");
+    wallvm.ir_types.IrBlock* afterBlock = ctx.createBlock("after_inline");
     caller.addBlock(afterBlock);
 
     transferSuccs(callBlock, afterBlock);
@@ -185,35 +177,35 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
     ValMap blkMap;
     blkMap.init();
 
-    ir_types.IrBlock** newBlocks = mman.alloc<ir_types.IrBlock*>(callee.nblocks);
+    wallvm.ir_types.IrBlock** newBlocks = std.mman.alloc<wallvm.ir_types.IrBlock*>(callee.nblocks);
     for (u32 bi = 0; bi < callee.nblocks; bi++)
     {
-        ir_types.IrBlock* ob = callee.blocks[bi];
-        ir_types.IrBlock* nb = ctx.createBlock(ob.base.name);
+        wallvm.ir_types.IrBlock* ob = callee.blocks[bi];
+        wallvm.ir_types.IrBlock* nb = ctx.createBlock(ob.base.name);
         caller.addBlock(nb);
         newBlocks[bi] = nb;
         blkMap.put(&ob.base, &nb.base);
     }
-    ir_types.IrBlock* calleeEntry = newBlocks[0];
+    wallvm.ir_types.IrBlock* calleeEntry = newBlocks[0];
 
     ValMap valMap;
     valMap.init();
 
     u32 nparams = callee.nparams;
-    ir_types.IrBlock* oldEntry = callee.blocks[0];
+    wallvm.ir_types.IrBlock* oldEntry = callee.blocks[0];
     for (u32 i = 0; i < nparams && i < nCallArgs; i++)
     {
         if (i < oldEntry.ninsts)
         {
-            ir_types.IrInst* paramInst = oldEntry.insts[i];
+            wallvm.ir_types.IrInst* paramInst = oldEntry.insts[i];
             valMap.put(&paramInst.base, callArgs[i]);
         }
     }
 
     for (u32 bi = 0; bi < callee.nblocks; bi++)
     {
-        ir_types.IrBlock* ob = callee.blocks[bi];
-        ir_types.IrBlock* nb = newBlocks[bi];
+        wallvm.ir_types.IrBlock* ob = callee.blocks[bi];
+        wallvm.ir_types.IrBlock* nb = newBlocks[bi];
         u32 start = (bi == 0) ? nparams : 0;
 
         for (u32 ii = start; ii < ob.ninsts; ii++)
@@ -222,15 +214,15 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
 
     for (u32 bi = 0; bi < callee.nblocks; bi++)
     {
-        ir_types.IrBlock* nb = newBlocks[bi];
+        wallvm.ir_types.IrBlock* nb = newBlocks[bi];
         for (u32 ii = 0; ii < nb.ninsts; ii++)
         {
-            ir_types.IrInst* ni = nb.insts[ii];
+            wallvm.ir_types.IrInst* ni = nb.insts[ii];
             for (u32 j = 0; j < ni.nops; j++)
             {
-                ir_types.IrValue* op = ni.ops[j];
-                if (!op || op.kind != ir_types.IrValueKind::Inst) continue;
-                ir_types.IrValue* m = valMap.get(op);
+                wallvm.ir_types.IrValue* op = ni.ops[j];
+                if (!op || op.kind != wallvm.ir_types.IrValueKind::Inst) continue;
+                wallvm.ir_types.IrValue* m = valMap.get(op);
                 if (!m || m == op) continue;
                 op.removeUser(ni);
                 ni.ops[j] = m;
@@ -242,11 +234,11 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
     // Step 5, Wire up control flow
     // Add br from callBlock to callee entry
     {
-        ir_types.IrValue** brOps = mman.alloc<ir_types.IrValue*>(1);
-        ir_types.IrValue* entryVal = &calleeEntry.base;
+        wallvm.ir_types.IrValue** brOps = std.mman.alloc<wallvm.ir_types.IrValue*>(1);
+        wallvm.ir_types.IrValue* entryVal = &calleeEntry.base;
         brOps[0] = entryVal;
-        ir_types.IrInst* brInst = ctx.createInst(ir_opcodes.IrOpcode::Br, ctx.tyVoid(), brOps, 1, 0, 0);
-        mman.dealloc<ir_types.IrValue*>(brOps);
+        wallvm.ir_types.IrInst* brInst = ctx.createInst(wallvm.irOps.IrOpcode::Br, ctx.tyVoid(), brOps, 1, 0, 0);
+        std.mman.dealloc<wallvm.ir_types.IrValue*>(brOps);
         callBlock.addInst(brInst);
         entryVal.addUser(brInst);
         callBlock.addSucc(calleeEntry);
@@ -255,27 +247,27 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
     // Step 6, Handle return values
     // Collect all ret instructions in the cloned callee blocks
     u32 retCount = 0;
-    ir_types.IrInst** retInsts = mman.alloc<ir_types.IrInst*>(callee.nblocks);
+    wallvm.ir_types.IrInst** retInsts = std.mman.alloc<wallvm.ir_types.IrInst*>(callee.nblocks);
     for (u32 bi = 0; bi < callee.nblocks; bi++)
     {
-        ir_types.IrBlock* nb = newBlocks[bi];
+        wallvm.ir_types.IrBlock* nb = newBlocks[bi];
         for (u32 ii = 0; ii < nb.ninsts; ii++)
         {
-            if (nb.insts[ii].opcode == ir_opcodes.IrOpcode::Ret)
+            if (nb.insts[ii].opcode == wallvm.irOps.IrOpcode::Ret)
                 retInsts[retCount++] = nb.insts[ii];
         }
     }
 
     // Create continuation block
-    ir_types.IrBlock* contBlock = ctx.createBlock("cont_inline");
+    wallvm.ir_types.IrBlock* contBlock = ctx.createBlock("cont_inline");
     caller.addBlock(contBlock);
 
-    bool hasRetVal = callInst.base.type && callInst.base.type.kind != ir_types.IrTypeKind::Void;
+    bool hasRetVal = callInst.base.type && callInst.base.type.kind != wallvm.ir_types.IrTypeKind::Void;
 
     for (u32 ri = 0; ri < retCount; ri++)
     {
-        ir_types.IrInst* ret = retInsts[ri];
-        ir_types.IrBlock* retBlock = ret.parent;
+        wallvm.ir_types.IrInst* ret = retInsts[ri];
+        wallvm.ir_types.IrBlock* retBlock = ret.parent;
 
         // Remove ret from user lists
         for (u32 oi = 0; oi < ret.nops; oi++)
@@ -297,31 +289,31 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
         retBlock.addSucc(contBlock);
 
         // Create br to contBlock
-        ir_types.IrValue** brOps = mman.alloc<ir_types.IrValue*>(1);
-        ir_types.IrValue* contVal = &contBlock.base;
+        wallvm.ir_types.IrValue** brOps = std.mman.alloc<wallvm.ir_types.IrValue*>(1);
+        wallvm.ir_types.IrValue* contVal = &contBlock.base;
         brOps[0] = contVal;
-        ir_types.IrInst* brInst = ctx.createInst(ir_opcodes.IrOpcode::Br, ctx.tyVoid(), brOps, 1, 0, 0);
-        mman.dealloc<ir_types.IrValue*>(brOps);
+        wallvm.ir_types.IrInst* brInst = ctx.createInst(wallvm.irOps.IrOpcode::Br, ctx.tyVoid(), brOps, 1, 0, 0);
+        std.mman.dealloc<wallvm.ir_types.IrValue*>(brOps);
         retBlock.addInst(brInst);
         contVal.addUser(brInst);
     }
 
     // Create phi at continuation if multiple return sites and non-void
-    ir_types.IrValue* mergedRetVal = null;
+    wallvm.ir_types.IrValue* mergedRetVal = null;
 
     if (hasRetVal && retCount > 1)
     {
-        ir_types.IrType* retTy = callInst.base.type;
-        ir_types.IrValue** phiVals = mman.alloc<ir_types.IrValue*>(retCount);
-        ir_types.IrValue** phiBlks = mman.alloc<ir_types.IrValue*>(retCount);
+        wallvm.ir_types.IrType* retTy = callInst.base.type;
+        wallvm.ir_types.IrValue** phiVals = std.mman.alloc<wallvm.ir_types.IrValue*>(retCount);
+        wallvm.ir_types.IrValue** phiBlks = std.mman.alloc<wallvm.ir_types.IrValue*>(retCount);
         u32 phiCount = 0;
 
         for (u32 ri = 0; ri < retCount; ri++)
         {
-            ir_types.IrInst* ret = retInsts[ri];
+            wallvm.ir_types.IrInst* ret = retInsts[ri];
             if (ret.nops > 0 && ret.ops[0])
             {
-                ir_types.IrBlock* retBlock = ret.parent;
+                wallvm.ir_types.IrBlock* retBlock = ret.parent;
                 phiVals[phiCount] = ret.ops[0];
                 phiBlks[phiCount] = &retBlock.base;
                 phiCount++;
@@ -330,18 +322,18 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
 
         if (phiCount > 1)
         {
-            ir_types.IrValue** phiOps = mman.alloc<ir_types.IrValue*>(phiCount * 2);
+            wallvm.ir_types.IrValue** phiOps = std.mman.alloc<wallvm.ir_types.IrValue*>(phiCount * 2);
             for (u32 i = 0; i < phiCount; i++)
             {
                 phiOps[i * 2] = phiVals[i];
                 phiOps[i * 2 + 1] = phiBlks[i];
             }
-            ir_types.IrInst* phiInst = ctx.createInst(ir_opcodes.IrOpcode::Phi, retTy, phiOps, phiCount * 2, 0, 0);
+            wallvm.ir_types.IrInst* phiInst = ctx.createInst(wallvm.irOps.IrOpcode::Phi, retTy, phiOps, phiCount * 2, 0, 0);
             contBlock.addInst(phiInst);
             for (u32 i = 0; i < phiCount * 2; i++)
                 if (phiOps[i])
                     phiOps[i].addUser(phiInst);
-            mman.dealloc<ir_types.IrValue*>(phiOps);
+            std.mman.dealloc<wallvm.ir_types.IrValue*>(phiOps);
             mergedRetVal = &phiInst.base;
         }
         else if (phiCount == 1)
@@ -349,12 +341,12 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
             mergedRetVal = phiVals[0];
         }
 
-        if (phiVals) mman.dealloc<ir_types.IrValue*>(phiVals);
-        if (phiBlks) mman.dealloc<ir_types.IrValue*>(phiBlks);
+        if (phiVals) std.mman.dealloc<wallvm.ir_types.IrValue*>(phiVals);
+        if (phiBlks) std.mman.dealloc<wallvm.ir_types.IrValue*>(phiBlks);
     }
     else if (hasRetVal && retCount == 1)
     {
-        ir_types.IrInst* ret = retInsts[0];
+        wallvm.ir_types.IrInst* ret = retInsts[0];
         if (ret.nops > 0 && ret.ops[0])
             mergedRetVal = ret.ops[0];
     }
@@ -365,11 +357,11 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
 
     // Add br from contBlock to afterBlock
     {
-        ir_types.IrValue** brOps = mman.alloc<ir_types.IrValue*>(1);
-        ir_types.IrValue* afterVal = &afterBlock.base;
+        wallvm.ir_types.IrValue** brOps = std.mman.alloc<wallvm.ir_types.IrValue*>(1);
+        wallvm.ir_types.IrValue* afterVal = &afterBlock.base;
         brOps[0] = afterVal;
-        ir_types.IrInst* brInst = ctx.createInst(ir_opcodes.IrOpcode::Br, ctx.tyVoid(), brOps, 1, 0, 0);
-        mman.dealloc<ir_types.IrValue*>(brOps);
+        wallvm.ir_types.IrInst* brInst = ctx.createInst(wallvm.irOps.IrOpcode::Br, ctx.tyVoid(), brOps, 1, 0, 0);
+        std.mman.dealloc<wallvm.ir_types.IrValue*>(brOps);
         contBlock.addInst(brInst);
         afterVal.addUser(brInst);
         contBlock.addSucc(afterBlock);
@@ -378,7 +370,7 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
     // Step 7, Replace uses of call result with the merged return value
     if (hasRetVal && mergedRetVal)
     {
-        ir_types.IrValue* callVal = &callInst.base;
+        wallvm.ir_types.IrValue* callVal = &callInst.base;
         callVal.replaceAllUses(mergedRetVal);
     }
 
@@ -386,8 +378,8 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
     // Fully erase the call instruction (frees ops, users, and the struct)
     callInst.erase();
 
-    mman.dealloc<ir_types.IrBlock*>(newBlocks);
-    mman.dealloc<ir_types.IrInst*>(retInsts);
+    std.mman.dealloc<wallvm.ir_types.IrBlock*>(newBlocks);
+    std.mman.dealloc<wallvm.ir_types.IrInst*>(retInsts);
 
     valMap.free();
     blkMap.free();
@@ -395,9 +387,9 @@ static bool inlineCall(ir_types.IrFunc* caller, ir_types.IrBlock* callBlock, ir_
     return true;
 }
 
-pub bool irPassInline(ir_types.IrFunc* func, void* userdata)
+pub bool irPassInline(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     if (func.nblocks == 0) return false;
 
@@ -413,19 +405,19 @@ pub bool irPassInline(ir_types.IrFunc* func, void* userdata)
 
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
 
             for (u32 ii = 0; ii < bb.ninsts; ii++)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
-                if (inst.opcode != ir_opcodes.IrOpcode::Call) continue;
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
+                if (inst.opcode != wallvm.irOps.IrOpcode::Call) continue;
 
                 // Callee must be at ops[0] (convention used by all backends)
                 if (inst.nops < 1) continue;
-                ir_types.IrValue* calleeVal = inst.ops[0];
-                if (!calleeVal || calleeVal.kind != ir_types.IrValueKind::Func) continue;
+                wallvm.ir_types.IrValue* calleeVal = inst.ops[0];
+                if (!calleeVal || calleeVal.kind != wallvm.ir_types.IrValueKind::Func) continue;
 
-                ir_types.IrFunc* callee = (ir_types.IrFunc*)calleeVal;
+                wallvm.ir_types.IrFunc* callee = (wallvm.ir_types.IrFunc*)calleeVal;
 
                 // Do not inline extern functions or recursive calls
                 if (callee.isExtern || callee == func) continue;

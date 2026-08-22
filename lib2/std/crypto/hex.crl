@@ -1,4 +1,4 @@
-mod std.string.String = import(lib, "std/text/std.std.string.String.crl");
+mod std = import(lib, "stdl");
 
 pub u64 encode(std.std.string.strView src, std.string.String dst)
 {

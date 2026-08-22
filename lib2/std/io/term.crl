@@ -1,24 +1,21 @@
-@[[no_drop]]
+mod std = import(lib, "std");
 
-mod libc = import(lib, "std/platform/libc.crl");
-mod string = import(lib, "std/text/string.crl");
-
-const string.strView CSI = string.strView::fromCstr("\x1B[");
+std.string.strView CSI = std.string.strView::fromCstr("\x1B[");
 
 bool _isTty()
 {
-    return libc.isatty(1) != 0;
+    return std.libc.isatty(1) != 0;
 }
 
-void _writeCSI(string.strView code)
+void _writeCSI(std.string.strView code)
 {
-    libc.write(1, CSI.ptr, CSI.len);
-    libc.write(1, code.ptr, code.len);
+    std.libc.write(1, CSI.ptr, CSI.len);
+    std.libc.write(1, code.ptr, code.len);
 }
 
-void _writeStr(string.strView s)
+void _writeStr(std.string.strView s)
 {
-    libc.write(1, s.ptr, s.len);
+    std.libc.write(1, s.ptr, s.len);
 }
 
 pub void reset()
@@ -68,21 +65,21 @@ u64 _clampN(u64 n)
     return n;
 }
 
-pub void cursorUp(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluA", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
-pub void cursorDown(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluB", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
-pub void cursorRight(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluC", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
-pub void cursorLeft(u64 n) { char buf[24]; n = _clampN(n); i32 l = libc.snprintf(buf, 24u, "%lluD", n); if (l > 0) { libc.write(1, CSI.ptr, CSI.len); libc.write(1, buf, (u64)l); } }
+pub void cursorUp(u64 n) { char buf[24]; n = _clampN(n); i32 l = std.libc.snprintf(buf, 24u, "%lluA", n); if (l > 0) { std.libc.write(1, CSI.ptr, CSI.len); std.libc.write(1, buf, (u64)l); } }
+pub void cursorDown(u64 n) { char buf[24]; n = _clampN(n); i32 l = std.libc.snprintf(buf, 24u, "%lluB", n); if (l > 0) { std.libc.write(1, CSI.ptr, CSI.len); std.libc.write(1, buf, (u64)l); } }
+pub void cursorRight(u64 n) { char buf[24]; n = _clampN(n); i32 l = std.libc.snprintf(buf, 24u, "%lluC", n); if (l > 0) { std.libc.write(1, CSI.ptr, CSI.len); std.libc.write(1, buf, (u64)l); } }
+pub void cursorLeft(u64 n) { char buf[24]; n = _clampN(n); i32 l = std.libc.snprintf(buf, 24u, "%lluD", n); if (l > 0) { std.libc.write(1, CSI.ptr, CSI.len); std.libc.write(1, buf, (u64)l); } }
 
 pub void cursorPos(u64 row, u64 col)
 {
     char buf[40];
     row = _clampN(row);
     col = _clampN(col);
-    i32 l = libc.snprintf(buf, 40u, "%llu;%lluH", row, col);
+    i32 l = std.libc.snprintf(buf, 40u, "%llu;%lluH", row, col);
     if (l > 0)
     {
-        libc.write(1, CSI.ptr, CSI.len);
-        libc.write(1, buf, (u64)l);
+        std.libc.write(1, CSI.ptr, CSI.len);
+        std.libc.write(1, buf, (u64)l);
     }
 }
 

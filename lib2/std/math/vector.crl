@@ -1,4 +1,4 @@
-@[[no_drop]]
+mod std = import(lib, "std");
 
 pub struct Vec2
 {
@@ -49,7 +49,7 @@ pub struct Vec2
 
     f64 length()
     {
-        return sqrt(self.lengthSq());
+        return std.maths.sqrt(self.lengthSq());
     }
 
     Vec2 normalize()
@@ -123,7 +123,7 @@ pub struct Vec3
 
     f64 length()
     {
-        return sqrt(self.lengthSq());
+        return std.maths.sqrt(self.lengthSq());
     }
 
     Vec3 normalize()
@@ -193,7 +193,7 @@ pub struct Vec4
 
     f64 length()
     {
-        return sqrt(self.lengthSq());
+        return std.maths.sqrt(self.lengthSq());
     }
 
     Vec4 normalize()

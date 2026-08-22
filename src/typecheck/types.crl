@@ -13,6 +13,8 @@ mod libc = import("std/platform/libc.crl");
 // flag; the strict no-implicit-conversion rules otherwise apply. This is an
 // escape hatch for code that genuinely needs unchecked conversion.
 pub bool gForceCast = false;
+pub u32 gPointerWidth = 64;
+pub void setPointerWidth(u32 w) { gPointerWidth = w; }
 
 pub const u32 TY_UNKNOWN = 0;   // unresolved / poison / opaque module escape
 pub const u32 TY_VOID = 1;
@@ -130,14 +132,14 @@ bool primType(str.strView n, CType* out)
     if (n.len == 5 && n.ptr[0] == 'i' && n.ptr[1] == 's' && n.ptr[2] == 'i' && n.ptr[3] == 'z' && n.ptr[4] == 'e')
     {
         out->kind = TY_INT;
-        out->width = 64;
+        out->width = gPointerWidth;
         out->isSigned = true;
         return true;
     }
     if (n.len == 5 && n.ptr[0] == 'u' && n.ptr[1] == 's' && n.ptr[2] == 'i' && n.ptr[3] == 'z' && n.ptr[4] == 'e')
     {
         out->kind = TY_INT;
-        out->width = 64;
+        out->width = gPointerWidth;
         out->isSigned = false;
         return true;
     }

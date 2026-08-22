@@ -1,25 +1,24 @@
-@[[no_drop]]
-mod string = import(lib, "std/text/string.crl");
+mod std = import(lib, "std");
 
 const char SEP = '/';
 const char ALT_SEP = '\\';
-const string.strView CUR_DIR = string.strView::fromCstr(".");
-const string.strView PARENT_DIR = string.strView::fromCstr("..");
-const string.strView SEP_STR = string.strView::fromCstr("/");
+std.string.strView CUR_DIR = std.string.strView::fromCstr(".");
+std.string.strView PARENT_DIR = std.string.strView::fromCstr("..");
+std.string.strView SEP_STR = std.string.strView::fromCstr("/");
 
-pub u64 findLastSep(string.strView p)
+pub u64 findLastSep(std.string.strView p)
 {
     for (u64 i = p.len; i > 0; i--)
         if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) return i - 1;
     return p.len + 1;
 }
 
-pub bool isAbsolute(string.strView p)
+pub bool isAbsolute(std.string.strView p)
 {
     return p.len > 0 && p.ptr[0] == SEP;
 }
 
-pub bool hasExtension(string.strView p)
+pub bool hasExtension(std.string.strView p)
 {
     u64 lastDot = p.len + 1;
     for (u64 i = p.len; i > 0; i--)
@@ -32,7 +31,7 @@ pub bool hasExtension(string.strView p)
     return lastDot > lastSep;
 }
 
-pub string.strView extension(string.strView p)
+pub std.string.strView extension(std.string.strView p)
 {
     u64 lastDot = p.len + 1;
     for (u64 i = p.len; i > 0; i--)
@@ -40,13 +39,13 @@ pub string.strView extension(string.strView p)
         if (p.ptr[i - 1] == '.') { lastDot = i - 1; break; }
         if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) break;
     }
-    if (lastDot >= p.len) return string.strView::empty();
+    if (lastDot >= p.len) return std.string.strView::empty();
     u64 lastSep = findLastSep(p);
-    if (lastDot <= lastSep) return string.strView::empty();
-    return string.strView::fromParts(p.ptr + lastDot, p.len - lastDot);
+    if (lastDot <= lastSep) return std.string.strView::empty();
+    return std.string.strView::fromParts(p.ptr + lastDot, p.len - lastDot);
 }
 
-pub string.strView stem(string.strView p)
+pub std.string.strView stem(std.string.strView p)
 {
     u64 lastDot = p.len + 1;
     for (u64 i = p.len; i > 0; i--)
@@ -61,23 +60,23 @@ pub string.strView stem(string.strView p)
     }
     u64 start = lastSep < p.len ? lastSep + 1 : 0;
     u64 end = lastDot < p.len ? lastDot : p.len;
-    if (end <= start) return p.len > 0 ? string.strView::fromParts(p.ptr + start, p.len - start) : string.strView::empty();
-    return string.strView::fromParts(p.ptr + start, end - start);
+    if (end <= start) return p.len > 0 ? std.string.strView::fromParts(p.ptr + start, p.len - start) : std.string.strView::empty();
+    return std.string.strView::fromParts(p.ptr + start, end - start);
 }
 
-pub string.strView parent(string.strView p)
+pub std.string.strView parent(std.string.strView p)
 {
     u64 lastSep = p.len + 1;
     for (u64 i = p.len; i > 0; i--)
     {
         if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) { lastSep = i - 1; break; }
     }
-    if (lastSep > p.len) return string.strView::empty();
-    if (lastSep == 0) return string.strView::fromCstr("/");
-    return string.strView::fromParts(p.ptr, lastSep);
+    if (lastSep > p.len) return std.string.strView::empty();
+    if (lastSep == 0) return std.string.strView::fromCstr("/");
+    return std.string.strView::fromParts(p.ptr, lastSep);
 }
 
-pub string.strView filename(string.strView p)
+pub std.string.strView filename(std.string.strView p)
 {
     u64 lastSep = p.len + 1;
     for (u64 i = p.len; i > 0; i--)
@@ -85,12 +84,12 @@ pub string.strView filename(string.strView p)
         if (p.ptr[i - 1] == SEP || p.ptr[i - 1] == ALT_SEP) { lastSep = i - 1; break; }
     }
     if (lastSep > p.len) return p;
-    return string.strView::fromParts(p.ptr + lastSep + 1, p.len - lastSep - 1);
+    return std.string.strView::fromParts(p.ptr + lastSep + 1, p.len - lastSep - 1);
 }
 
-pub string.String join(string.strView a, string.strView b)
+pub std.string.String join(std.string.strView a, std.string.strView b)
 {
-    string.String out = string.String::new();
+    std.string.String out = std.string.String::new();
     out.appendView(a);
     if (a.len > 0 && a.ptr[a.len - 1] != SEP && a.ptr[a.len - 1] != ALT_SEP)
         out.pushChar(SEP);
@@ -98,9 +97,9 @@ pub string.String join(string.strView a, string.strView b)
     return out;
 }
 
-pub string.String normalize(string.strView p)
+pub std.string.String normalize(std.string.strView p)
 {
-    string.String out = string.String::new();
+    std.string.String out = std.string.String::new();
     u64 i = 0;
     bool needSep = false;
     if (isAbsolute(p)) { out.pushChar(SEP); i++; }
@@ -109,7 +108,7 @@ pub string.String normalize(string.strView p)
         if (p.ptr[i] == SEP || p.ptr[i] == ALT_SEP) { i++; continue; }
         u64 segStart = i;
         while (i < p.len && p.ptr[i] != SEP && p.ptr[i] != ALT_SEP) i++;
-        string.strView seg = string.strView::fromParts(p.ptr + segStart, i - segStart);
+        std.string.strView seg = std.string.strView::fromParts(p.ptr + segStart, i - segStart);
         if (seg.len == 0);
         else if (seg.len == 1 && seg.ptr[0] == '.');
         else
@@ -123,21 +122,21 @@ pub string.String normalize(string.strView p)
     return out;
 }
 
-pub string.String absolute(string.strView base, string.strView rel)
+pub std.string.String absolute(std.string.strView base, std.string.strView rel)
 {
     if (isAbsolute(rel)) return normalize(rel);
-    string.String joined = join(base, rel);
-    string.String norm = normalize(joined.asView());
+    std.string.String joined = join(base, rel);
+    std.string.String norm = normalize(joined.asView());
     joined.free();
     return norm;
 }
 
-pub string.String changeExtension(string.strView p, string.strView newExt)
+pub std.string.String changeExtension(std.string.strView p, std.string.strView newExt)
 {
-    string.strView ext = extension(p);
-    string.String out = string.String::new();
+    std.string.strView ext = extension(p);
+    std.string.String out = std.string.String::new();
     if (ext.len > 0)
-        out.appendView(string.strView::fromParts(p.ptr, p.len - ext.len));
+        out.appendView(std.string.strView::fromParts(p.ptr, p.len - ext.len));
     else
         out.appendView(p);
     if (newExt.len > 0)

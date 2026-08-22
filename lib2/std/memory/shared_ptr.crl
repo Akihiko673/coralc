@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 struct RefCount
 {
@@ -18,9 +12,9 @@ pub struct shared_ptr<T>
 
     void init(T value)
     {
-        self.ptr = mman.alloc<T>(1);
+        self.ptr = std.mman.alloc<T>(1);
         *self.ptr = value;
-        self.rc = mman.alloc<RefCount>(1);
+        self.rc = std.mman.alloc<RefCount>(1);
         self.rc->count = 1;
     }
 
@@ -30,8 +24,8 @@ pub struct shared_ptr<T>
         self.rc->count--;
         if (self.rc->count == 0)
         {
-            mman.dealloc<T>(self.ptr);
-            mman.dealloc<RefCount>(self.rc);
+            std.mman.dealloc<T>(self.ptr);
+            std.mman.dealloc<RefCount>(self.rc);
         }
         self.ptr = null;
         self.rc = null;

@@ -1,11 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
+mod wallvm = import(lib, "wallvm");
 
 const u32 MAX_LEAVES = 16;
 
@@ -14,8 +7,8 @@ const u32 MAX_LEAVES = 16;
 // instructions themselves are always reused, never duplicated.
 struct Interval
 {
-    ir_types.IrInst* loIcmp; // ICmp providing the lower bound (null if unbounded below)
-    ir_types.IrInst* hiIcmp; // ICmp providing the upper bound (null if unbounded above)
+    wallvm.ir_types.IrInst* loIcmp; // ICmp providing the lower bound (null if unbounded below)
+    wallvm.ir_types.IrInst* hiIcmp; // ICmp providing the upper bound (null if unbounded above)
     u64 loC;
     u64 hiC;
     bool loIncl;
@@ -90,16 +83,16 @@ static i32 cmpEff(u64 v1, bool inf1, u64 v2, bool inf2, bool sign)
 
 // Convert an ICmp leaf into an interval on its (already verified) shared variable.
 // Returns false for comparisons that cannot be merged (Ne, non-constant bound).
-static bool leafToInterval(ir_types.IrInst* icmp, Interval* out)
+static bool leafToInterval(wallvm.ir_types.IrInst* icmp, Interval* out)
 {
-    if (icmp.opcode != ir_opcodes.IrOpcode::ICmp) return false;
+    if (icmp.opcode != wallvm.irOps.IrOpcode::ICmp) return false;
     if (icmp.nops != 2) return false;
-    ir_types.IrValue* a = icmp.ops[0];
-    ir_types.IrValue* b = icmp.ops[1];
+    wallvm.ir_types.IrValue* a = icmp.ops[0];
+    wallvm.ir_types.IrValue* b = icmp.ops[1];
     if (!a || !b) return false;
-    ir_types.IrValue* cval = null;
-    if (a.kind == ir_types.IrValueKind::ConstInt && b.kind == ir_types.IrValueKind::Inst) cval = a;
-    else if (b.kind == ir_types.IrValueKind::ConstInt && a.kind == ir_types.IrValueKind::Inst) cval = b;
+    wallvm.ir_types.IrValue* cval = null;
+    if (a.kind == wallvm.ir_types.IrValueKind::ConstInt && b.kind == wallvm.ir_types.IrValueKind::Inst) cval = a;
+    else if (b.kind == wallvm.ir_types.IrValueKind::ConstInt && a.kind == wallvm.ir_types.IrValueKind::Inst) cval = b;
     else return false;
 
     out.loIcmp = icmp;
@@ -112,30 +105,30 @@ static bool leafToInterval(ir_types.IrInst* icmp, Interval* out)
 
     switch (icmp.icmpPred)
     {
-    case ir_opcodes.IrICmpPred::Sge: out.hasLo = true; out.loC = cval.valData; out.loIncl = true; out.sign = true; break;
-    case ir_opcodes.IrICmpPred::Sgt: out.hasLo = true; out.loC = cval.valData; out.loIncl = false; out.sign = true; break;
-    case ir_opcodes.IrICmpPred::Sle: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = true; out.sign = true; break;
-    case ir_opcodes.IrICmpPred::Slt: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = false; out.sign = true; break;
-    case ir_opcodes.IrICmpPred::Uge: out.hasLo = true; out.loC = cval.valData; out.loIncl = true; break;
-    case ir_opcodes.IrICmpPred::Ugt: out.hasLo = true; out.loC = cval.valData; out.loIncl = false; break;
-    case ir_opcodes.IrICmpPred::Ule: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = true; break;
-    case ir_opcodes.IrICmpPred::Ult: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = false; break;
-    case ir_opcodes.IrICmpPred::Eq: out.hasLo = true; out.hasHi = true; out.loC = cval.valData; out.hiC = cval.valData; out.loIncl = true; out.hiIncl = true; out.isEq = true; break;
+    case wallvm.irOps.IrICmpPred::Sge: out.hasLo = true; out.loC = cval.valData; out.loIncl = true; out.sign = true; break;
+    case wallvm.irOps.IrICmpPred::Sgt: out.hasLo = true; out.loC = cval.valData; out.loIncl = false; out.sign = true; break;
+    case wallvm.irOps.IrICmpPred::Sle: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = true; out.sign = true; break;
+    case wallvm.irOps.IrICmpPred::Slt: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = false; out.sign = true; break;
+    case wallvm.irOps.IrICmpPred::Uge: out.hasLo = true; out.loC = cval.valData; out.loIncl = true; break;
+    case wallvm.irOps.IrICmpPred::Ugt: out.hasLo = true; out.loC = cval.valData; out.loIncl = false; break;
+    case wallvm.irOps.IrICmpPred::Ule: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = true; break;
+    case wallvm.irOps.IrICmpPred::Ult: out.hasHi = true; out.hiC = cval.valData; out.hiIncl = false; break;
+    case wallvm.irOps.IrICmpPred::Eq: out.hasLo = true; out.hasHi = true; out.loC = cval.valData; out.hiC = cval.valData; out.loIncl = true; out.hiIncl = true; out.isEq = true; break;
     default: return false; // Ne
     }
     return true;
 }
 
 // Verify an ICmp constrains a single shared variable (const vs variable).
-static bool icmpOnVar(ir_types.IrInst* icmp, ir_types.IrValue** varr)
+static bool icmpOnVar(wallvm.ir_types.IrInst* icmp, wallvm.ir_types.IrValue** varr)
 {
     if (icmp.nops != 2) return false;
-    ir_types.IrValue* a = icmp.ops[0];
-    ir_types.IrValue* b = icmp.ops[1];
+    wallvm.ir_types.IrValue* a = icmp.ops[0];
+    wallvm.ir_types.IrValue* b = icmp.ops[1];
     if (!a || !b) return false;
-    ir_types.IrValue* cand = null;
-    if (a.kind == ir_types.IrValueKind::Inst && b.kind == ir_types.IrValueKind::ConstInt) cand = a;
-    else if (b.kind == ir_types.IrValueKind::Inst && a.kind == ir_types.IrValueKind::ConstInt) cand = b;
+    wallvm.ir_types.IrValue* cand = null;
+    if (a.kind == wallvm.ir_types.IrValueKind::Inst && b.kind == wallvm.ir_types.IrValueKind::ConstInt) cand = a;
+    else if (b.kind == wallvm.ir_types.IrValueKind::Inst && a.kind == wallvm.ir_types.IrValueKind::ConstInt) cand = b;
     else return false;
     if (!(*varr)) *varr = cand;
     else if (*varr != cand) return false;
@@ -144,18 +137,18 @@ static bool icmpOnVar(ir_types.IrInst* icmp, ir_types.IrValue** varr)
 
 // Flatten an And-tree into ICmp leaves. Returns false if any node is not an
 // And or ICmp, or if leaves constrain different variables.
-static bool collectAndLeaves(ir_types.IrValue* v, ir_types.IrValue** varr, ir_types.IrInst** leaves, u32* n, u32* instCount)
+static bool collectAndLeaves(wallvm.ir_types.IrValue* v, wallvm.ir_types.IrValue** varr, wallvm.ir_types.IrInst** leaves, u32* n, u32* instCount)
 {
-    if (v.kind != ir_types.IrValueKind::Inst) return false;
-    ir_types.IrInst* inst = (ir_types.IrInst*)v;
-    if (inst.opcode == ir_opcodes.IrOpcode::And)
+    if (v.kind != wallvm.ir_types.IrValueKind::Inst) return false;
+    wallvm.ir_types.IrInst* inst = (wallvm.ir_types.IrInst*)v;
+    if (inst.opcode == wallvm.irOps.IrOpcode::And)
     {
         if (inst.nops != 2) return false;
         (*instCount)++;
         if (!collectAndLeaves(inst.ops[0], varr, leaves, n, instCount)) return false;
         return collectAndLeaves(inst.ops[1], varr, leaves, n, instCount);
     }
-    if (inst.opcode != ir_opcodes.IrOpcode::ICmp) return false;
+    if (inst.opcode != wallvm.irOps.IrOpcode::ICmp) return false;
     if (!icmpOnVar(inst, varr)) return false;
     if (*n >= MAX_LEAVES) return false;
     leaves[(*n)++] = inst;
@@ -165,11 +158,11 @@ static bool collectAndLeaves(ir_types.IrValue* v, ir_types.IrValue** varr, ir_ty
 // Collect the clauses of an Or-chain. Each clause is either a single ICmp or
 // an And-tree of ICmps (no nested Or). Clauses are stored contiguously in
 // leafStorage, delimited by offsets.
-static bool collectOrClauses(ir_types.IrValue* v, ir_types.IrValue** varr, ir_types.IrInst** leafStorage, u32* offsets, u32* nClauses, u32* used, u32* instCount)
+static bool collectOrClauses(wallvm.ir_types.IrValue* v, wallvm.ir_types.IrValue** varr, wallvm.ir_types.IrInst** leafStorage, u32* offsets, u32* nClauses, u32* used, u32* instCount)
 {
-    if (v.kind != ir_types.IrValueKind::Inst) return false;
-    ir_types.IrInst* inst = (ir_types.IrInst*)v;
-    if (inst.opcode == ir_opcodes.IrOpcode::Or)
+    if (v.kind != wallvm.ir_types.IrValueKind::Inst) return false;
+    wallvm.ir_types.IrInst* inst = (wallvm.ir_types.IrInst*)v;
+    if (inst.opcode == wallvm.irOps.IrOpcode::Or)
     {
         if (inst.nops != 2) return false;
         (*instCount)++;
@@ -430,10 +423,10 @@ static bool unionMergeAll(Interval* ivs, u32 n, Interval* groups, u32* k)
 
 pub struct RangeMergePass
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u64 merges;
 
-    RangeMergePass new(ir_types.IrContext* ctx)
+    RangeMergePass new(wallvm.ir_types.IrContext* ctx)
     {
         RangeMergePass p;
         p.ctx = ctx;
@@ -441,18 +434,18 @@ pub struct RangeMergePass
         return p;
     }
 
-    bool run(ir_types.IrFunc* func)
+    bool run(wallvm.ir_types.IrFunc* func)
     {
         self.merges = 0;
         bool changed = false;
 
         for (u32 bi = 0; bi < func.nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func.blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func.blocks[bi];
             u32 ii = 0;
             while (ii < bb.ninsts)
             {
-                ir_types.IrInst* inst = bb.insts[ii];
+                wallvm.ir_types.IrInst* inst = bb.insts[ii];
                 if (self.simplify(inst))
                 {
                     self.merges++;
@@ -469,7 +462,7 @@ pub struct RangeMergePass
 
     // Build the IR value for a merged interval, reusing the merged ICmp leaves
     // as-is and counting newly created instructions in *newInsts.
-    ir_types.IrValue* buildIntervalValue(Interval* r, ir_types.IrInst* anchor, u32* newInsts)
+    wallvm.ir_types.IrValue* buildIntervalValue(Interval* r, wallvm.ir_types.IrInst* anchor, u32* newInsts)
     {
         if (r.empty)
         {
@@ -481,12 +474,12 @@ pub struct RangeMergePass
             (*newInsts) = 0;
             return self.ctx.constInt(anchor.base.type, 1);
         }
-        ir_types.IrValue* loV = r.hasLo ? &r.loIcmp.base : null;
-        ir_types.IrValue* hiV = r.hasHi ? &r.hiIcmp.base : null;
+        wallvm.ir_types.IrValue* loV = r.hasLo ? &r.loIcmp.base : null;
+        wallvm.ir_types.IrValue* hiV = r.hasHi ? &r.hiIcmp.base : null;
         if (loV && hiV && loV != hiV)
         {
-            ir_types.IrValue* ops[2] = { loV, hiV };
-            ir_types.IrInst* andInst = self.ctx.createInst(ir_opcodes.IrOpcode::And, anchor.base.type, ops, 2, 0, 0);
+            wallvm.ir_types.IrValue* ops[2] = { loV, hiV };
+            wallvm.ir_types.IrInst* andInst = self.ctx.createInst(wallvm.irOps.IrOpcode::And, anchor.base.type, ops, 2, 0, 0);
             ops[0].addUser(andInst);
             ops[1].addUser(andInst);
             anchor.parent.insertBefore(andInst, anchor);
@@ -499,18 +492,18 @@ pub struct RangeMergePass
 
     // Simplify one And/Or node whose leaves are all ICmps on a single shared
     // variable; rebuilds only when strictly smaller.
-    bool simplify(ir_types.IrInst* inst)
+    bool simplify(wallvm.ir_types.IrInst* inst)
     {
         if (inst.nops != 2) return false;
-        if (inst.opcode != ir_opcodes.IrOpcode::And && inst.opcode != ir_opcodes.IrOpcode::Or) return false;
+        if (inst.opcode != wallvm.irOps.IrOpcode::And && inst.opcode != wallvm.irOps.IrOpcode::Or) return false;
         if (!inst.ops[0] || !inst.ops[1]) return false;
 
-        ir_types.IrValue* varr = null;
+        wallvm.ir_types.IrValue* varr = null;
         u32 instCount = 0;
 
-        if (inst.opcode == ir_opcodes.IrOpcode::And)
+        if (inst.opcode == wallvm.irOps.IrOpcode::And)
         {
-            ir_types.IrInst* leaves[16];
+            wallvm.ir_types.IrInst* leaves[16];
             u32 nLeaves = 0;
             if (!collectAndLeaves(inst.ops[0], &varr, leaves, &nLeaves, &instCount)) return false;
             if (!collectAndLeaves(inst.ops[1], &varr, leaves, &nLeaves, &instCount)) return false;
@@ -524,7 +517,7 @@ pub struct RangeMergePass
             if (!intersectAll(ivs, nLeaves, &r)) return false;
 
             u32 newInsts = 0;
-            ir_types.IrValue* val = self.buildIntervalValue(&r, inst, &newInsts);
+            wallvm.ir_types.IrValue* val = self.buildIntervalValue(&r, inst, &newInsts);
             if (newInsts >= instCount) return false;
 
             inst.base.replaceAllUses(val);
@@ -532,7 +525,7 @@ pub struct RangeMergePass
             return true;
         }
 
-        ir_types.IrInst* leafStorage[16];
+        wallvm.ir_types.IrInst* leafStorage[16];
         u32 offsets[17];
         u32 nClauses = 0;
         u32 used = 0;
@@ -563,18 +556,18 @@ pub struct RangeMergePass
         if (!unionMergeAll(clauseIv, nClauses, groups, &k)) return false;
 
         u32 newInsts = 0;
-        ir_types.IrValue* val = null;
+        wallvm.ir_types.IrValue* val = null;
         for (u32 g = 0; g < k; g++)
         {
-            ir_types.IrValue* gv = self.buildIntervalValue(&groups[g], inst, &newInsts);
+            wallvm.ir_types.IrValue* gv = self.buildIntervalValue(&groups[g], inst, &newInsts);
             if (!val)
             {
                 val = gv;
             }
             else
             {
-                ir_types.IrValue* ops[2] = { val, gv };
-                ir_types.IrInst* orInst = self.ctx.createInst(ir_opcodes.IrOpcode::Or, inst.base.type, ops, 2, 0, 0);
+                wallvm.ir_types.IrValue* ops[2] = { val, gv };
+                wallvm.ir_types.IrInst* orInst = self.ctx.createInst(wallvm.irOps.IrOpcode::Or, inst.base.type, ops, 2, 0, 0);
                 ops[0].addUser(orInst);
                 ops[1].addUser(orInst);
                 inst.parent.insertBefore(orInst, inst);
@@ -591,9 +584,9 @@ pub struct RangeMergePass
     }
 }
 
-pub bool irPassRange(ir_types.IrFunc* func, void* userdata)
+pub bool irPassRange(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     RangeMergePass pass = RangeMergePass::new(ctx);
     return pass.run(func);

@@ -1,13 +1,6 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
+mod wallvm = import(lib, "wallvm");
 
-mod ir_types = import(lib, "wallvm/ir_types.crl");
-mod ir_opcodes = import(lib, "wallvm/ir_opcodes.crl");
-
-static bool blockListContains(ir_types.IrBlock** blocks, u32 nblocks, ir_types.IrBlock* target)
+static bool blockListContains(wallvm.ir_types.IrBlock** blocks, u32 nblocks, wallvm.ir_types.IrBlock* target)
 {
     for (u32 i = 0; i < nblocks; i++)
         if (blocks[i] == target) return true;
@@ -16,11 +9,11 @@ static bool blockListContains(ir_types.IrBlock** blocks, u32 nblocks, ir_types.I
 
 pub struct IrValidator
 {
-    ir_types.IrContext* ctx;
+    wallvm.ir_types.IrContext* ctx;
     u32 nerrors;
     const char* lastError;
 
-    IrValidator new(ir_types.IrContext* ctx)
+    IrValidator new(wallvm.ir_types.IrContext* ctx)
     {
         IrValidator v;
         v.ctx = ctx;
@@ -35,7 +28,7 @@ pub struct IrValidator
         self.lastError = msg;
     }
 
-    bool validateFunc(ir_types.IrFunc* func)
+    bool validateFunc(wallvm.ir_types.IrFunc* func)
     {
         if (!func)
         {
@@ -51,7 +44,7 @@ pub struct IrValidator
         // Validate each block
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func->blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func->blocks[bi];
             if (!bb)
             {
                 self.error("null block in function");
@@ -72,11 +65,11 @@ pub struct IrValidator
 
             bool seenNonPhi = false;
             u32 termCount = 0;
-            ir_types.IrInst* term = null;
+            wallvm.ir_types.IrInst* term = null;
 
             for (u32 ii = 0; ii < bb->ninsts; ii++)
             {
-                ir_types.IrInst* inst = bb->insts[ii];
+                wallvm.ir_types.IrInst* inst = bb->insts[ii];
                 if (!inst)
                 {
                     self.error("null instruction in block");
@@ -89,7 +82,7 @@ pub struct IrValidator
                     return false;
                 }
 
-                if (inst.opcode == ir_opcodes.IrOpcode::Phi)
+                if (inst.opcode == wallvm.irOps.IrOpcode::Phi)
                 {
                     if (seenNonPhi)
                     {
@@ -108,13 +101,13 @@ pub struct IrValidator
                     }
                     for (u32 oi = 0; oi < inst->nops; oi += 2)
                     {
-                        ir_types.IrValue* predVal = inst->ops[oi + 1];
+                        wallvm.ir_types.IrValue* predVal = inst->ops[oi + 1];
                         if (!predVal)
                         {
                             self.error("phi has null predecessor operand");
                             return false;
                         }
-                        ir_types.IrBlock* pred = (ir_types.IrBlock*)predVal;
+                        wallvm.ir_types.IrBlock* pred = (wallvm.ir_types.IrBlock*)predVal;
                         if (!blockListContains(bb->preds, bb->npreds, pred))
                         {
                             self.error("phi predecessor is not a CFG predecessor");
@@ -129,7 +122,7 @@ pub struct IrValidator
 
                 for (u32 oi = 0; oi < inst->nops; oi++)
                 {
-                    ir_types.IrValue* op = inst->ops[oi];
+                    wallvm.ir_types.IrValue* op = inst->ops[oi];
                     if (!op) continue;
 
                     bool found = false;
@@ -148,7 +141,7 @@ pub struct IrValidator
                     }
                 }
 
-                if (ir_opcodes.irOpcodeIsTerminator(inst.opcode))
+                if (wallvm.irOps.irOpcodeIsTerminator(inst.opcode))
                 {
                     termCount++;
                     term = inst;
@@ -173,33 +166,33 @@ pub struct IrValidator
 
             switch (term->opcode)
             {
-            case ir_opcodes.IrOpcode::Br:
+            case wallvm.irOps.IrOpcode::Br:
                 if (term->nops != 1 || bb->nsuccs != 1)
                 {
                     self.error("br must have one target and one successor");
                     return false;
                 }
-                if ((ir_types.IrBlock*)term->ops[0] != bb->succs[0])
+                if ((wallvm.ir_types.IrBlock*)term->ops[0] != bb->succs[0])
                 {
                     self.error("br target does not match CFG successor");
                     return false;
                 }
                 break;
-            case ir_opcodes.IrOpcode::CondBr:
+            case wallvm.irOps.IrOpcode::CondBr:
                 if (term->nops != 3 || bb->nsuccs != 2)
                 {
                     self.error("cond_br must have condition, two targets, and two successors");
                     return false;
                 }
-                if ((ir_types.IrBlock*)term->ops[1] != bb->succs[0] || (ir_types.IrBlock*)term->ops[2] != bb->succs[1])
+                if ((wallvm.ir_types.IrBlock*)term->ops[1] != bb->succs[0] || (wallvm.ir_types.IrBlock*)term->ops[2] != bb->succs[1])
                 {
                     self.error("cond_br targets do not match CFG successors");
                     return false;
                 }
                 break;
-            case ir_opcodes.IrOpcode::Ret:
-            case ir_opcodes.IrOpcode::Unreachable:
-            case ir_opcodes.IrOpcode::Noret:
+            case wallvm.irOps.IrOpcode::Ret:
+            case wallvm.irOps.IrOpcode::Unreachable:
+            case wallvm.irOps.IrOpcode::Noret:
                 if (bb->nsuccs != 0)
                 {
                     self.error("terminator must not have CFG successors");
@@ -215,10 +208,10 @@ pub struct IrValidator
         // Validate successor/predecessor consistency
         for (u32 bi = 0; bi < func->nblocks; bi++)
         {
-            ir_types.IrBlock* bb = func->blocks[bi];
+            wallvm.ir_types.IrBlock* bb = func->blocks[bi];
             for (u32 si = 0; si < bb->nsuccs; si++)
             {
-                ir_types.IrBlock* succ = bb->succs[si];
+                wallvm.ir_types.IrBlock* succ = bb->succs[si];
                 if (!succ)
                 {
                     self.error("null successor");
@@ -232,7 +225,7 @@ pub struct IrValidator
             }
             for (u32 pi = 0; pi < bb->npreds; pi++)
             {
-                ir_types.IrBlock* pred = bb->preds[pi];
+                wallvm.ir_types.IrBlock* pred = bb->preds[pi];
                 if (!pred)
                 {
                     self.error("null predecessor");
@@ -249,7 +242,7 @@ pub struct IrValidator
         return self.nerrors == 0;
     }
 
-    bool validateModule(ir_types.IrModule* modd)
+    bool validateModule(wallvm.ir_types.IrModule* modd)
     {
         if (!modd)
         {
@@ -267,7 +260,7 @@ pub struct IrValidator
         // Validate globals
         for (u32 i = 0; i < modd->nglobals; i++)
         {
-            ir_types.IrGlobal* g = modd->globals[i];
+            wallvm.ir_types.IrGlobal* g = modd->globals[i];
             if (!g)
             {
                 self.error("null global");
@@ -284,9 +277,9 @@ pub struct IrValidator
     }
 }
 
-pub bool irPassValidate(ir_types.IrFunc* func, void* userdata)
+pub bool irPassValidate(wallvm.ir_types.IrFunc* func, void* userdata)
 {
-    ir_types.IrContext* ctx = (ir_types.IrContext*)userdata;
+    wallvm.ir_types.IrContext* ctx = (wallvm.ir_types.IrContext*)userdata;
     if (!ctx || !func) return false;
     IrValidator v = IrValidator::new(ctx);
     return v.validateFunc(func);

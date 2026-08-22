@@ -1,54 +1,54 @@
-mod string = import("std/text/string.crl");
+mod std = import("std");
 
 flag (ARCH) {
 x86_64:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("x86_64");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("x86_64");
 x86:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("x86");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("x86");
 arm64:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("arm64");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("arm64");
 arm32:
     pub constexpr u64 CACHE_LINE_SIZE = 32;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("arm32");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("arm32");
 riscv64:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("riscv64");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("riscv64");
 riscv32:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("riscv32");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("riscv32");
 ppc64:
     pub constexpr u64 CACHE_LINE_SIZE = 128;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("ppc64");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("ppc64");
 ppc:
     pub constexpr u64 CACHE_LINE_SIZE = 32;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("ppc");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("ppc");
 mips64:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("mips64");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("mips64");
 mips:
     pub constexpr u64 CACHE_LINE_SIZE = 32;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("mips");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("mips");
 sparc64:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("sparc64");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("sparc64");
 wasm32:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;
-    pub constexpr string.strView BUILD_ARCH = string.strView::fromCstr("wasm32");
+    pub constexpr std.string.strView BUILD_ARCH = std.string.strView::fromCstr("wasm32");
 wasm64:
     pub constexpr u64 CACHE_LINE_SIZE = 64;
     pub constexpr u64 PAGE_SIZE = 4096;

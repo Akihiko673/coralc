@@ -2,7 +2,7 @@ mod std = import(lib, "std");
 
 pub struct bloom
 {
-    vec<u64> bits;
+    sd.vec.vec<u64> bits;
     u64 numBits;
     u64 numHashes;
 
@@ -20,23 +20,23 @@ pub struct bloom
 
     void dispose() { self.bits.dispose(); }
 
-    u64 _hash(const u8* data, u64 len, u64 seed)
+    u64 _hash(std.string.strView data, u64 seed)
     {
         u64 h = seed;
         for (u64 i = 0; i < len; i++)
         {
-            h ^= (u64)data[i];
+            h ^= (u64)data.ptr[i];
             h *= 0x9E3779B97F4A7C15;
             h ^= h >> 31;
         }
         return h;
     }
 
-    void insert(const u8* data, u64 len)
+    void insert(std.string.strView data, u64 len)
     {
         for (u64 i = 0; i < self.numHashes; i++)
         {
-            u64 h = self._hash(data, len, i * 0x9E3779B9);
+            u64 h = self._hash(data, i * 0x9E3779B9);
             u64 bit = h % self.numBits;
             u64 word = bit / 64;
             u64 off = bit % 64;
@@ -44,11 +44,11 @@ pub struct bloom
         }
     }
 
-    bool contains(const u8* data, u64 len)
+    bool contains(std.string.strView data)
     {
         for (u64 i = 0; i < self.numHashes; i++)
         {
-            u64 h = self._hash(data, len, i * 0x9E3779B9);
+            u64 h = self._hash(data, i * 0x9E3779B9);
             u64 bit = h % self.numBits;
             u64 word = bit / 64;
             u64 off = bit % 64;

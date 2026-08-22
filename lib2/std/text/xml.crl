@@ -1,17 +1,9 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod string = import(lib, "std/text/string.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct XmlAttribute
 {
-    string.String name;
-    string.String value;
+    std.string.String name;
+    std.string.String value;
 
     void dispose()
     {
@@ -31,19 +23,19 @@ pub enum XmlNodeType
 pub struct XmlNode
 {
     XmlNodeType type;
-    string.String tag;
-    string.String text;
-    vec.vec<XmlAttribute> attrs;
-    vec.vec<XmlNode> children;
+    std.string.String tag;
+    std.string.String text;
+    std.vec.vec<XmlAttribute> attrs;
+    std.vec.vec<XmlNode> children;
 
     static XmlNode element(string.strView tag)
     {
         XmlNode n;
         n.type = XmlNodeType::Element;
-        n.tag = string.String::fromView(tag);
-        n.text = string.String::new();
-        n.attrs = vec.vec<XmlAttribute>::new();
-        n.children = vec.vec<XmlNode>::new();
+        n.tag = std.string.String::fromView(tag);
+        n.text = std.string.String::new();
+        n.attrs = std.vec.vec<XmlAttribute>::new();
+        n.children = std.vec.vec<XmlNode>::new();
         return n;
     }
 
@@ -51,10 +43,10 @@ pub struct XmlNode
     {
         XmlNode n;
         n.type = XmlNodeType::Text;
-        n.tag = string.String::new();
-        n.text = string.String::fromView(content);
-        n.attrs = vec.vec<XmlAttribute>::new();
-        n.children = vec.vec<XmlNode>::new();
+        n.tag = std.string.String::new();
+        n.text = std.string.String::fromView(content);
+        n.attrs = std.vec.vec<XmlAttribute>::new();
+        n.children = std.vec.vec<XmlNode>::new();
         return n;
     }
 
@@ -137,7 +129,7 @@ struct _XmlParser
         return true;
     }
 
-    string.String parseName()
+    std.string.String parseName()
     {
         u64 start = self.pos;
         while (self.pos < self.len)
@@ -147,13 +139,13 @@ struct _XmlParser
                 self.pos++;
             else break;
         }
-        if (self.pos == start) { self.error = true; return string.String::new(); }
-        return string.String::fromView(string.strView::fromParts(self.data + start, self.pos - start));
+        if (self.pos == start) { self.error = true; return std.string.String::new(); }
+        return std.string.String::fromView(string.strView::fromParts(self.data + start, self.pos - start));
     }
 
-    string.String parseQuotedString()
+    std.string.String parseQuotedString()
     {
-        string.String s = string.String::new();
+        std.string.String s = std.string.String::new();
         u8 quote = self.next();
         if (quote != '"' && quote != '\'') { self.error = true; return s; }
         while (self.pos < self.len)
@@ -228,7 +220,7 @@ struct _XmlParser
             return node;
         }
 
-        string.String tagName = self.parseName();
+        std.string.String tagName = self.parseName();
         if (self.error) { tagName.free(); node.dispose(); return XmlNode::element(string.strView::empty()); }
         node.tag.free();
         node.tag = tagName;
@@ -263,7 +255,7 @@ struct _XmlParser
             if (self.data[self.pos] == '<' && self.pos + 1 < self.len && self.data[self.pos + 1] == '/')
             {
                 self.pos += 2;
-                string.String endTag = self.parseName();
+                std.string.String endTag = self.parseName();
                 if (self.error) { endTag.free(); node.dispose(); return XmlNode::element(string.strView::empty()); }
                 bool match = endTag.equals(node.tag.asView());
                 endTag.free();
@@ -280,7 +272,7 @@ struct _XmlParser
             }
             else
             {
-                string.String text = string.String::new();
+                std.string.String text = std.string.String::new();
                 while (self.pos < self.len && self.data[self.pos] != '<')
                 {
                     u8 c = self.data[self.pos++];
@@ -331,18 +323,18 @@ pub bool parseXml(string.strView input, XmlNode* out)
     return !p.error;
 }
 
-pub string.String serializeXml(XmlNode* node)
+pub std.string.String serializeXml(XmlNode* node)
 {
-    string.String out = string.String::new();
+    std.string.String out = std.string.String::new();
     _serialize(node, &out);
     return out;
 }
 
-void _serialize(XmlNode* node, string.String* out)
+void _serialize(XmlNode* node, std.string.String* out)
 {
     if (node->type == XmlNodeType::Text)
     {
-        string.String escaped = _escapeXml(node->text.asView());
+        std.string.String escaped = _escapeXml(node->text.asView());
         out->appendView(escaped.asView());
         escaped.free();
         return;
@@ -354,7 +346,7 @@ void _serialize(XmlNode* node, string.String* out)
         out->pushChar(' ');
         out->appendView(node->attrs.at(i).name.asView());
         out->pushView(string.strView::fromParts("=\"", 2));
-        string.String escaped = _escapeXml(node->attrs.at(i).value.asView());
+        std.string.String escaped = _escapeXml(node->attrs.at(i).value.asView());
         out->appendView(escaped.asView());
         escaped.free();
         out->pushChar('"');
@@ -367,7 +359,7 @@ void _serialize(XmlNode* node, string.String* out)
     out->pushChar('>');
     if (!node->text.isEmpty())
     {
-        string.String escaped = _escapeXml(node->text.asView());
+        std.string.String escaped = _escapeXml(node->text.asView());
         out->appendView(escaped.asView());
         escaped.free();
     }
@@ -378,9 +370,9 @@ void _serialize(XmlNode* node, string.String* out)
     out->pushChar('>');
 }
 
-string.String _escapeXml(string.strView s)
+std.string.String _escapeXml(string.strView s)
 {
-    string.String out = string.String::new();
+    std.string.String out = std.string.String::new();
     for (u64 i = 0; i < s.len; i++)
     {
         u8 c = s.ptr[i];

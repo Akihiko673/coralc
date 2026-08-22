@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod libc = import(lib, "std/platform/libc.crl");
+mod libc = import(lib, "std/platform/std.libc.crl");
 
 const i32 SEEK_SET = 0;
 const i32 SEEK_CUR = 1;
@@ -25,7 +19,7 @@ pub struct FileReader
         u64 total = 0;
         while (total < n)
         {
-            i64 r = libc.read(self.fd, dst + total, n - total);
+            i64 r = std.libc.read(self.fd, dst + total, n - total);
             if (r <= 0) return false;
             total += (u64)r;
         }
@@ -98,7 +92,7 @@ pub struct FileReader
 
     void skip(u64 n)
     {
-        if (n <= 0x7FFFFFFFFFFFFFFFu) libc.lseek(self.fd, (i64)n, SEEK_CUR);
+        if (n <= 0x7FFFFFFFFFFFFFFFu) std.libc.lseek(self.fd, (i64)n, SEEK_CUR);
     }
 }
 
@@ -118,7 +112,7 @@ pub struct FileWriter
         u64 total = 0;
         while (total < n)
         {
-            i64 r = libc.write(self.fd, src + total, n - total);
+            i64 r = std.libc.write(self.fd, src + total, n - total);
             if (r <= 0) return false;
             total += (u64)r;
         }

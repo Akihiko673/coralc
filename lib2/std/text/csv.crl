@@ -1,8 +1,4 @@
-
-@[[no_drop]]
-mod string = import(lib, "std/text/string.crl");
-mod mman = import(lib, "std/memory/mman.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct csvReader
 {
@@ -27,7 +23,7 @@ pub struct csvReader
 
     bool eof() { return self.pos >= self.len; }
 
-    bool _readField(string* out)
+    bool _readField(std.string.String* out)
     {
         if (self.pos >= self.len) { self.error = true; return false; }
         out->clear();
@@ -73,7 +69,7 @@ pub struct csvReader
         return true;
     }
 
-    bool readRow(vec<string>* fields)
+    bool readRow(std.vec.vec<std.string.String>* fields)
     {
         for (u64 i = 0; i < fields->count(); i++)
             fields->atPtr(i)->free();
@@ -81,7 +77,7 @@ pub struct csvReader
         if (self.pos >= self.len) return false;
         for (;;)
         {
-            string field = string.new();
+            std.string.String field = std.string.String.new();
             if (!self._readField(&field)) { fields->push(field); return false; }
             fields->push(field);
             if (self.pos >= self.len) break;

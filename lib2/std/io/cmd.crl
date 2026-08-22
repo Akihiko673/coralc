@@ -1,25 +1,18 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod string = import(lib, "std/text/string.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct ArgParser
 {
-    vec<string> positional;
+    std.vec.vec<std.string.String> positional;
     bool error;
-    string errMsg;
+    std.string.String errMsg;
     u64 pos;
 
     ArgParser new()
     {
         ArgParser p;
-        p.positional = vec<string>::new();
+        p.positional = std.vec.vec<std.string.String>::new();
         p.error = false;
-        p.errMsg = string.new();
+        p.errMsg = std.string.String::new();
         p.pos = 0;
         return p;
     }
@@ -42,7 +35,7 @@ pub struct ArgParser
                 if (arg[1] == '-' && arg[2] == 0) break;
                 continue;
             }
-            self.positional.push(string.fromView(strView::fromCstr(arg)));
+            self.positional.push(std.string.String.fromView(std.string.strview::fromCstr(arg)));
         }
     }
 
@@ -56,7 +49,7 @@ pub struct ArgParser
         return false;
     }
 
-    bool hasFlag(i32 argc, char** argv, strView shortFlag, strView longFlag)
+    bool hasFlag(i32 argc, char** argv, std.string.strview shortFlag, std.string.strview longFlag)
     {
         for (i32 i = 1; i < argc; i++)
         {
@@ -75,7 +68,7 @@ pub struct ArgParser
         return false;
     }
 
-    bool getOption(i32 argc, char** argv, strView shortFlag, strView longFlag, string* out)
+    bool getOption(i32 argc, char** argv, std.string.strview shortFlag, std.string.strview longFlag, std.string.String* out)
     {
         for (i32 i = 1; i < argc - 1; i++)
         {
@@ -85,7 +78,7 @@ pub struct ArgParser
             if (shortFlag.len == 1 && arg[0] == '-' && arg[1] == shortFlag.ptr[0] && arg[2] == 0)
             {
                 out->free();
-                *out = string.fromView(strView::fromCstr(argv[i + 1]));
+                *out = std.string.String.fromView(std.string.strview::fromCstr(argv[i + 1]));
                 return true;
             }
             if (longFlag.len > 0 && arg[0] == '-' && arg[1] == '-')
@@ -96,7 +89,7 @@ pub struct ArgParser
                 if (match && arg[2 + longFlag.len] == 0)
                 {
                     out->free();
-                    *out = string.fromView(strView::fromCstr(argv[i + 1]));
+                    *out = std.string.String.fromView(std.string.strview::fromCstr(argv[i + 1]));
                     return true;
                 }
             }
@@ -105,5 +98,5 @@ pub struct ArgParser
     }
 
     u64 count() { return self.positional.count(); }
-    strView get(u64 idx) { return self.positional.at(idx).asView(); }
+    std.string.strview get(u64 idx) { return self.positional.at(idx).asView(); }
 }
