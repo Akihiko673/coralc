@@ -6,6 +6,7 @@ mod mman = import("std/memory/mman.crl");
 mod emitir = import("emitir");
 mod error = import("error");
 mod wallvm = import("lib/wallvm/wallvm.crl");
+mod borrowcheck = import("lib/wallvm/passes/borrowcheck.crl");
 mod ir_types = import("lib/wallvm/ir_types.crl");
 mod asm_rules = import("lib/wallvm/rules/asm_rules.crl");
 
@@ -32,7 +33,7 @@ pub void emitAsm(ast.Program* prog, scopes.Scope* top, scopes.ModuleTable* mods,
         if(isBorrow2 && flagVals[_fi2].len==1 && flagVals[_fi2].ptr[0]=='1') {
             for(u32 _f2=0; _f2<irMod.nfuncs; _f2++) {
                 ir_types.IrFunc* _func = irMod.funcs[_f2];
-                if(wallvm.borrowcheck.irPassBorrowCheck(_func, (void*)ctx)) {
+                if(borrowcheck.irPassBorrowCheck(_func, (void*)ctx)) {
                     str.strView _code = str.strView::fromCstr("TC-BORROW");
                     str.strView _msg = str.strView::fromCstr("borrow checker violation: use after move or aliasing call args");
                     str.strView _help = str.strView::fromCstr("check for aliasing pointer args or stale live loads across calls; try `coralc --explain TC-BORROW`");

@@ -755,6 +755,13 @@ pub struct Parser
         while (true)
         {
             if (self.hazardStop()) break;
+            bool isNonull = false;
+            if (self.check(tok.T_LBRACKET) && self.peekTok(1)->id == tok.T_LBRACKET)
+            {
+                self.parseAttachedAttrs();
+                if (self.hasAttr("nonull")) isNonull = true;
+                self.nattrs = 0;
+            }
             ast.TypeExpr* pt = null;
             str.strView pn = str.strView::empty();
             bool named = false;
@@ -818,9 +825,11 @@ pub struct Parser
             ast.Param p;
             p.name = pn;
             p.type = pt;
+            p.nonull = isNonull;
             self.growParamU(arr, n, cap);
             (*arr)[*n].name = p.name;
             (*arr)[*n].type = p.type;
+            (*arr)[*n].nonull = p.nonull;
             *n = *n + 1;
             if (!self.check(tok.T_COMMA)) break;
             self.advance();

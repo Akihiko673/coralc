@@ -33,6 +33,7 @@ pub struct Param
 {
     str.strView name;   // empty when anonymous
     TypeExpr* type;
+    bool nonull;
 }
 
 pub const u32 EX_INT = 0;

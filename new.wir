@@ -28,7 +28,8 @@ func @_mmap -> ptr {
     %27 = load i64 [%21]
     %28 = icmp i1 [%27, 0]
     %29 = load i64 [%21]
-    %32 = icmp i1 [%29, 18446744073709547521]
+    %31 = neg i64 [4095]
+    %32 = icmp i1 [%29, %31]
     %34 = icmp i1 [%28, 0]
     %35 = icmp i1 [%32, 0]
     %36 = and i1 [%34, %35]
@@ -42,21 +43,22 @@ func @_mmap -> ptr {
 }
 func @main -> i32 {
   block %entry:
-    %48 = alloca ptr
-    %49 = store void [0, %48]
-    %50 = alloca ptr
-    %52 = store void [7, %50]
-    %53 = alloca ptr
-    %55 = store void [3, %53]
-    %56 = alloca ptr
-    %58 = store void [34, %56]
-    %59 = alloca ptr
-    %62 = store void [18446744073709551615, %59]
-    %63 = load ptr [%48]
-    %64 = load i64 [%50]
-    %65 = load i32 [%53]
-    %66 = load i32 [%56]
-    %67 = load i32 [%59]
-    %68 = call ptr [%1(_mmap), %63, %64, %65, %66, %67, 0]
-    %69 = ret i64 [0]
+    %47 = alloca ptr
+    %48 = store void [0, %47]
+    %49 = alloca ptr
+    %51 = store void [7, %49]
+    %52 = alloca ptr
+    %54 = store void [3, %52]
+    %55 = alloca ptr
+    %57 = store void [34, %55]
+    %58 = alloca ptr
+    %60 = neg i64 [1]
+    %61 = store void [%60, %58]
+    %62 = load ptr [%47]
+    %63 = load i64 [%49]
+    %64 = load i32 [%52]
+    %65 = load i32 [%55]
+    %66 = load i32 [%58]
+    %67 = call ptr [%1(_mmap), %62, %63, %64, %65, %66, 0]
+    %68 = ret i64 [0]
 }

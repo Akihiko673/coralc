@@ -287,6 +287,18 @@ void checkArgsFrom(Typer* t, ast.Expr* call, types.CType* sig, bool slotPresent,
         types.CType* pt = sig->params[pi];
         types.CType* at = typeExpr(t, call->args[i]);
         if (at == null || pt == null) continue;
+        // [[nonull]] enforcement: null literal passed to non-null param
+        if (call->args[i]->kind == ast.EX_NULL || (call->args[i]->kind == ast.EX_INT && call->args[i]->text.len==1 && call->args[i]->text.ptr[0]=='0')) {
+            // lookup callee decl to check nonull
+            if (call->a != null && call->a->kind == ast.EX_IDENT) {
+                scopes.Sym* cs = scopes.scopeLookup(t->fnScope ? t->fnScope : t->top, call->a->text);
+                if (cs == null) cs = scopes.scopeLookup(t->top, call->a->text);
+                if (cs != null && cs->decl != null && pi < cs->decl->nparams && cs->decl->params[pi].nonull) {
+                    errAt(t, call->args[i]->line, call->args[i]->col, "TC-NONULL", str.strView::fromCstr("null passed to [[nonull]] parameter"), str.strView::fromCstr("remove null or remove [[nonull]]; add a null check before the call"));
+                    continue;
+                }
+            }
+        }
         if (!types.assignable(pt, at, call->args[i]->kind, call->args[i]->text)
             && !types.constFitsExpr(call->args[i], pt))
         {

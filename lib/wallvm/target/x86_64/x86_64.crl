@@ -1575,6 +1575,18 @@ pub struct X86_64Codegen
         }
     }
 
+    void emitInlineAsm(ir_types.IrInst* inst)
+    {
+        if (!inst || inst.nops < 1) return;
+        ir_types.IrValue* tmplVal = inst.ops[0];
+        const char* tmpl = null;
+        if (tmplVal && tmplVal.valData != 0) tmpl = (const char*)(u64)tmplVal.valData;
+        if (!tmpl) return;
+        self.pad();
+        for (u32 i=0; tmpl[i]; i++) self.c(tmpl[i]);
+        self.c('\n');
+    }
+
     bool genFunc(ir_types.IrFunc* func)
     {
         if (!func) return false;
@@ -1813,6 +1825,7 @@ pub struct X86_64Codegen
 
                 // Other
                 case ir_opcodes.IrOpcode::Call: self.emitCall(inst); break;
+                case ir_opcodes.IrOpcode::InlineAsm: self.emitInlineAsm(inst); break;
                 case ir_opcodes.IrOpcode::Phi: self.emitPhi(inst); break;
                 case ir_opcodes.IrOpcode::Select: self.emitSelect(inst); break;
 
