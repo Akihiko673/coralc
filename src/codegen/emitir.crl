@@ -9,6 +9,8 @@ mod ir_types = import("lib/wallvm/ir_types.crl");
 mod ir_builder = import("lib/wallvm/ir_builder.crl");
 mod ir_opcodes = import("lib/wallvm/ir_opcodes.crl");
 mod expr = import("typecheck/expr.crl");
+mod lex = import("lexer");
+mod parse = import("parser");
 
 struct FuncGen
 {
@@ -973,6 +975,215 @@ void genStmt(FuncGen* fg, ast.Stmt* s)
     }
 }
 
+// parseExprSnippet: run the real lexer+parser over a raw operand source
+// slice (e.g. `(u64)addr` or `length`) and return the ast.Expr. The buffer
+// stays alive for the compiler process lifetime (mman arena).
+ast.Expr* parseExprSnippet(FuncGen* fg, const char* src, u32 len)
+{
+    char* buf = mman.alloc<char>(len + 1);
+    for (u32 i = 0; i < len; i++) buf[i] = src[i];
+    buf[len] = 0;
+    lex.Lexer lx = lex.Lexer::new((const u8*)buf, len);
+    lex.LexResult lr = lx.lex();
+    if (lr.n == 0) return null;
+    str.strView sv = str.strView::fromParts(buf, len);
+    parse.Parser p = parse.Parser::new(lr.toks, lr.n, (const u8*)buf, len, sv);
+    return p.parseExpr();
+}
+
+// genAsm: lower a GCC-style extended asm block into an InlineAsm instruction.
+//
+//   asm volatile { "tmpl %0 .. %1" : "=a"(out1), "=r"(out2) : "D"(in1), "r"(in2) : "rcx", "memory" }
+//
+// Operand numbering follows GCC: outputs get %0..%nOut-1, inputs continue
+// %nOut... Input expressions are evaluated into IR values and passed as
+// instruction operands; outputs are the locals' allocas, and a register
+// -constrained first output ("=a"/"=r") receives the asm result stored back
+// after the block. Clobbers are appended to the template as a trailing
+// "# clobber:" comment line so the .wir records them for the backend.
+void genAsm(FuncGen* fg, ast.Stmt* s)
+{
+    const char* raw = s->text.ptr ? (const char*)s->text.ptr : "";
+    u32 rlen = s->text.len;
+    // slice between the outer braces
+    u32 lbrace = 0; u32 rbrace = 0;
+    for (u32 i = 0; i < rlen; i++) if (raw[i] == '{') { lbrace = i+1; break; }
+    for (u32 i = rlen; i > 0; i--) if (raw[i-1] == '}') { rbrace = i-1; break; }
+    if (lbrace >= rbrace) return;
+    const char* body = raw + lbrace;
+    u32 blen = rbrace - lbrace;
+
+    // split template / outputs / inputs / clobbers at top-level colons
+    u32 secStart[4]; u32 secLen[4]; u32 nsec = 0;
+    u32 depth = 0; bool inStr = false; u32 start = 0;
+    for (u32 i = 0; i <= blen; i++)
+    {
+        char c = i < blen ? body[i] : ':';
+        bool atEnd = i == blen;
+        if (inStr)
+        {
+            if (c == '"') inStr = false;
+            continue;
+        }
+        if (c == '"') { inStr = true; continue; }
+        if (c == '(' || c == '[') { depth++; continue; }
+        if (c == ')' || c == ']') { if (depth) depth--; continue; }
+        if ((c == ':' && depth == 0) || atEnd)
+        {
+            if (nsec < 4) { secStart[nsec] = start; secLen[nsec] = i - start; nsec++; }
+            start = i + 1;
+            if (atEnd) break;
+        }
+    }
+
+    // template: concatenated string literals with escapes resolved
+    str.String tmpl = str.String::new();
+    {
+        u32 ts = secStart[0], tl = nsec > 0 ? secLen[0] : 0;
+        u32 i = 0;
+        while (i < tl)
+        {
+            if (body[ts + i] != '"') { i++; continue; }
+            i++;
+            while (i < tl && body[ts + i] != '"')
+            {
+                char c = body[ts + i];
+                if (c == '\\' && i + 1 < tl)
+                {
+                    char n = body[ts + i + 1];
+                    if (n == 'n') tmpl.pushChar('\n');
+                    else if (n == 't') tmpl.pushChar('\t');
+                    else if (n == '\\') tmpl.pushChar('\\');
+                    else if (n == '"') tmpl.pushChar('"');
+                    else if (n == '0') tmpl.pushChar('\0');
+                    else { tmpl.pushChar('\\'); tmpl.pushChar(n); }
+                    i += 2;
+                    continue;
+                }
+                tmpl.pushChar(c);
+                i++;
+            }
+            i++;
+        }
+    }
+
+    // operand list parser: "constr"(expr) pairs -> constraints + exprs
+    const u32 MAXOP = 16;
+    ast.Expr* outExprs[16];
+    ast.Expr* inExprs[16];
+    char outConstr[192];
+    char inConstr[192];
+    u32 nOut = 0;
+    u32 nIn = 0;
+    for (u32 z = 0; z < 192; z++) { outConstr[z] = 0; inConstr[z] = 0; }
+    for (u32 sec = 1; sec < 3 && sec < nsec; sec++)
+    {
+        u32 ss = secStart[sec], sl = secLen[sec];
+        u32 i = 0;
+        while (i < sl)
+        {
+            while (i < sl && (body[ss+i] == ' ' || body[ss+i] == ',' || body[ss+i] == '\n' || body[ss+i] == '\t')) i++;
+            if (i >= sl || body[ss+i] != '"') break;
+            i++;
+            char* dst = (sec == 1) ? outConstr + nOut * 12 : inConstr + nIn * 12;
+            u32 ci = 0;
+            while (i < sl && body[ss+i] != '"' && ci < 11) { dst[ci++] = body[ss+i]; i++; }
+            dst[ci] = 0;
+            if (i < sl && body[ss+i] == '"') i++;
+            while (i < sl && (body[ss+i] == ' ' || body[ss+i] == '(')) i++;
+            // capture the parenthesized expr source
+            u32 d = 1; u32 es = i;
+            while (i < sl && d > 0)
+            {
+                char c = body[ss+i];
+                if (c == '(') d++;
+                else if (c == ')') d--;
+                if (d == 0) break;
+                i++;
+            }
+            u32 el = i > es ? i - es : 0;
+            if (i < sl) i++;
+            if (el == 0) continue;
+            // re-parse through the real parser by wrapping in parens
+            ast.Expr* parsed = parseExprSnippet(fg, body + ss + es, el);
+            if (parsed == null) continue;
+            if (sec == 1 && nOut < MAXOP) { outExprs[nOut++] = parsed; }
+            else if (sec == 2 && nIn < MAXOP) { inExprs[nIn++] = parsed; }
+        }
+    }
+
+    // clobbers: quoted names appended as a comment on the template
+    if (nsec >= 4 && secLen[3] > 0)
+    {
+        u32 cs = secStart[3], cl = secLen[3];
+        bool any = false;
+        for (u32 i = 0; i < cl; i++) if (body[cs+i] == '"') { any = true; break; }
+        if (any)
+        {
+            tmpl.pushView(str.strView::fromCstr("\n\t# clobber:"));
+            bool lastQ = true;
+            for (u32 i = 0; i < cl; i++)
+            {
+                char c = body[cs+i];
+                if (c == '"') { if (!lastQ) tmpl.pushChar(' '); lastQ = false; continue; }
+                if (!lastQ) tmpl.pushChar(c);
+            }
+        }
+    }
+
+    // evaluate input operands into IR values
+    ir_types.IrValue* args[2 * MAXOP];
+    u32 nargs = 0;
+    ir_types.IrType* retTy = fg.ctx.tyVoid();
+    ir_types.IrValue* regOutPtr = null;
+    for (u32 k = 0; k < nOut && k < MAXOP; k++)
+    {
+        ast.Expr* oe = outExprs[k];
+        ir_types.IrValue* ptr = null;
+        if (oe->kind == ast.EX_IDENT) ptr = findLocal(fg, oe->text);
+        else if (oe->kind == ast.EX_UNARY && opEq(oe->text, "*")) ptr = genExpr(fg, oe->a);
+        else if (oe->kind == ast.EX_DEREF) ptr = genExpr(fg, oe->a);
+        if (ptr == null) continue;
+        args[nargs++] = ptr;
+        // first '='-constrained output bound to a register receives rax/ret
+        bool isWrite = false;
+        for (u32 q = 0; q < 11 && outConstr[k * 12 + q]; q++) if (outConstr[k * 12 + q] == '=') { isWrite = true; break; }
+        if (isWrite && regOutPtr == null)
+        {
+            bool isReg = false;
+            for (u32 q = 0; q < 11 && outConstr[k * 12 + q]; q++)
+            {
+                char cc = outConstr[k * 12 + q];
+                if (cc == 'a' || cc == 'r') { isReg = true; break; }
+            }
+            if (isReg)
+            {
+                regOutPtr = ptr;
+                ir_types.IrType* et = ptr->type;
+                if (et && et->kind == ir_types.IrTypeKind::Ptr && et->elem) retTy = et->elem;
+            }
+        }
+    }
+    for (u32 k = 0; k < nIn && k < MAXOP; k++)
+    {
+        ir_types.IrValue* v = genExpr(fg, inExprs[k]);
+        if (v == null) v = fg.ctx.constInt(fg.ctx.tyInt(64), 0);
+        args[nargs++] = v;
+    }
+
+    // emit
+    u32 tlen = tmpl.len;
+    char* tcopy = mman.alloc<char>(tlen + 1);
+    for (u32 i = 0; i < tlen; i++) tcopy[i] = tmpl.ptr[i];
+    tcopy[tlen] = 0;
+    tmpl.free();
+    ir_types.IrInst* ia = fg.bd.inlineAsm(tcopy, args, nargs, retTy);
+    setDbgStmt(fg, ia, s);
+    // write the register-constrained result back to its variable slot
+    if (regOutPtr != null && retTy->kind != ir_types.IrTypeKind::Void)
+        fg.bd.store(&ia->base, regOutPtr);
+}
+
 void dumpIR(ir_types.IrModule* irMod, void* f)
 {
     const char* hdr = "; WallVM IR\n";
@@ -1128,11 +1339,11 @@ pub ir_types.IrModule* buildModule(ast.Program* prog, scopes.Scope* top,
             for (u32 k = 0; k < d->name.len && nbl < 255; k++) nb[nbl++] = (char)d->name.ptr[k];
             nb[nbl]=0;
             ir_types.IrStructType* st = ctx.createStructType(nb, fTypes, fNames, nf);
-            // override offsets for packed/reorder if needed (createStructType already handles alignment, but for packed we need no padding)
-            // For now, use the created struct; packed handling is via createStructType's internal align logic which already handles packed via isPacked flag? 
-            // We need to patch offsets for packed: if isPacked, remove padding
             if (isPacked)
             {
+                // createStructType laid out with natural padding; packed modes
+                // strip every gap. st->fieldTypes is already in layout order
+                // (sorted when reorder is set), so offsets pack tightly.
                 u32 cur = 0;
                 for (u32 fi = 0; fi < st->nfields; fi++)
                 {
