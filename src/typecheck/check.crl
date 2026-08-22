@@ -319,11 +319,19 @@ pub struct Check
                 self.declareSym(top, d, scopes.SYM_TRAIT, null);
                 break;
             case ast.DT_TYPEDEF:
-                self.declareSym(top, d, scopes.SYM_TYPEDEF, null);
-                break;
+                {
+                    types.CType* under = d->type != null ? scopes.resolveTypeExpr(d->type, top, mods, null, 0) : null;
+                    types.CType* t = scopes.namedType(d, d->name, d->line, d->col);
+                    t->elem = under;
+                    self.declareSym(top, d, scopes.SYM_TYPEDEF, t);
+                    break;
+                }
             case ast.DT_DISTINCT:
-                self.declareSym(top, d, scopes.SYM_DISTINCT, null);
-                break;
+                {
+                    types.CType* t = scopes.namedType(d, d->name, d->line, d->col);
+                    self.declareSym(top, d, scopes.SYM_DISTINCT, t);
+                    break;
+                }
             case ast.DT_FUNC:
                 self.declareSym(top, d, scopes.SYM_FUNC, null);
                 break;

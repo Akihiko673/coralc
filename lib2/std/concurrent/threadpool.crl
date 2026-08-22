@@ -1,11 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod thread = import(lib, "std/concurrent/thread.crl");
+mod std = import(lib, "std");
 
 struct Task
 {
@@ -34,7 +27,7 @@ pub struct threadpool
         self.stop = false;
 
         if (numThreads == 0) return false;
-        self.threads = mman.alloc<thread.Thread>(numThreads);
+        self.threads = std.mman.alloc<thread.Thread>(numThreads);
         if (self.threads == null) return false;
         for (u32 i = 0; i < numThreads; i++)
         {
@@ -45,7 +38,7 @@ pub struct threadpool
                 self.cond.broadcast();
                 for (u32 j = 0; j < i; j++)
                     thread.threadJoin(self.threads[j], null);
-                mman.dealloc<thread.Thread>(self.threads);
+                std.mman.dealloc<thread.Thread>(self.threads);
                 self.threads = null;
                 return false;
             }
@@ -68,11 +61,11 @@ pub struct threadpool
         {
             Task* t = self.queueHead;
             self.queueHead = t->next;
-            mman.dealloc<Task>(t);
+            std.mman.dealloc<Task>(t);
         }
         self.mutex.unlock();
 
-        mman.dealloc<thread.Thread>(self.threads);
+        std.mman.dealloc<thread.Thread>(self.threads);
         self.threads = null;
         self.mutex.destroy();
         self.cond.destroy();
@@ -82,14 +75,14 @@ pub struct threadpool
     {
         if (func == null) return false;
 
-        Task* t = mman.alloc<Task>(1);
+        Task* t = std.mman.alloc<Task>(1);
         if (t == null) return false;
         t->func = func;
         t->arg = arg;
         t->next = null;
 
         self.mutex.lock();
-        if (self.stop) { self.mutex.unlock(); mman.dealloc<Task>(t); return false; }
+        if (self.stop) { self.mutex.unlock(); std.mman.dealloc<Task>(t); return false; }
         if (self.queueTail != null) self.queueTail->next = t;
         else self.queueHead = t;
         self.queueTail = t;
@@ -120,7 +113,7 @@ pub struct threadpool
             self.mutex.unlock();
 
             t->func(t->arg);
-            mman.dealloc<Task>(t);
+            std.mman.dealloc<Task>(t);
         }
     }
 }

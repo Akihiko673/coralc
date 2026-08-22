@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 const u8 SBOX[256] =
 {
@@ -232,12 +226,12 @@ pub struct Aes256
     {
         if (len % 16 != 0 || len == 0) return false;
         u8 prev[16];
-        mman.copy<u8>(prev, iv, 16);
+        std.mman.copy<u8>(prev, iv, 16);
         for (u64 i = 0; i < len; i += 16)
         {
             _xorBlock(data + i, prev);
             _encryptBlock(self.roundKeys, self.nRounds, data + i);
-            mman.copy<u8>(prev, data + i, 16);
+            std.mman.copy<u8>(prev, data + i, 16);
         }
         return true;
     }
@@ -246,14 +240,14 @@ pub struct Aes256
     {
         if (len % 16 != 0 || len == 0) return false;
         u8 prev[16];
-        mman.copy<u8>(prev, iv, 16);
+        std.mman.copy<u8>(prev, iv, 16);
         for (u64 i = 0; i < len; i += 16)
         {
             u8 next[16];
-            mman.copy<u8>(next, data + i, 16);
+            std.mman.copy<u8>(next, data + i, 16);
             _decryptBlock(self.roundKeys, self.nRounds, data + i);
             _xorBlock(data + i, prev);
-            mman.copy<u8>(prev, next, 16);
+            std.mman.copy<u8>(prev, next, 16);
         }
         return true;
     }
@@ -284,12 +278,12 @@ pub struct Aes128
     {
         if (len % 16 != 0 || len == 0) return false;
         u8 prev[16];
-        mman.copy<u8>(prev, iv, 16);
+        std.mman.copy<u8>(prev, iv, 16);
         for (u64 i = 0; i < len; i += 16)
         {
             _xorBlock(data + i, prev);
             _encryptBlock(self.roundKeys, self.nRounds, data + i);
-            mman.copy<u8>(prev, data + i, 16);
+            std.mman.copy<u8>(prev, data + i, 16);
         }
         return true;
     }
@@ -298,14 +292,14 @@ pub struct Aes128
     {
         if (len % 16 != 0 || len == 0) return false;
         u8 prev[16];
-        mman.copy<u8>(prev, iv, 16);
+        std.mman.copy<u8>(prev, iv, 16);
         for (u64 i = 0; i < len; i += 16)
         {
             u8 next[16];
-            mman.copy<u8>(next, data + i, 16);
+            std.mman.copy<u8>(next, data + i, 16);
             _decryptBlock(self.roundKeys, self.nRounds, data + i);
             _xorBlock(data + i, prev);
-            mman.copy<u8>(prev, next, 16);
+            std.mman.copy<u8>(prev, next, 16);
         }
         return true;
     }

@@ -1,9 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod libc = import(lib, "std/platform/libc.crl");
+mod std = import(lib, "std");
 
 pub const i32 SIGABRT = 6;
 pub const i32 SIGALRM = 14;
@@ -42,25 +37,25 @@ pub void(i32) SigHandler;
 
 pub void(i32) handle(i32 sig, SigHandler* handler)
 {
-    return libc.signal(sig, handler);
+    return std.platform.libc.signal(sig, handler);
 }
 
 pub void ignore(i32 sig)
 {
-    libc.signal(sig, (SigHandler*)(u64)SIG_IGN);
+    std.platform.libc.signal(sig, (SigHandler*)(u64)SIG_IGN);
 }
 
 pub void defaultHandler(i32 sig)
 {
-    libc.signal(sig, (SigHandler*)(u64)SIG_DFL);
+    std.platform.libc.signal(sig, (SigHandler*)(u64)SIG_DFL);
 }
 
 pub i32 send(i32 pid, i32 sig)
 {
-    return libc.kill(pid, sig);
+    return std.platform.libc.kill(pid, sig);
 }
 
 pub i32 raiseSig(i32 sig)
 {
-    return libc.raise(sig);
+    return std.platform.libc.raise(sig);
 }

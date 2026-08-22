@@ -1,11 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct bloom
 {

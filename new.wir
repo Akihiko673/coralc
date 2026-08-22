@@ -1,17 +1,48 @@
 ; WallVM IR
-func @print -> void {
+func @_mmap -> ptr {
   block %entry:
-    %3 = alloca ptr
-    %5 = store void [%4(val), %3]
-    %7 = load ptr [%3]
-    %8 = call void [0, %7]
-    %9 = ret void
+    %21 = alloca ptr
+    %25 = inlineasm i64 ["movq %2, %%rdi
+	movq %3, %%rsi
+	movq %4, %%rdx
+	movq %5, %%r10
+	movq %6, %%r8
+	movq %7, %%r9
+	syscall
+	movq %%rax, %0
+	# clobber:rcx ,  r8 ,  r9 ,  r10 ,  r11 ,  memory 
+            ", %21, 9, 0]
+    %26 = store void [%25, %21]
+    %27 = load i64 [%21]
+    %28 = icmp i1 [%27, 0]
+    %29 = load i64 [%21]
+    %32 = icmp i1 [%29, 18446744073709547521]
+    %34 = icmp i1 [%28, 0]
+    %35 = icmp i1 [%32, 0]
+    %36 = and i1 [%34, %35]
+    %39 = cond_br void [%36, %37(if.then), %38(if.join)]
+  block %if.then:
+    %41 = ret ptr [0]
+  block %if.join:
+    %42 = load i64 [%21]
+    %43 = bitcast ptr [%42]
+    %44 = ret ptr [%43]
 }
-func @main -> i64 {
+func @main -> i32 {
   block %entry:
-    %12 = alloca ptr
-    %13 = store void [0, %12]
-    %14 = load ptr [%12]
-    %15 = call void [%1(print), %14]
-    %17 = ret i64 [0]
+    %78 = br void [%66(entry)]
+  block %after_inline:
+    %62 = ret i64 [0]
+  block %entry:
+    %69 = icmp i1 [%29, 18446744073709547521]
+    %70 = icmp i1 [3434, 0]
+    %71 = icmp i1 [%69, 0]
+    %72 = and i1 [%70, %71]
+    %73 = cond_br void [%72, %67(if.then), %68(if.join)]
+  block %if.then:
+    %80 = br void [%79(cont_inline)]
+  block %if.join:
+    %81 = br void [%79(cont_inline)]
+  block %cont_inline:
+    %83 = br void [%65(after_inline)]
 }

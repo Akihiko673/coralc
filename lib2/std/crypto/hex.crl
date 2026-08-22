@@ -1,38 +1,32 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod libc = import(lib, "std/platform/libc.crl");
-mod string = import(lib, "std/text/string.crl");
+mod std.string.String = import(lib, "std/text/std.std.string.String.crl");
 
-pub u64 encode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+pub u64 encode(std.std.string.strView src, std.string.String dst)
 {
     u64 pos = 0;
-    for (u64 i = 0; i < srcLen && pos + 2 <= dstCap; i++)
+    for (u64 i = 0; i < src.len && pos + 2 <= dst.len; i++)
     {
-        u8 hi = src[i] >> 4;
-        u8 lo = src[i] & 0x0F;
-        dst[pos++] = hi < 10 ? (u8)('0' + hi) : (u8)('a' + hi - 10);
-        dst[pos++] = lo < 10 ? (u8)('0' + lo) : (u8)('a' + lo - 10);
+        u8 hi = (u8)src.ptr[i] >> 4;
+        u8 lo = (u8)src.ptr[i] & 0x0F;
+        dst.ptr[pos++] = hi < 10 ? (u8)('0' + hi) : (u8)('a' + hi - 10);
+        dst.ptr[pos++] = lo < 10 ? (u8)('0' + lo) : (u8)('a' + lo - 10);
     }
     return pos;
 }
 
-pub String encodeToString(const u8* src, u64 srcLen)
+pub std.string.String encodeToString(std.string.strView src)
 {
-    String s = String::new();
-    for (u64 i = 0; i < srcLen; i++)
+    std.string.String s = std.string.String::new();
+    for (u64 i = 0; i < src.len; i++)
     {
-        u8 hi = src[i] >> 4;
-        u8 lo = src[i] & 0x0F;
+        u8 hi = src.ptr[i] >> 4;
+        u8 lo = src.ptr[i] & 0x0F;
         s.pushChar(hi < 10 ? (u8)('0' + hi) : (u8)('a' + hi - 10));
         s.pushChar(lo < 10 ? (u8)('0' + lo) : (u8)('a' + lo - 10));
     }
     return s;
 }
 
-u8 _hexVal(u8 c)
+u8 _hexVal(char c)
 {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -40,25 +34,25 @@ u8 _hexVal(u8 c)
     return 0xFF;
 }
 
-pub u64 decode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
+pub u64 decode(std.std.string.strView src, std.string.String dst)
 {
     u64 pos = 0;
-    for (u64 i = 0; i + 1 < srcLen && pos < dstCap; i += 2)
+    for (u64 i = 0; i + 1 < src.len && pos < dst.len; i += 2)
     {
-        u8 hi = _hexVal(src[i]);
-        u8 lo = _hexVal(src[i + 1]);
+        u8 hi = (u8)_hexVal(src.ptr[i]);
+        u8 lo = (u8)_hexVal(src.ptr[i + 1]);
         if (hi == 0xFF || lo == 0xFF) return 0;
-        dst[pos++] = (hi << 4) | lo;
+        dst.ptr[pos++] = (hi << 4) | lo;
     }
-    if (srcLen % 2 != 0) return 0;
+    if (src.len % 2 != 0) return 0;
     return pos;
 }
 
-pub bool isValid(const u8* src, u64 len)
+pub bool isValid(std.string.strView src)
 {
-    for (u64 i = 0; i < len; i++)
+    for (u64 i = 0; i < src.len; i++)
     {
-        u8 c = src[i];
+        u8 c = (u8)src.ptr[i];
         bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
         if (!ok) return false;
     }

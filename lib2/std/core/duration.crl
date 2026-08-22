@@ -1,4 +1,3 @@
-@[[no_drop]]
 mod time = import(lib, "std/core/time.crl");
 
 pub struct Duration

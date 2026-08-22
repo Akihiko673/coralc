@@ -175,6 +175,26 @@ pub void diag(strView code, strView filename, strView src, u32 line, u32 col,
         s.pushView(C_RESET);
         s.pushChar('\n');
     }
+    if (code.len > 0)
+    {
+        s.pushChar((char)ESC);
+        s.pushView(C_BOX);
+        s.pushView(strView::fromCstr("  │"));
+        s.pushChar((char)ESC);
+        s.pushView(C_RESET);
+        for (i32 i = 0; i < caretSpaces; i++) s.pushChar(' ');
+        s.pushChar((char)ESC);
+        s.pushView(C_BOX);
+        s.pushView(strView::fromCstr("╰─ "));
+        s.pushChar((char)ESC);
+        s.pushView(strView::fromCstr("[90m"));
+        s.pushView(strView::fromCstr("try `coralc --explain "));
+        s.pushView(code);
+        s.pushView(strView::fromCstr("` for more information"));
+        s.pushChar((char)ESC);
+        s.pushView(C_RESET);
+        s.pushChar('\n');
+    }
 
     libc.write(2, s.asU8(), s.len);
     s.free();
@@ -199,4 +219,33 @@ pub void report(strView filename, strView src, u32 line, u32 col,
                 strView msg, strView ctx)
 {
     reportLevel(filename, src, line, col, LVL_ERROR, msg, ctx);
+}
+
+bool codeEq(strView a, const char* b) {
+    u64 n=0; while(b[n]) n++;
+    if (a.len!=n) return false;
+    for (u64 i=0;i<n;i++) if(a.ptr[i]!= (u8)b[i]) return false;
+    return true;
+}
+pub void explain(strView code)
+{
+    bool found = false;
+    u8 ESC = 27;
+    str.String s = str.String::new();
+    s.pushChar((char)ESC); s.pushView(strView::fromCstr("[1m"));
+    s.pushView(strView::fromCstr("explain: "));
+    s.pushView(code);
+    s.pushChar((char)ESC); s.pushView(strView::fromCstr("[0m")); s.pushChar('\n');
+    if (codeEq(code,"LEX-0001")) { s.pushView(strView::fromCstr("stray token: a character that is not a valid operator or literal. Remove it or use a valid token; try `[[attr]]` for attributes, not `@[...]`. Example: `[[reorder]] struct S {}`\n")); found=true; }
+    else if (codeEq(code,"LEX-0007")) { s.pushView(strView::fromCstr("invalid attribute syntax: `@[...]` and `@name` are rejected at the lexer. Use `[[attr]]` on declarations (e.g. `[[reorder]] struct S {}` or `[[reorder, packed]]`) or `@[[ATTR]]` at module/file level.\n")); found=true; }
+    else if (codeEq(code,"TC-TYPE")) { s.pushView(strView::fromCstr("unknown type: the return type, variable type, or parameter type names an undeclared type. Declare a `struct`, `enum`, `typedef`, `distinct`, or use a primitive: i8/u8/i16/u16/i32/u32/i64/u64/f32/f64/bool/char/void/isize/usize. Example: `i32 foo() {}` not `loo foo()`. Typedef aliases ARE valid as return types because they unwrap to their underlying type.\n")); found=true; }
+    else if (codeEq(code,"TC-RETURN")) { s.pushView(strView::fromCstr("return mismatch covers three cases:\n  1) void function with `return <value>;` — use bare `return;` or change signature to `T func()`.\n  2) non-void function with bare `return;` or falling off the end — add `return <expr>;` on every path. The compiler checks that every non-void function has a return on every path and that `void` functions never return a value.\n  3) value type != declared return type — make them match. `typedef` aliases unwrap and are compatible with their underlying type (MyTypedef -> i32 is OK both ways). `distinct` types are NOT — they require an explicit cast: `return (MyInt)value;` or `return (i32)distinctVal;`.\n")); found=true; }
+    else if (codeEq(code,"TC-ASSIGN")) { s.pushView(strView::fromCstr("assignment requires exact type match. Coral has no implicit conversions (except lossless widening and literal fitting). `distinct` types are never implicitly convertible — use `(T)expr`. `typedef` aliases ARE implicitly convertible to/from their underlying type. Use `--fcast` to force all casts (escape hatch).\n")); found=true; }
+    else if (codeEq(code,"TC-ARGS")) { s.pushView(strView::fromCstr("call argument does not match parameter type. Check arity and types. `distinct` args need `(T)arg`; `typedef` args are interchangeable. Example: `void needI32(i32 x){} distinct MyInt=i32; MyInt m=(MyInt)5; needI32((i32)m);`.\n")); found=true; }
+    if (!found) {
+        s.pushView(strView::fromCstr("No detailed explanation available for this code. Common codes: LEX-0001 stray token, LEX-0007 bad attribute, TC-TYPE unknown type, TC-RETURN void/non-void mismatch, TC-ASSIGN no implicit conversion (distinct needs cast, typedef is OK), TC-ARGS call arg mismatch, SYN-1002/1003 parse errors. Try `coralc --explain LEX-0007` etc.\n"));
+    }
+    s.pushView(strView::fromCstr("\nFor more help, see docs or source: src/typecheck/types.crl and src/error.crl\n"));
+    libc.write(1, s.asU8(), s.len);
+    s.free();
 }

@@ -89,7 +89,7 @@ bool vEqCI(str.strView a, str.strView b)
 
 void printHelp()
 {
-    const u8* h = str.strView::fromCstr("coral - Coral compiler driver\nusage: coral <file.crl> [options]\noptions:\n  -h, --help            show this help\n  --emit-h              emit a C header (declarations only)\n  --emit-ir             emit WallVM IR (not yet implemented)\n  --emit-asm            emit assembly (not yet implemented)\n  --debug               include debug information in output\n  -O0 -O1 -O2 -O3       optimization level (default -O1)\n  --stop-on-error       stop at the first error (default)\n  --continue            keep going after errors\n  --report-all-errors   emit every error found\n  --fcast               force all implicit casts (escape hatch)\n  --flags=k=v[,...]     set platform/arch flags (e.g. platform=LINUX,arch=x86_64)\n").ptr;
+    const u8* h = str.strView::fromCstr("coral - Coral compiler driver\nusage: coral <file.crl> [options]\noptions:\n  -h, --help            show this help\n  --emit-h              emit a C header (declarations only)\n  --emit-ir             emit WallVM IR (not yet implemented)\n  --emit-asm            emit assembly (not yet implemented)\n  --debug               include debug information in output\n  -O0 -O1 -O2 -O3       optimization level (default -O1)\n  --stop-on-error       stop at the first error (default)\n  --continue            keep going after errors\n  --report-all-errors   emit every error found\n  --fcast               force all implicit casts (escape hatch)\n  --flags=k=v[,...]     set platform/arch flags (e.g. platform=LINUX,arch=x86_64)\n  --explain <code>      explain an error code in detail (e.g. --explain TC-RETURN)\n").ptr;
     u64 n = 0; while (h[n]) n++;
     libc.write(1, h, n);
 }
@@ -104,6 +104,18 @@ i32 main(u32 argc, char** argv)
         { printHelp(); return 0; }
         if (a.len == 2 && a.ptr[0]==(u8)'-' && a.ptr[1]==(u8)'h')
         { printHelp(); return 0; }
+    }
+    for (u32 i = 1; i < argc; i++)
+    {
+        str.strView a = str.strView::fromCstr(argv[i]);
+        bool isExplain = a.len>=9 && a.ptr[0]==(u8)'-' && a.ptr[1]==(u8)'-' && a.ptr[2]==(u8)'e' && a.ptr[3]==(u8)'x' && a.ptr[4]==(u8)'p' && a.ptr[5]==(u8)'l' && a.ptr[6]==(u8)'a' && a.ptr[7]==(u8)'i' && a.ptr[8]==(u8)'n';
+        if (isExplain) {
+            str.strView code = str.strView::empty();
+            if (a.len>10 && a.ptr[9]==(u8)'=') code = str.strView::fromParts(a.ptr+10, a.len-10);
+            else if (i+1 < argc) code = str.strView::fromCstr(argv[i+1]);
+            if (code.len==0) { error.explain(str.strView::fromCstr("")); return 0; }
+            error.explain(code); return 0;
+        }
     }
     if (argc < 2)
     {

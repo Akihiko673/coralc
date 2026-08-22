@@ -1,11 +1,5 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod string = import(lib, "std/text/string.crl");
-mod mman = import(lib, "std/memory/mman.crl");
+mod string = import(lib, "std/text/std.string.crl");
+mod mman = import(lib, "std/memory/std.mman.crl");
 
 const u8* _TABLE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -29,13 +23,13 @@ pub u64 encode(const u8* src, u64 srcLen, u8* dst, u64 dstCap)
     return pos;
 }
 
-pub string.String encodeToString(const u8* src, u64 srcLen)
+pub std.string.String encodeToString(const u8* src, u64 srcLen)
 {
     u64 cap = ((srcLen + 2) / 3) * 4;
-    u8* buf = mman.alloc<u8>(cap);
+    u8* buf = std.mman.alloc<u8>(cap);
     u64 n = encode(src, srcLen, buf, cap);
-    string.String s = string.String::fromView(string.strView::fromParts((const char*)buf, n));
-    mman.dealloc<u8>(buf);
+    std.string.String s = std.string.String::fromView(std.string.strView::fromParts((const char*)buf, n));
+    std.mman.dealloc<u8>(buf);
     return s;
 }
 

@@ -204,7 +204,7 @@ types.CType* typeIdent(Typer* t, str.strView name, u32 line, u32 col)
                 return scopes.opaqueType(name, line, col);
             }
         }
-        errTwoStr(t, line, col, "TC-RESOLVE", "unresolved name '", name, "'", str.strView::empty(), "", str.strView::empty());
+        errTwoStr(t, line, col, "TC-RESOLVE", "unresolved name '", name, "'", str.strView::empty(), "", str.strView::fromCstr("declare it, check spelling, or import the defining module"));
         return scopes.opaqueType(name, line, col);
     }
     scopes.symMarkUsed(s);
@@ -274,7 +274,7 @@ void checkArgsFrom(Typer* t, ast.Expr* call, types.CType* sig, bool slotPresent,
         pushUInt(&msg, expected);
         msg.pushView(str.strView::fromCstr(expected == 1 ? " argument, found " : " arguments, found "));
         pushUInt(&msg, written);
-        errAt(t, call->line, call->col, "TC-ARGS", str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
+        errAt(t, call->line, call->col, "TC-ARGS", str.strView::fromParts(msg.ptr, msg.len), str.strView::fromCstr("adjust the call to match the callee's parameter list"));
         msg.free();
         return;
     }
@@ -298,7 +298,7 @@ void checkArgsFrom(Typer* t, ast.Expr* call, types.CType* sig, bool slotPresent,
             msg.pushView(str.strView::fromCstr("', expected '"));
             msg.pushView(types.typeName(pt));
             msg.pushView(str.strView::fromCstr("' (no implicit conversion)"));
-            errAt(t, call->args[i]->line, call->args[i]->col, "TC-ARGS", str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
+            errAt(t, call->args[i]->line, call->args[i]->col, "TC-ARGS", str.strView::fromParts(msg.ptr, msg.len), str.strView::fromCstr("adjust the call to match the callee's parameter list"));
             msg.free();
         }
     }
@@ -689,7 +689,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                         return pmsig->ret;
                     }
                 }
-                errTwoStr(t, callee->line, callee->col, "TC-MEMBER", "no such static member '", callee->text, "'", str.strView::empty(), "", str.strView::empty());
+                errTwoStr(t, callee->line, callee->col, "TC-MEMBER", "no such static member '", callee->text, "'", str.strView::empty(), "", str.strView::fromCstr("check the struct/enum definition for available members"));
                 typeArgsOnce(t, call);
                 return scopes.opaqueType(str.strView::empty(), call->line, call->col);
             }
@@ -778,7 +778,7 @@ types.CType* typeCall(Typer* t, ast.Expr* callee, ast.Expr* call)
                 checkArgs(t, call, bsig, false);
                 return bsig->ret;
             }
-            errTwoStr(t, callee->line, callee->col, "TC-RESOLVE", "unresolved callee '", callee->text, "'", str.strView::empty(), "", str.strView::empty());
+            errTwoStr(t, callee->line, callee->col, "TC-RESOLVE", "unresolved callee '", callee->text, "'", str.strView::empty(), "", str.strView::fromCstr("declare it, check spelling, or import the defining module"));
         }
         typeArgsOnce(t, call);
         return scopes.opaqueType(str.strView::empty(), call->line, call->col);
@@ -802,7 +802,7 @@ bool indexPathInBounds(Typer* t, ast.Expr* idx, types.CType* arr)
     u64 iv = 0;
     if (arr->count == 0)
     {
-        errAt(t, idx->line, idx->col, "TC-INDEX", str.strView::fromCstr("index out of bounds: fixed array has no elements"), str.strView::empty());
+        errAt(t, idx->line, idx->col, "TC-INDEX", str.strView::fromCstr("index out of bounds: fixed array has no elements"), str.strView::fromCstr("index must be within the array bounds"));
         return false;
     }
     if (!scopes.countFold(idx, &iv)) return true; // runtime index
@@ -813,7 +813,7 @@ bool indexPathInBounds(Typer* t, ast.Expr* idx, types.CType* arr)
         pushUInt(&msg, iv);
         msg.pushView(str.strView::fromCstr(" out of bounds for fixed array of length "));
         pushUInt(&msg, arr->count);
-        errAt(t, idx->line, idx->col, "TC-EXPR", str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
+        errAt(t, idx->line, idx->col, "TC-EXPR", str.strView::fromParts(msg.ptr, msg.len), str.strView::fromCstr("fix the expression to match the expected type"));
         msg.free();
         return false;
     }
@@ -887,7 +887,7 @@ types.CType* typeExprImpl(Typer* t, ast.Expr* e)
                 types.CType* x = typeExpr(t, e->a);
                 if (x != null && !types.isNumeric(x) && x->kind != types.TY_UNKNOWN)
                 {
-                    errAt(t, e->line, e->col, "TC-ARITH", str.strView::fromCstr("unary '-/+' applied to non-numeric value"), str.strView::empty());
+                    errAt(t, e->line, e->col, "TC-ARITH", str.strView::fromCstr("unary '-/+' applied to non-numeric value"), str.strView::fromCstr("use numeric types or add an explicit cast"));
                 }
                 return x != null ? x : scopes.opaqueType(str.strView::empty(), e->line, e->col);
             }
@@ -896,7 +896,7 @@ types.CType* typeExprImpl(Typer* t, ast.Expr* e)
                 types.CType* x = typeExpr(t, e->a);
                 if (x != null && !types.isTruthyType(x))
                 {
-                    errAt(t, e->line, e->col, "TC-COND", str.strView::fromCstr("logical '!' applied to non-bool value"), str.strView::empty());
+                    errAt(t, e->line, e->col, "TC-COND", str.strView::fromCstr("logical '!' applied to non-bool value"), str.strView::fromCstr("condition must be bool; use a comparison"));
                 }
                 types.CType* b = mman.alloc<types.CType>(1);
                 b->kind = types.TY_BOOL;
@@ -907,7 +907,7 @@ types.CType* typeExprImpl(Typer* t, ast.Expr* e)
                 types.CType* x = typeExpr(t, e->a);
                 if (x != null && x->kind != types.TY_INT && x->kind != types.TY_CHAR && x->kind != types.TY_UNKNOWN)
                 {
-                    errAt(t, e->line, e->col, "TC-ARITH", str.strView::fromCstr("bitwise '~' applied to non-integer value"), str.strView::empty());
+                    errAt(t, e->line, e->col, "TC-ARITH", str.strView::fromCstr("bitwise '~' applied to non-integer value"), str.strView::fromCstr("use numeric types or add an explicit cast"));
                 }
                 return x != null && (x->kind == types.TY_INT || x->kind == types.TY_CHAR)
                     ? x : scopes.opaqueType(str.strView::empty(), e->line, e->col);
@@ -948,7 +948,7 @@ types.CType* typeExprImpl(Typer* t, ast.Expr* e)
             types.CType* c = typeExpr(t, e->a);
             if (c != null && !types.isTruthyType(c))
             {
-                errAt(t, e->a->line, e->a->col, "TC-COND", str.strView::fromCstr("ternary condition is not boolean"), str.strView::empty());
+                errAt(t, e->a->line, e->a->col, "TC-COND", str.strView::fromCstr("ternary condition is not boolean"), str.strView::fromCstr("condition must be bool; use a comparison"));
             }
             types.CType* b = typeExpr(t, e->b);
             types.CType* cc = typeExpr(t, e->c);
@@ -1097,9 +1097,9 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
     if (strEq2(op, "&&") || strEq2(op, "||"))
     {
         if (l != null && !types.isTruthyType(l))
-            errAt(t, e->a->line, e->a->col, "TC-COND", str.strView::fromCstr("logical operand is not boolean"), str.strView::empty());
+            errAt(t, e->a->line, e->a->col, "TC-COND", str.strView::fromCstr("logical operand is not boolean"), str.strView::fromCstr("condition must be bool; use a comparison"));
         if (r != null && !types.isTruthyType(r))
-            errAt(t, e->b->line, e->b->col, "TC-COND", str.strView::fromCstr("logical operand is not boolean"), str.strView::empty());
+            errAt(t, e->b->line, e->b->col, "TC-COND", str.strView::fromCstr("logical operand is not boolean"), str.strView::fromCstr("condition must be bool; use a comparison"));
         types.CType* b = mman.alloc<types.CType>(1);
         b->kind = types.TY_BOOL;
         return b;
@@ -1123,7 +1123,7 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
             else if (types.comparable(le, re)) ok = true;
             if (!ok)
             {
-                errTwoStr(t, e->line, e->col, "TC-EXPR", "cannot compare '", types.typeName(le), "' and '", types.typeName(re), "'", str.strView::empty());
+                errTwoStr(t, e->line, e->col, "TC-EXPR", "cannot compare '", types.typeName(le), "' and '", types.typeName(re), "'", str.strView::fromCstr("fix the expression to match the expected type"));
             }
         }
         types.CType* b = mman.alloc<types.CType>(1);
@@ -1146,9 +1146,9 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
         if (isShift)
         {
             if (re->kind != types.TY_INT && re->kind != types.TY_CHAR && re->kind != types.TY_UNKNOWN)
-                errAt(t, e->b->line, e->b->col, "TC-ARITH", str.strView::fromCstr("shift amount is not an integer"), str.strView::empty());
+                errAt(t, e->b->line, e->b->col, "TC-ARITH", str.strView::fromCstr("shift amount is not an integer"), str.strView::fromCstr("use numeric types or add an explicit cast"));
             if (le->kind == types.TY_INT || le->kind == types.TY_CHAR) return le;
-            errAt(t, e->a->line, e->a->col, "TC-ARITH", str.strView::fromCstr("shifted value is not an integer"), str.strView::empty());
+            errAt(t, e->a->line, e->a->col, "TC-ARITH", str.strView::fromCstr("shifted value is not an integer"), str.strView::fromCstr("use numeric types or add an explicit cast"));
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
         }
         if (isBit)
@@ -1160,7 +1160,7 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
             {
                 return le->kind == types.TY_INT ? le : re;
             }
-            errAt(t, e->line, e->col, "TC-ARITH", str.strView::fromCstr("bitwise operator on non-integer operand"), str.strView::empty());
+            errAt(t, e->line, e->col, "TC-ARITH", str.strView::fromCstr("bitwise operator on non-integer operand"), str.strView::fromCstr("use numeric types or add an explicit cast"));
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
         }
         if (isArith)
@@ -1188,7 +1188,7 @@ types.CType* typeBinary(Typer* t, ast.Expr* e)
                 diff->isSigned = true;
                 return diff;
             }
-            errTwoStr(t, e->line, e->col, "TC-EXPR", "arithmetic on incompatible operands '", types.typeName(le), "' and '", types.typeName(re), "'", str.strView::empty());
+            errTwoStr(t, e->line, e->col, "TC-EXPR", "arithmetic on incompatible operands '", types.typeName(le), "' and '", types.typeName(re), "'", str.strView::fromCstr("fix the expression to match the expected type"));
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
         }
     }
@@ -1244,7 +1244,7 @@ types.CType* typeMember(Typer* t, ast.Expr* e)
                     return scopes.symTypeFromName(so, obj->text, e->line, e->col);
                 }
             }
-            errTwoStr(t, e->line, e->col, "TC-ENUM", "no such variant '", mem, "' in enum", str.strView::empty(), "", str.strView::empty());
+            errTwoStr(t, e->line, e->col, "TC-ENUM", "no such variant '", mem, "' in enum", str.strView::empty(), "", str.strView::fromCstr("check the enum definition for variant names"));
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
         }
     }
@@ -1261,7 +1261,7 @@ types.CType* typeMember(Typer* t, ast.Expr* e)
                 types.CType* ft = scopes.resolveTypeExpr(f->type, t->top, t->mods, t->gnames, t->ng);
                 return ft != null ? ft : scopes.opaqueType(str.strView::empty(), e->line, e->col);
             }
-            errTwoStr(t, e->line, e->col, "TC-STRUCT", "struct '", mb->decl->name, "' has no member named '", mem, "'", str.strView::empty());
+            errTwoStr(t, e->line, e->col, "TC-STRUCT", "struct '", mb->decl->name, "' has no member named '", mem, "'", str.strView::fromCstr("check the struct definition for field names and types"));
             return scopes.opaqueType(str.strView::empty(), e->line, e->col);
         }
         if (mb->decl->kind == ast.DT_ENUM)
@@ -1300,7 +1300,7 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
                 ast.StructField* f = scopes.findField(target->decl, fname);
                 if (f == null)
                 {
-                    errTwoStr(t, val->line, val->col, "TC-STRUCT", "struct '", target->decl->name, "' has no field '", fname, "'", str.strView::empty());
+                    errTwoStr(t, val->line, val->col, "TC-STRUCT", "struct '", target->decl->name, "' has no field '", fname, "'", str.strView::fromCstr("check the struct definition for field names and types"));
                     typeExpr(t, val);
                     continue;
                 }
@@ -1308,11 +1308,11 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
                 types.CType* ft = scopes.resolveTypeExpr(f->type, t->top, t->mods, t->gnames, t->ng);
                 if (ft != null && !types.assignable(ft, vt, val->kind, val->text) && !types.constFitsExpr(val, ft))
                 {
-                    errTwoStr(t, val->line, val->col, "TC-STRUCT", "field '", fname, "' expects '", types.typeName(ft), "' but got '", str.strView::empty());
+                    errTwoStr(t, val->line, val->col, "TC-STRUCT", "field '", fname, "' expects '", types.typeName(ft), "' but got '", str.strView::fromCstr("check the struct definition for field names and types"));
                     str.String tail = str.String::new();
                     tail.pushView(types.typeName(vt));
                     tail.pushView(str.strView::fromCstr("' (no implicit conversion)"));
-                    errAt(t, val->line, val->col, "TC-EXPR", str.strView::fromParts(tail.ptr, tail.len), str.strView::empty());
+                    errAt(t, val->line, val->col, "TC-EXPR", str.strView::fromParts(tail.ptr, tail.len), str.strView::fromCstr("fix the expression to match the expected type"));
                     tail.free();
                 }
             }
@@ -1325,7 +1325,7 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
                 ast.Expr* val = e->args[i];
                 if (i >= target->decl->nfields)
                 {
-                    errAt(t, val->line, val->col, "TC-EXPR", str.strView::fromCstr("too many fields in struct literal"), str.strView::empty());
+                    errAt(t, val->line, val->col, "TC-EXPR", str.strView::fromCstr("too many fields in struct literal"), str.strView::fromCstr("fix the expression to match the expected type"));
                     typeExpr(t, val);
                     continue;
                 }
@@ -1334,11 +1334,11 @@ types.CType* typeInit(Typer* t, ast.Expr* e)
                 types.CType* ft = scopes.resolveTypeExpr(f.type, t->top, t->mods, t->gnames, t->ng);
                 if (ft != null && !types.assignable(ft, vt, val->kind, val->text) && !types.constFitsExpr(val, ft))
                 {
-                    errTwoStr(t, val->line, val->col, "TC-STRUCT", "field '", f.name, "' expects '", types.typeName(ft), "' but got '", str.strView::empty());
+                    errTwoStr(t, val->line, val->col, "TC-STRUCT", "field '", f.name, "' expects '", types.typeName(ft), "' but got '", str.strView::fromCstr("check the struct definition for field names and types"));
                     str.String tail = str.String::new();
                     tail.pushView(types.typeName(vt));
                     tail.pushView(str.strView::fromCstr("' (no implicit conversion)"));
-                    errAt(t, val->line, val->col, "TC-EXPR", str.strView::fromParts(tail.ptr, tail.len), str.strView::empty());
+                    errAt(t, val->line, val->col, "TC-EXPR", str.strView::fromParts(tail.ptr, tail.len), str.strView::fromCstr("fix the expression to match the expected type"));
                     tail.free();
                 }
             }
@@ -1369,7 +1369,7 @@ void popBlock(Typer* t, bool reportUnused)
             Sym* sm = s->syms[i];
             if (sm->kind == scopes.SYM_LOCAL && !sm->used)
             {
-                errTwoStr(t, sm->line, sm->col, "TC-UNUSED", "unused variable '", sm->name, "'", str.strView::empty(), "", str.strView::empty());
+                errTwoStr(t, sm->line, sm->col, "TC-UNUSED", "unused variable '", sm->name, "'", str.strView::empty(), "", str.strView::fromCstr("remove it or prefix with _"));
             }
         }
     }
@@ -1383,7 +1383,7 @@ void declareLocal(Typer* t, str.strView name, types.CType* type, u32 line, u32 c
     s->type = type;
     if (!scopes.scopeDeclare(t->fnScope, s))
     {
-        errTwoStr(t, line, col, "TC-REDECL", "redeclaration of local variable '", name, "'", str.strView::empty(), "", str.strView::empty());
+        errTwoStr(t, line, col, "TC-REDECL", "redeclaration of local variable '", name, "'", str.strView::empty(), "", str.strView::fromCstr("rename or remove the duplicate local"));
     }
 }
 
@@ -1593,7 +1593,9 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
                 it = typeExpr(t, s->a);
                 if (at != null && it != null && !types.assignable(at, it, s->a->kind, s->a->text) && !types.constFitsExpr(s->a, at))
                 {
-                    errTwoStr(t, s->line, s->col, "TC-ASSIGN", "cannot assign '", types.typeName(it), "' to variable of type '", types.typeName(at), "' (no implicit conversion)", str.strView::empty());
+                    bool isDistinct = (at->kind==types.TY_NAMED && at->decl!=null && at->decl->kind==ast.DT_DISTINCT) || (it->kind==types.TY_NAMED && it->decl!=null && it->decl->kind==ast.DT_DISTINCT);
+                    if (isDistinct) errTwoStr(t, s->line, s->col, "TC-ASSIGN", "cannot assign '", types.typeName(it), "' to variable of type '", types.typeName(at), "' (no implicit conversion)", str.strView::fromCstr("distinct types require an explicit cast like `(T)value`; typedef aliases are compatible"));
+                    else errTwoStr(t, s->line, s->col, "TC-ASSIGN", "cannot assign '", types.typeName(it), "' to variable of type '", types.typeName(at), "' (no implicit conversion)", str.strView::fromCstr("types must match exactly; add an explicit cast like `(T)expr` or use --fcast"));
                 }
             }
             types.CType* vt = at != null ? at : it;
@@ -1612,22 +1614,22 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
                 {
                     if (!types.assignable(t->retType, v, s->a->kind, s->a->text) && !types.constFitsExpr(s->a, t->retType))
                     {
-                        errTwoStr(t, s->line, s->col, "TC-RETURN", "cannot return '", types.typeName(v), "' from function returning '", types.typeName(t->retType), "'", str.strView::empty());
+                        errTwoStr(t, s->line, s->col, "TC-RETURN", "cannot return '", types.typeName(v), "' from function returning '", types.typeName(t->retType), "'", str.strView::fromCstr("typedef aliases are compatible with their underlying type; distinct types need an explicit cast like `(T)value`"));
                     }
                 }
                 else if (t->retType != null && t->retType->kind == types.TY_VOID)
                 {
-                    errAt(t, s->line, s->col, "TC-RETURN", str.strView::fromCstr("void function cannot return a value"), str.strView::empty());
+                    errAt(t, s->line, s->col, "TC-RETURN", str.strView::fromCstr("void function cannot return a value"), str.strView::fromCstr("void functions must use bare `return;` with no value — remove the value or change the signature to `T func()`"));
                 }
             }
             else if (t->retType != null && t->retType->kind != types.TY_VOID
                      && t->retType->kind != types.TY_UNKNOWN)
             {
                 str.String msg = str.String::new();
-                msg.pushView(str.strView::fromCstr("function must return a value of type '"));
+                msg.pushView(str.strView::fromCstr("non-void function must return a value of type '"));
                 msg.pushView(types.typeName(t->retType));
-                msg.pushView(str.strView::fromCstr("'"));
-                errAt(t, s->line, s->col, "TC-EXPR", str.strView::fromParts(msg.ptr, msg.len), str.strView::empty());
+                msg.pushView(str.strView::fromCstr("' but found bare `return;`"));
+                errAt(t, s->line, s->col, "TC-RETURN", str.strView::fromParts(msg.ptr, msg.len), str.strView::fromCstr("add `return <expr>;` with a value of the declared type, or change the function to `void`"));
                 msg.free();
             }
             break;
@@ -1652,7 +1654,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
                 types.CType* c = typeExpr(t, s->a);
                 if (c != null && !types.isTruthyType(c))
                 {
-                    errAt(t, s->a->line, s->a->col, "TC-EXPR", str.strView::fromCstr("if condition is not boolean"), str.strView::empty());
+                    errAt(t, s->a->line, s->a->col, "TC-EXPR", str.strView::fromCstr("if condition is not boolean"), str.strView::fromCstr("fix the expression to match the expected type"));
                 }
             }
             typeStmt(t, s->body);
@@ -1668,7 +1670,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
                 types.CType* c = typeExpr(t, s->a);
                 if (c != null && !types.isTruthyType(c))
                 {
-                    errAt(t, s->a->line, s->a->col, "TC-EXPR", str.strView::fromCstr("while condition is not boolean"), str.strView::empty());
+                    errAt(t, s->a->line, s->a->col, "TC-EXPR", str.strView::fromCstr("while condition is not boolean"), str.strView::fromCstr("fix the expression to match the expected type"));
                 }
             }
             pushBlock(t, str.strView::fromCstr("loop"));
@@ -1686,7 +1688,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
                 types.CType* c = typeExpr(t, s->b);
                 if (c != null && !types.isTruthyType(c))
                 {
-                    errAt(t, s->b->line, s->b->col, "TC-EXPR", str.strView::fromCstr("for condition is not boolean"), str.strView::empty());
+                    errAt(t, s->b->line, s->b->col, "TC-EXPR", str.strView::fromCstr("for condition is not boolean"), str.strView::fromCstr("fix the expression to match the expected type"));
                 }
             }
             if (s->c != null) typeExpr(t, s->c);
@@ -1726,7 +1728,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
             types.CType* c = typeExpr(t, s->a);
             if (c != null && c->kind != types.TY_BOOL && c->kind != types.TY_UNKNOWN)
             {
-                errAt(t, s->a->line, s->a->col, "TC-COND", str.strView::fromCstr("assert condition is not boolean"), str.strView::empty());
+                errAt(t, s->a->line, s->a->col, "TC-COND", str.strView::fromCstr("assert condition is not boolean"), str.strView::fromCstr("condition must be bool; use a comparison"));
             }
             break;
         }
@@ -1748,7 +1750,7 @@ bool comptimeEvalCond(Typer* t, ast.Expr* e, bool* val)
                         && !types.assignable(subj, cv, sc->value->kind, sc->value->text)
                         && !types.constFitsExpr(sc->value, subj))
                     {
-                        errAt(t, sc->value->line, sc->value->col, "TC-SWITCH", str.strView::fromCstr("case value type does not match switch subject"), str.strView::empty());
+                        errAt(t, sc->value->line, sc->value->col, "TC-SWITCH", str.strView::fromCstr("case value type does not match switch subject"), str.strView::fromCstr("case value must have the same type as the switch subject"));
                     }
                 }
                 pushBlock(t, str.strView::fromCstr("case"));
@@ -1902,6 +1904,10 @@ pub void typeFunction(Typer* t, ast.Decl* d)
     t->retType = d->type != null
         ? scopes.resolveTypeExpr(d->type, t->top, t->mods, d->generics, d->ngenerics)
         : scopes.opaqueType(str.strView::empty(), d->line, d->col);
+    if (t->retType != null && t->retType->kind == types.TY_UNKNOWN && t->retType->name.len > 0)
+    {
+        errTwoStr(t, d->line, d->col, "TC-TYPE", "unknown return type '", t->retType->name, "'", str.strView::empty(), "", str.strView::fromCstr("declare the type or use a primitive like i32, i64, f64, bool, void, char, usize"));
+    }
     t->gnames = d->generics;
     t->ng = d->ngenerics;
 
@@ -1926,7 +1932,7 @@ pub void typeFunction(Typer* t, ast.Decl* d)
         self->used = true;
         if (!scopes.scopeDeclare(t->fnScope, self))
         {
-            errAt(t, d->line, d->col, "TC-EXPR", str.strView::fromCstr("duplicate self parameter"), str.strView::empty());
+            errAt(t, d->line, d->col, "TC-EXPR", str.strView::fromCstr("duplicate self parameter"), str.strView::fromCstr("fix the expression to match the expected type"));
         }
     }
     for (u32 i = 0; i < d->nparams; i++)
@@ -1962,11 +1968,38 @@ pub void typeFunction(Typer* t, ast.Decl* d)
         }
         if (!scopes.scopeDeclare(t->fnScope, s))
         {
-            errTwoStr(t, d->line, d->col, "TC-DUP", "duplicate parameter '", s->name, "'", str.strView::empty(), "", str.strView::empty());
+            errTwoStr(t, d->line, d->col, "TC-DUP", "duplicate parameter '", s->name, "'", str.strView::empty(), "", str.strView::fromCstr("rename or remove the duplicate"));
         }
     }
 
     typeStmt(t, d->body);
+    if (t->retType != null && t->retType->kind != types.TY_VOID && t->retType->kind != types.TY_UNKNOWN)
+    {
+        bool hasRet = false;
+        if (d->body != null)
+        {
+            if (d->body->kind == ast.ST_BLOCK) {
+                for (u32 _ri=0; _ri<d->body->nstmts; _ri++) if (d->body->stmts[_ri]!=null && d->body->stmts[_ri]->kind==ast.ST_RETURN) {hasRet=true; break;}
+                if (!hasRet) for (u32 _ri=0; _ri<d->body->nstmts; _ri++) {
+                    ast.Stmt* _s=d->body->stmts[_ri];
+                    if (_s!=null && _s->kind==ast.ST_IF) {
+                        if (_s->body!=null && _s->body->kind==ast.ST_BLOCK) for(u32 _k=0;_k<_s->body->nstmts;_k++) if(_s->body->stmts[_k]!=null && _s->body->stmts[_k]->kind==ast.ST_RETURN) hasRet=true;
+                        if (_s->body2!=null && _s->body2->kind==ast.ST_BLOCK) for(u32 _k=0;_k<_s->body2->nstmts;_k++) if(_s->body2->stmts[_k]!=null && _s->body2->stmts[_k]->kind==ast.ST_RETURN) hasRet=true;
+                    }
+                }
+            } else if (d->body->kind==ast.ST_RETURN) hasRet=true;
+        }
+        if (!hasRet) {
+            str.String _m = str.String::new();
+            _m.pushView(str.strView::fromCstr("non-void function '"));
+            _m.pushView(d->name);
+            _m.pushView(str.strView::fromCstr("' must return a value of type '"));
+            _m.pushView(types.typeName(t->retType));
+            _m.pushView(str.strView::fromCstr("'"));
+            errAt(t, d->line, d->col, "TC-RETURN", str.strView::fromParts(_m.ptr,_m.len), str.strView::fromCstr("add a return statement on every path, or change the return type to void"));
+            _m.free();
+        }
+    }
     Scope* fs = t->fnScope;
     if (fs != null && t->warnUnused)
     {
@@ -1975,7 +2008,7 @@ pub void typeFunction(Typer* t, ast.Decl* d)
             Sym* sm = fs->syms[i];
             if (sm->kind == scopes.SYM_LOCAL && !sm->used)
             {
-                errTwoStr(t, sm->line, sm->col, "TC-UNUSED", "unused variable '", sm->name, "'", str.strView::empty(), "", str.strView::empty());
+                errTwoStr(t, sm->line, sm->col, "TC-UNUSED", "unused variable '", sm->name, "'", str.strView::empty(), "", str.strView::fromCstr("remove it or prefix with _"));
             }
         }
     }

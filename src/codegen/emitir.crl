@@ -34,6 +34,31 @@ struct FuncGen
 str.strView flagValueEmit(FuncGen* fg, str.strView name)
 {
     for (u32 i = 0; i < fg.nflags; i++) if (strEq(fg.flagNames[i], name)) return fg.flagVals[i];
+    for (u32 i = 0; i < fg.nflags; i++) {
+        if (fg.flagNames[i].len == name.len) {
+            bool eq = true;
+            for (u32 k = 0; k < name.len; k++) {
+                u8 a = fg.flagNames[i].ptr[k]; if (a >= 'A' && a <= 'Z') a = a + 32;
+                u8 b = name.ptr[k]; if (b >= 'A' && b <= 'Z') b = b + 32;
+                if (a != b) { eq = false; break; }
+            }
+            if (eq) return fg.flagVals[i];
+        }
+    }
+    if (fg.nflags == 0) {
+        if (name.len==8) {
+            bool isPlatform=true;
+            const char* p="platform";
+            for(u32 k=0;k<8;k++){u8 a=name.ptr[k]; if(a>='A'&&a<='Z') a+=32; if(a!=(u8)p[k]){isPlatform=false;break;}}
+            if(isPlatform) return str.strView::fromCstr("LINUX");
+        }
+        if (name.len==4) {
+            bool isArch=true;
+            const char* p="arch";
+            for(u32 k=0;k<4;k++){u8 a=name.ptr[k]; if(a>='A'&&a<='Z') a+=32; if(a!=(u8)p[k]){isArch=false;break;}}
+            if(isArch) return str.strView::fromCstr("x86_64");
+        }
+    }
     return str.strView::empty();
 }
 
@@ -1192,7 +1217,8 @@ void dumpIR(ir_types.IrModule* irMod, void* f)
     {
         ir_types.IrFunc* fn = irMod.funcs[i];
         const char* fnName = fn.base.name ? fn.base.name : "anon";
-        libc.fwrite((u8*)"func @",1,6,f);
+        if (fn.isExtern) libc.fwrite((u8*)"extern func @",1,12,f);
+        else libc.fwrite((u8*)"func @",1,6,f);
         u64 l=0; while(fnName[l]) l++; libc.fwrite((u8*)fnName,1,l,f);
         const char* rt = fn.retType ? ir_types.irTypeStr(fn.retType) : "void";
         libc.fwrite((u8*)" -> ",1,4,f);
@@ -1361,6 +1387,34 @@ pub ir_types.IrModule* buildModule(ast.Program* prog, scopes.Scope* top,
             str.strView sel = str.strView::empty();
             // flag values are not directly available in emitIR's prog, but check.crl already expanded DT_FLAG for top-level,
             // so this case should not occur if check expanded. Keep as fallback: emit nothing.
+            continue;
+        }
+        if (d->kind == ast.DT_EXTERN)
+        {
+            const char* ename = null;
+            char eb[256]; u32 el = 0;
+            for (u32 k = 0; k < d->name.len && el < 255; k++) eb[el++] = (char)d->name.ptr[k];
+            eb[el]=0; ename = eb;
+            if (el==0) continue;
+            FuncGen tfg; tfg.ctx = ctx; tfg.top = top; tfg.mods = mods;
+            types.CType* eret = d->type ? scopes.resolveTypeExpr(d->type, top, mods, null, 0) : null;
+            ir_types.IrType* ert = eret ? mapCType(&tfg, eret) : ctx.tyVoid();
+            u32 enps = d->nparams;
+            ir_types.IrType** epTys = null;
+            if (enps > 0) {
+                epTys = mman.alloc<ir_types.IrType*>(enps);
+                for (u32 p = 0; p < enps; p++)
+                    epTys[p] = d->params[p].type ? mapCType(&tfg, scopes.resolveTypeExpr(d->params[p].type, top, mods, null, 0)) : ctx.tyInt(64);
+            }
+            ir_types.IrFunc* efn = ctx.createFunc(ename, ert, epTys, enps);
+            efn.isExtern = true;
+            if (d->cc.len > 0) {
+                char* ccCopy = mman.alloc<char>(d->cc.len + 1);
+                for (u32 k = 0; k < d->cc.len; k++) ccCopy[k] = (char)d->cc.ptr[k];
+                ccCopy[d->cc.len]=0;
+                efn.externLib = ccCopy;
+            }
+            irMod.addFunc(efn);
             continue;
         }
         if (d->kind != ast.DT_FUNC) continue;

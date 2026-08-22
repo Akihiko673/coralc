@@ -1051,6 +1051,19 @@ pub struct Parser
             ptrConst = false;
         }
 
+        ast.Expr* arrSizes[16];
+        u32 narr = 0;
+        while (self.check(tok.T_LBRACKET) && narr < 16)
+        {
+            self.advance();
+            ast.Expr* sz = null;
+            if (!self.check(tok.T_RBRACKET)) sz = self.parseExpr();
+            self.expect(tok.T_RBRACKET);
+            arrSizes[narr++] = sz;
+        }
+        for (u32 ai = narr; ai > 0; ai--)
+            base = self.typeWrapArr(base, arrSizes[ai-1], tok0->row, tok0->col);
+
         if (self.check(tok.T_LPAREN) && base != null
             && !(base->kind == ast.TYP_GENERIC && self.gtgtConsumed))
         {

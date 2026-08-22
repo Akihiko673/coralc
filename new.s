@@ -1,0 +1,1 @@
+; wallvm irCompileAsm failed

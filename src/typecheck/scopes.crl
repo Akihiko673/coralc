@@ -495,6 +495,7 @@ types.CType* symTypeFromName(Sym* s, str.strView name, u32 line, u32 col)
         t->name = name;
         t->line = line;
         t->col = col;
+        if (s->kind == SYM_TYPEDEF && s->type != null) t->elem = s->type->elem;
         return t;
     }
     return opaqueType(name, line, col);

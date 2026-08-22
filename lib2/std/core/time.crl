@@ -1,4 +1,4 @@
-mod libc = import(lib, "std/platform/libc.crl");
+mod std = import(lib, "std");
 
 constexpr i32 CLOCK_MONOTONIC = 1;
 
@@ -17,27 +17,27 @@ pub struct Timeval
 pub Timespec nowMonotonic()
 {
     Timespec ts;
-    libc.clock_gettime(CLOCK_MONOTONIC, &ts);
+    std.platform.libc.clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts;
 }
 
 pub Timespec nowRealtime()
 {
     Timespec ts;
-    libc.clock_gettime(0, &ts);
+    std.platform.libc.clock_gettime(0, &ts);
     return ts;
 }
 
 pub Timeval nowTimeval()
 {
     Timeval tv;
-    libc.gettimeofday(&tv, null);
+    std.platform.libc.gettimeofday(&tv, null);
     return tv;
 }
 
 pub u64 unixSeconds()
 {
-    return libc.time(null);
+    return std.platform.libc.time(null);
 }
 
 pub Timespec addTimespec(Timespec a, Timespec b)
@@ -81,5 +81,5 @@ pub void sleepMs(u64 ms)
     Timespec ts;
     ts.sec = (i64)(ms / 1000u);
     ts.nsec = (i64)((ms % 1000u) * 1000000u);
-    libc.nanosleep(&ts, null);
+    std.platform.libc.nanosleep(&ts, null);
 }
