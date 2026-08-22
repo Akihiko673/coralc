@@ -1,11 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod string = import(lib, "std/text/string.crl");
+mod std = import(lib, "std");
 
 const u64 TRIE_FANOUT = 256;
 
@@ -40,17 +33,17 @@ pub struct trie
         if (node == null) return;
         for (u64 i = 0; i < TRIE_FANOUT; i++)
             self._disposeNode(node->children[i]);
-        mman.dealloc<TrieNode>(node);
+        std.mman.dealloc<TrieNode>(node);
     }
 
     u64 size() { return self.count; }
     bool isEmpty() { return self.count == 0; }
 
-    void insert(strView key)
+    void insert(std.string.strView key)
     {
         if (self.root == null)
         {
-            self.root = mman.alloc<TrieNode>(1);
+            self.root = std.mman.alloc<TrieNode>(1);
             for (u64 i = 0; i < TRIE_FANOUT; i++) self.root->children[i] = null;
             self.root->isEnd = false;
         }
@@ -60,7 +53,7 @@ pub struct trie
             u64 idx = (u64)(u8)key.ptr[i];
             if (cur->children[idx] == null)
             {
-                cur->children[idx] = mman.alloc<TrieNode>(1);
+                cur->children[idx] = std.mman.alloc<TrieNode>(1);
                 for (u64 j = 0; j < TRIE_FANOUT; j++) cur->children[idx]->children[j] = null;
                 cur->children[idx]->isEnd = false;
             }
@@ -69,7 +62,7 @@ pub struct trie
         if (!cur->isEnd) { cur->isEnd = true; self.count++; }
     }
 
-    bool contains(strView key)
+    bool contains(std.string.strView key)
     {
         TrieNode* cur = self.root;
         if (cur == null) return false;
@@ -82,7 +75,7 @@ pub struct trie
         return cur->isEnd;
     }
 
-    bool startsWith(strView prefix)
+    bool startsWith(std.string.strView prefix)
     {
         TrieNode* cur = self.root;
         if (cur == null) return false;
@@ -95,13 +88,13 @@ pub struct trie
         return true;
     }
 
-    bool remove(strView key)
+    bool remove(std.string.strView key)
     {
         if (self.root == null) return false;
         return self._remove(self.root, key, 0);
     }
 
-    bool _remove(TrieNode* node, strView key, u64 depth)
+    bool _remove(TrieNode* node, std.string.strView key, u64 depth)
     {
         if (depth == key.len)
         {
@@ -122,21 +115,21 @@ pub struct trie
             }
             if (!hasChild)
             {
-                mman.dealloc<TrieNode>(node->children[idx]);
+                std.mman.dealloc<TrieNode>(node->children[idx]);
                 node->children[idx] = null;
             }
         }
         return result;
     }
 
-    void each(void(strView) fn)
+    void each(void(std.string.strView) fn)
     {
         u64 maxDepth = 0;
         self._maxDepth(self.root, 0, &maxDepth);
         u64 cap = maxDepth > 0 ? maxDepth : 1;
-        u8* buf = mman.alloc<u8>(cap);
+        u8* buf = std.mman.alloc<u8>(cap);
         self._each(self.root, buf, cap, 0, fn);
-        mman.dealloc<u8>(buf);
+        std.mman.dealloc<u8>(buf);
     }
 
     void _maxDepth(TrieNode* node, u64 depth, u64* max)
@@ -150,11 +143,11 @@ pub struct trie
         }
     }
 
-    void _each(TrieNode* node, u8* buf, u64 cap, u64 depth, void(strView) fn)
+    void _each(TrieNode* node, u8* buf, u64 cap, u64 depth, void(std.string.strView) fn)
     {
         if (node == null) return;
         if (node->isEnd)
-            fn(strView::fromParts((const char*)buf, depth));
+            fn(std.string.strView::fromParts((const char*)buf, depth));
         for (u64 i = 0; i < TRIE_FANOUT; i++)
         {
             if (node->children[i] != null)

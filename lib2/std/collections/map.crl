@@ -1,11 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod option = import(lib, "std/data/option.crl");
+mod std = import(lib, "std");
 
 pub struct MapEntry<K, V>
 {
@@ -133,7 +126,7 @@ pub struct map<K, V>
     {
         if (n == null)
         {
-            MapEntry<K, V>* newNode = mman.alloc<MapEntry<K, V>>(1);
+            MapEntry<K, V>* newNode = std.mman.alloc<MapEntry<K, V>>(1);
             newNode.key = key;
             newNode.value = value;
             newNode.height = 0;
@@ -192,7 +185,7 @@ pub struct map<K, V>
             {
                 self.len--;
                 MapEntry<K, V>* child = n.left != null ? n.left : n.right;
-                mman.dealloc<MapEntry<K, V>>(n);
+                std.mman.dealloc<MapEntry<K, V>>(n);
                 return child;
             }
             else
@@ -247,6 +240,6 @@ pub struct map<K, V>
         if (n == null) return;
         self._disposeNode(n.left);
         self._disposeNode(n.right);
-        mman.dealloc<MapEntry<K, V>>(n);
+        std.mman.dealloc<MapEntry<K, V>>(n);
     }
 }

@@ -1,9 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod mman = import("std/memory/mman.crl");
+mod std = import("std");
 
 pub struct vec<T>
 {
@@ -23,7 +18,7 @@ pub struct vec<T>
     static vec<T> withCap(u64 capacity)
     {
         vec<T> v;
-        v.data = mman.alloc<T>(capacity);
+        v.data = std.mman.alloc<T>(capacity);
         v.len = 0;
         v.cap = capacity;
         return v;
@@ -32,7 +27,7 @@ pub struct vec<T>
     void reserve(u64 newCap)
     {
         if (newCap <= self.cap) return;
-        self.data = mman.realloc<T>(self.data, newCap);
+        self.data = std.mman.realloc<T>(self.data, newCap);
         self.cap = newCap;
     }
 
@@ -160,14 +155,14 @@ pub struct vec<T>
     void reserveExact(u64 newCap)
     {
         if (newCap <= self.cap) return;
-        self.data = mman.realloc<T>(self.data, newCap);
+        self.data = std.mman.realloc<T>(self.data, newCap);
         self.cap = newCap;
     }
 
     void shrinkToFit()
     {
         if (self.len == self.cap) return;
-        self.data = mman.realloc<T>(self.data, self.len);
+        self.data = std.mman.realloc<T>(self.data, self.len);
         self.cap = self.len;
     }
 
@@ -246,7 +241,7 @@ pub struct vec<T>
     {
         if (self.data != null)
         {
-            mman.dealloc<T>(self.data);
+            std.mman.dealloc<T>(self.data);
             self.data = null;
         }
         self.len = 0;

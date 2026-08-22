@@ -4,53 +4,52 @@
 // Resolve it once at load time with classdb_get_method_bind using the
 // generated hash, keep it, and call it on any object of that class.
 
-mod typ = import(lib, "coral-godot/types");
-mod inf = import(lib, "coral-godot/interface");
-mod cls = import(lib, "coral-godot/classes");
+mod godot.types = import(lib, "coral-godot");
 
-inf.Interface g_interface;
+
+godot.interface.Interface g_interface;
 
 // A StringName is an engine-internal object, NOT a C string. Build it on a
 // stack buffer; the buffer's layout is the engine's own StringName storage.
 u8 snBuf[64];
 
-typ.StringNamePtr makeName(const char* text)
+godot.types.StringNamePtr makeName(const char* text)
 {
-    inf.Interface* api = &g_interface;
-    typ.UninitStringNamePtr dst = (typ.UninitStringNamePtr)snBuf;
+    godot.interface.Interface* api = &g_interface;
+    godot.types.UninitStringNamePtr dst = (godot.types.UninitStringNamePtr)snBuf;
     api->stringNameNewWithUtf8Chars(dst, text);
-    return (typ.StringNamePtr)dst;
+    return (godot.types.StringNamePtr)dst;
 }
 
 // Resolve Node.get_name to its bind. The hash is the generated constant.
-typ.MethodBind resolveBind()
+godot.types.MethodBind resolveBind()
 {
-    inf.Interface* api = &g_interface;
-    typ.ConstStringNamePtr cn = makeName("Node");
-    typ.ConstStringNamePtr mn = makeName("get_name");
+    godot.interface.Interface* api = &g_interface;
+    godot.types.ConstStringNamePtr cn = makeName("Node");
+    godot.types.ConstStringNamePtr mn = makeName("get_name");
     if (cn == null || mn == null) return null;
-    return api->classdbGetMethodBind(cn, mn, cls.NodeGetNameHash);
+    return api->classdbGetMethodBind(cn, mn, godot.classes.NodeGetNameHash);
 }
 
 // Calling it: raw arg call through the bind.
-void callGetName(typ.ObjectPtr node, typ.MethodBind bind)
+void callGetName(godot.types.ObjectPtr node, godot.types.MethodBind bind)
 {
-    inf.Interface* api = &g_interface;
-    typ.CallError err;
-    typ.UninitVariantPtr ret;
+    godot.interface.Interface* api = &g_interface;
+    godot.types.CallError err;
+    godot.types.UninitVariantPtr ret;
     api->objectMethodBindCall(bind, node, null, 0, ret, &err);
     // (ret now holds the StringName; cast/destroy it as needed.)
     api->variantDestroy(ret);
 }
 
 // Ptr-call variant — faster when every argument maps to a typed C pointer:
-void callGetNamePtr(typ.ObjectPtr node, typ.MethodBind bind)
+void callGetNamePtr(godot.types.ObjectPtr node, godot.types.MethodBind bind)
 {
-    inf.Interface* api = &g_interface;
-    typ.TypePtr ret;
+    godot.interface.Interface* api = &g_interface;
+    godot.types.TypePtr ret;
     api->objectMethodBindPtrcall(bind, node, null, ret);
 }
 
-// The generated slot (cls.NodeGetName) is where the resolved bind address is
+// The generated slot (godot.classes.NodeGetName) is where the resolved bind address is
 // stored; the generated <Class><Method>Hash pairs go straight into
 // classdb_get_method_bind, so the JSON->Coral->engine chain is hash-exact.

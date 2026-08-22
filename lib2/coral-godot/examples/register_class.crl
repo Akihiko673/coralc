@@ -4,52 +4,50 @@
 // lives in the ABI structs (godot/types.crl, field order = header order):
 // ClassInfo6 carries the callbacks the engine calls back into your code.
 
-mod typ = import(lib, "coral-godot/types");
-mod inf = import(lib, "coral-godot/interface");
-mod cls = import(lib, "coral-godot/classes");
+mod godot = import(lib, "coral-godot");
 
-inf.Interface g_interface;
+godot.interface.Interface g_interface;
 
 u8 snBuf[64];
 
-typ.StringNamePtr makeName(const char* text)
+godot.types.StringNamePtr makeName(const char* text)
 {
-    inf.Interface* api = &g_interface;
-    typ.UninitStringNamePtr dst = (typ.UninitStringNamePtr)snBuf;
+    godot.interface.Interface* api = &g_interface;
+    godot.types.UninitStringNamePtr dst = (godot.types.UninitStringNamePtr)snBuf;
     api->stringNameNewWithUtf8Chars(dst, text);
-    return (typ.StringNamePtr)dst;
+    return (godot.types.StringNamePtr)dst;
 }
 
 // our class's engine-side lifecycle 
 
-typ.GBool mySet(typ.ClassInstance self, typ.ConstStringNamePtr name, typ.ConstVariantPtr val)
+godot.types.GBool mySet(godot.types.ClassInstance self, godot.types.ConstStringNamePtr name, godot.types.ConstVariantPtr val)
 {
     return 1;
 }
 
-typ.GBool myGet(typ.ClassInstance self, typ.ConstStringNamePtr name, typ.VariantPtr ret)
+godot.types.GBool myGet(godot.types.ClassInstance self, godot.types.ConstStringNamePtr name, godot.types.VariantPtr ret)
 {
     return 1;
 }
 
-typ.ObjectPtr myCreate(void* userdata)
+godot.types.ObjectPtr myCreate(void* userdata)
 {
     // real body: claim a GDExtensionClassInstancePtr and return it
     return null;
 }
 
-void myFree(void* userdata, typ.ClassInstance instance)
+void myFree(void* userdata, godot.types.ClassInstance instance)
 {
     // release the instance memory
 }
 
 // fill the ABI struct and register
 
-bool registerMyClass(typ.Library library)
+bool registerMyClass(godot.types.Library library)
 {
-    inf.Interface* api = &g_interface;
+    godot.interface.Interface* api = &g_interface;
 
-    typ.ClassInfo6 info;
+    godot.types.ClassInfo6 info;
     info.isVirtual = 0;
     info.isAbstract = 0;
     info.set = mySet;
@@ -59,13 +57,13 @@ bool registerMyClass(typ.Library library)
     // (fields = header order: isVirtual, isAbstract, isExposed, isRuntime,
     //  iconPath, set, get, getPropertyList, freePropertyList, ... )
 
-    typ.ConstStringNamePtr cn = makeName("MyNode");
-    typ.ConstStringNamePtr parent = makeName("Node");
+    godot.types.ConstStringNamePtr cn = makeName("MyNode");
+    godot.types.ConstStringNamePtr parent = makeName("Node");
     api->classdbRegisterExtensionClass6(library, cn, parent, &info);
     return true;
 }
 
 // Field-by-field the struct matches gdextension_interface.h, so the engine
-// reads offsets we wrote. The enums (typ.InitLevel, cls.NodeProcessMode, ...)
-// and constants (cls.NodeNotificationReady, ...) come from the same source:
+// reads offsets we wrote. The enums (godot.types.InitLevel, godot.classes.NodeProcessMode, ...)
+// and constants (godot.classes.NodeNotificationReady, ...) come from the same source:
 // types.crl mirrors the header, classes.crl mirrors extension_api.json.

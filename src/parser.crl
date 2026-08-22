@@ -499,16 +499,9 @@ pub struct Parser
                     if (self.isNameTok(self.peekTok(0))) self.captureFileAttr();
                     self.skipAttrBrackets();
                 }
-                else if (self.check(tok.T_LBRACKET))
+                else
                 {
-                    self.advance();
-                    if (self.isNameTok(self.peekTok(0))) self.captureFileAttr();
-                    while (!self.check(tok.T_RBRACKET) && !self.check(tok.TOK_EOF)) self.advance();
-                    if (self.check(tok.T_RBRACKET)) self.advance();
-                }
-                else if (self.isNameTok(self.peekTok(0)))
-                {
-                    self.captureFileAttr();
+                    // @[...] and @name are not supported — re-emit @ token
                     self.advance();
                 }
                 continue;
@@ -2976,7 +2969,7 @@ pub struct Parser
             *o1 = d;
             return d != null ? 1 : 0;
         }
-        self.errorMsg("SYN-1003", "unexpected token at top level", "top-level input must be a declaration (struct, fn, const, import, ...)");
+        self.errorMsg("SYN-1003", "unexpected token at top level", "top-level input must be a declaration (struct, functionn, const, import, ...)");
         return 0;
     }
 

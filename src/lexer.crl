@@ -438,6 +438,20 @@ pub struct Lexer
                 if (j == t.len)
                 {
                     u32 n = j;
+                    // Only @[[ATTR]] is a valid @-form (module-level attr).
+                    // @[...] (single bracket) and @name are rejected here so
+                    // they never reach the parser.
+                    if (n == 1 && (char)t.ptr[0] == '@')
+                    {
+                        u8 c1 = self.pos + 1 < self.len ? self.src[self.pos + 1] : 0;
+                        u8 c2 = self.pos + 2 < self.len ? self.src[self.pos + 2] : 0;
+                        if (c1 != '[' || c2 != '[')
+                        {
+                            self.errAt(p, str.strView::fromCstr("LEX-0007"), str.strView::fromCstr("invalid attribute syntax"), str.strView::fromCstr("attributes are [[attr]] on declarations or @[[ATTR]] at module level"));
+                            self.advance(1);
+                            return;
+                        }
+                    }
                     // Prefer longer matches, OP_TERMS is longest first, so
                     // the first full match is the longest
                     self.emit(tok.terminalId(t), p, n);

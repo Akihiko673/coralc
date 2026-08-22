@@ -1,9 +1,0 @@
-void f()
-@[[no_drop]]
-{
-    u64 x = 0;
-    u64 bits = 0;
-    bits = *((u64*)&x);
-    bits &= 0x7FFFFFFFFFFFFFFFu;
-    bits |= 1u << 3;
-}

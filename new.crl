@@ -1,0 +1,12 @@
+extern int printf(const char* msg, ...);
+
+void print(const char* val) {
+    printf(val);
+}
+
+int main() {
+    const char* u = "q09e09q0\n";
+
+    print(u);
+    return 0;
+}

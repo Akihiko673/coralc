@@ -1,18 +1,11 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
+mod std = import(lib, "std");
 
-mod vec = import(lib, "std/collections/vec.crl");
-mod mman = import(lib, "std/memory/mman.crl");
-
-pub void sortI32(vec.vec<i32>* v)
+pub void sortI32(std.vec.vec<i32>* v)
 {
     sortI32Range(v, 0, v->count());
 }
 
-void sortI32Range(vec.vec<i32>* v, u64 lo, u64 hi)
+void sortI32Range(std.vec.vec<i32>* v, u64 lo, u64 hi)
 {
     if (hi - lo <= 1) return;
     u64 pi = partitionI32(v, lo, hi);
@@ -20,7 +13,7 @@ void sortI32Range(vec.vec<i32>* v, u64 lo, u64 hi)
     if (pi + 1 < hi) sortI32Range(v, pi + 1, hi);
 }
 
-u64 partitionI32(vec.vec<i32>* v, u64 lo, u64 hi)
+u64 partitionI32(std.vec.vec<i32>* v, u64 lo, u64 hi)
 {
     u64 mid = lo + (hi - 1 - lo) / 2;
     u64 pIdx = hi - 1;
@@ -47,12 +40,12 @@ u64 partitionI32(vec.vec<i32>* v, u64 lo, u64 hi)
     return i;
 }
 
-pub void sortU64(vec.vec<u64>* v)
+pub void sortU64(std.vec.vec<u64>* v)
 {
     sortU64Range(v, 0, v->count());
 }
 
-void sortU64Range(vec.vec<u64>* v, u64 lo, u64 hi)
+void sortU64Range(std.vec.vec<u64>* v, u64 lo, u64 hi)
 {
     if (hi - lo <= 1) return;
     u64 pi = partitionU64(v, lo, hi);
@@ -60,7 +53,7 @@ void sortU64Range(vec.vec<u64>* v, u64 lo, u64 hi)
     if (pi + 1 < hi) sortU64Range(v, pi + 1, hi);
 }
 
-u64 partitionU64(vec.vec<u64>* v, u64 lo, u64 hi)
+u64 partitionU64(std.vec.vec<u64>* v, u64 lo, u64 hi)
 {
     u64 mid = lo + (hi - 1 - lo) / 2;
     u64 pIdx = hi - 1;
@@ -87,12 +80,12 @@ u64 partitionU64(vec.vec<u64>* v, u64 lo, u64 hi)
     return i;
 }
 
-pub void sortF64(vec.vec<f64>* v)
+pub void sortF64(std.vec.vec<f64>* v)
 {
     sortF64Range(v, 0, v->count());
 }
 
-void sortF64Range(vec.vec<f64>* v, u64 lo, u64 hi)
+void sortF64Range(std.vec.vec<f64>* v, u64 lo, u64 hi)
 {
     if (hi - lo <= 1) return;
     u64 pi = partitionF64(v, lo, hi);
@@ -100,7 +93,7 @@ void sortF64Range(vec.vec<f64>* v, u64 lo, u64 hi)
     if (pi + 1 < hi) sortF64Range(v, pi + 1, hi);
 }
 
-u64 partitionF64(vec.vec<f64>* v, u64 lo, u64 hi)
+u64 partitionF64(std.vec.vec<f64>* v, u64 lo, u64 hi)
 {
     u64 mid = lo + (hi - 1 - lo) / 2;
     u64 pIdx = hi - 1;
@@ -127,12 +120,12 @@ u64 partitionF64(vec.vec<f64>* v, u64 lo, u64 hi)
     return i;
 }
 
-pub void sortBy<T>(vec.vec<T>* v, bool(T, T) less)
+pub void sortBy<T>(std.vec.vec<T>* v, bool(T, T) less)
 {
     sortByRange<T>(v, 0, v->count(), less);
 }
 
-void sortByRange<T>(vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
+void sortByRange<T>(std.vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
 {
     if (hi - lo <= 1) return;
     u64 pi = partitionBy<T>(v, lo, hi, less);
@@ -140,7 +133,7 @@ void sortByRange<T>(vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
     if (pi + 1 < hi) sortByRange<T>(v, pi + 1, hi, less);
 }
 
-u64 partitionBy<T>(vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
+u64 partitionBy<T>(std.vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
 {
     u64 mid = lo + (hi - 1 - lo) / 2;
     u64 pIdx;
@@ -180,28 +173,28 @@ u64 partitionBy<T>(vec.vec<T>* v, u64 lo, u64 hi, bool(T, T) less)
     return i;
 }
 
-pub bool isSortedI32(const vec.vec<i32>* v)
+pub bool isSortedI32(const std.vec.vec<i32>* v)
 {
     for (u64 i = 1; i < v->count(); i++)
         if (v->at(i - 1) > v->at(i)) return false;
     return true;
 }
 
-pub bool isSortedU64(const vec.vec<u64>* v)
+pub bool isSortedU64(const std.vec.vec<u64>* v)
 {
     for (u64 i = 1; i < v->count(); i++)
         if (v->at(i - 1) > v->at(i)) return false;
     return true;
 }
 
-pub bool isSortedBy<T>(const vec.vec<T>* v, bool(T, T) less)
+pub bool isSortedBy<T>(const std.vec.vec<T>* v, bool(T, T) less)
 {
     for (u64 i = 1; i < v->count(); i++)
         if (less(v->at(i), v->at(i - 1))) return false;
     return true;
 }
 
-pub i64 binarySearchI32(const vec.vec<i32>* v, i32 key)
+pub i64 binarySearchI32(const std.vec.vec<i32>* v, i32 key)
 {
     i64 lo = 0;
     i64 hi = (i64)v->count() - 1;
@@ -216,7 +209,7 @@ pub i64 binarySearchI32(const vec.vec<i32>* v, i32 key)
     return -1;
 }
 
-pub i64 binarySearchU64(const vec.vec<u64>* v, u64 key)
+pub i64 binarySearchU64(const std.vec.vec<u64>* v, u64 key)
 {
     i64 lo = 0;
     i64 hi = (i64)v->count() - 1;
@@ -231,7 +224,7 @@ pub i64 binarySearchU64(const vec.vec<u64>* v, u64 key)
     return -1;
 }
 
-pub i64 binarySearchBy<T>(const vec.vec<T>* v, T key, i32(T, T) cmp)
+pub i64 binarySearchBy<T>(const std.vec.vec<T>* v, T key, i32(T, T) cmp)
 {
     i64 lo = 0;
     i64 hi = (i64)v->count() - 1;
@@ -246,7 +239,7 @@ pub i64 binarySearchBy<T>(const vec.vec<T>* v, T key, i32(T, T) cmp)
     return -1;
 }
 
-pub void reverse<T>(vec.vec<T>* v)
+pub void reverse<T>(std.vec.vec<T>* v)
 {
     u64 n = v->count();
     for (u64 i = 0; i < n / 2; i++)

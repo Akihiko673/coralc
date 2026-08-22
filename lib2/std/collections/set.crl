@@ -1,18 +1,17 @@
-mod hashmap = import(lib, "std/collections/hashmap.crl");
-@[[no_drop]]
-mod vec = import(lib, "std/collections/vec.crl");
+mod hashmap = import(lib, "std/collections/std.hashmap.crl");
+mod std.vec.vec = import(lib, "std/collections/std.std.vec.vec.crl");
 mod mman = import(lib, "std/memory/mman.crl");
 
 pub struct set<T>
 {
-    hashmap.hashmap<T, bool> inner;
+    std.hashmap.hashmap<T, bool> inner;
     u64(T) hashFn;
     bool(T, T) eqFn;
 
     static set<T> new(u64(T) hf, bool(T, T) ef)
     {
         set<T> s;
-        s.inner = hashmap.hashmap<T, bool>::new(hf, ef);
+        s.inner = std.hashmap.hashmap<T, bool>::new(hf, ef);
         s.hashFn = hf;
         s.eqFn = ef;
         return s;
@@ -42,14 +41,14 @@ pub struct set<T>
         self.inner.clear();
     }
 
-    vec<T> toVec()
+    std.vec.vec<T> toVec()
     {
         return self.inner.keys();
     }
 
     void each(void(T) fn)
     {
-        vec<T> keys = self.inner.keys();
+        std.vec.vec<T> keys = self.inner.keys();
         for (u64 i = 0; i < keys.count(); i++)
             fn(keys.at(i));
     }
@@ -57,10 +56,10 @@ pub struct set<T>
     set<T> union(const set<T>* other)
     {
         set<T> result = set<T>::new(self.hashFn, self.eqFn);
-        vec<T> k = self.toVec();
+        std.vec.vec<T> k = self.toVec();
         for (u64 i = 0; i < k.count(); i++)
             result.insert(k.at(i));
-        vec<T> ok = other->toVec();
+        std.vec.vec<T> ok = other->toVec();
         for (u64 i = 0; i < ok.count(); i++)
             result.insert(ok.at(i));
         return result;
@@ -69,7 +68,7 @@ pub struct set<T>
     set<T> intersection(const set<T>* other)
     {
         set<T> result = set<T>::new(self.hashFn, self.eqFn);
-        vec<T> k = self.toVec();
+        std.vec.vec<T> k = self.toVec();
         for (u64 i = 0; i < k.count(); i++)
         {
             T val = k.at(i);
@@ -81,7 +80,7 @@ pub struct set<T>
     set<T> difference(const set<T>* other)
     {
         set<T> result = set<T>::new(self.hashFn, self.eqFn);
-        vec<T> k = self.toVec();
+        std.vec.vec<T> k = self.toVec();
         for (u64 i = 0; i < k.count(); i++)
         {
             T val = k.at(i);
@@ -92,7 +91,7 @@ pub struct set<T>
 
     bool isSubset(const set<T>* other)
     {
-        vec<T> k = self.toVec();
+        std.vec.vec<T> k = self.toVec();
         for (u64 i = 0; i < k.count(); i++)
         {
             if (!other->contains(k.at(i))) return false;

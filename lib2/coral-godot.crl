@@ -1,0 +1,6 @@
+// Package root for `mod godot = import(lib, "coral-godot")`.
+
+pub mod classes = import(lib, "coral-godot/classes.crl");
+pub mod entry = import(lib, "coral-godot/entry.crl");
+pub mod interface = import(lib, "coral-godot/interface.crl");
+pub mod types = import(lib, "coral-godot/types.crl");

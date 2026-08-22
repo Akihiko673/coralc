@@ -1,17 +1,13 @@
-@[[no_drop]]
-
-mod hashmap = import("std/collections/hashmap.crl");
-mod vec = import("std/collections/vec.crl");
-mod option = import("std/data/option.crl");
+mod std = import("std");
 
 pub struct unordered_map<K, V>
 {
-    hashmap.hashmap<K, V> inner;
+    std.hashmap.hashmap<K, V> inner;
 
     static unordered_map<K, V> new(u64(K) hf, bool(K, K) ef)
     {
         unordered_map<K, V> m;
-        m.inner = hashmap.hashmap<K, V>::new(hf, ef);
+        m.inner = std.hashmap.hashmap<K, V>::new(hf, ef);
         return m;
     }
 
@@ -24,7 +20,7 @@ pub struct unordered_map<K, V>
         self.inner.insert(key, value);
     }
 
-    option.option<V> get(K key)
+    std.option.option<V> get(K key)
     {
         return self.inner.get(key);
     }
@@ -49,12 +45,12 @@ pub struct unordered_map<K, V>
         self.inner.clear();
     }
 
-    vec<K> keys()
+    std.vec.vec<K> keys()
     {
         return self.inner.keys();
     }
 
-    vec<V> values()
+    std.vec.vec<V> values()
     {
         return self.inner.values();
     }

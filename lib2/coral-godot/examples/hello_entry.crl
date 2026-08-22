@@ -7,21 +7,20 @@
 //   types      -> opaques, enums, ABI structs
 //   interface  -> the Interface slot table + init()
 //   classes    -> the generated per-class method bind slots/hashes
-mod typ = import(lib, "coral-godot/types");
-mod inf = import(lib, "coral-godot/interface");
+mod godot = import(lib, "coral-godot");
 
 // The interface table lives here so every later call is api->something().
-inf.Interface g_interface;
+godot.interface.Interface g_interface;
 
 // extern ("C") keeps the C ABI so the symbol name is byte-exact in the .so.
-extern ("C") typ.GBool gdextension_entry_point(typ.GetProcAddress getProcAddress,
-    typ.Library library, typ.Initialization* rInitialization)
+extern ("C") godot.types.GBool gdextension_entry_point(godot.types.GetProcAddress getProcAddress,
+    godot.types.Library library, godot.types.Initialization* rInitialization)
 {
     // 1. Resolve all engine function pointers from Godot by name.
-    if (!inf.init(&g_interface, getProcAddress)) return 0;
+    if (!godot.interface.init(&g_interface, getProcAddress)) return 0;
 
     // 2. Tell Godot we want the scene level (ready after scene runs).
-    rInitialization->minimumLevel = typ.InitLevel.Scene;
+    rInitialization->minimumLevel = godot.types.InitLevel.Scene;
     rInitialization->userdata = null;
     rInitialization->initialize = null;
     rInitialization->deinitialize = null;

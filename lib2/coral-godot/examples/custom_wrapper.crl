@@ -6,23 +6,22 @@
 //   - a struct that composes the pieces and delegates to them.
 // This mirrors how a class language would let you "subclass" Sprite2D.
 
-mod typ = import(lib, "coral-godot/types");
-mod cls = import(lib, "coral-godot/classes");
+mod godot = import(lib, "coral-godot");
 
 // The interface: "anything that is a mySprite can be asked these questions."
 // (trait method signatures, Coral's Shape example pattern)
 trait MySprite
 {
-    typ.ObjectPtr body();      // the engine object underneath
+    godot.types.ObjectPtr body();      // the engine object underneath
     f32 size();                // size in pixels
 }
 
 // The struct: composition in place of inheritance.
 pub struct mySprite
 {
-    typ.ObjectPtr handle;      // the Sprite2D instance (an ObjectPtr, always)
+    godot.types.ObjectPtr handle;      // the Sprite2D instance (an ObjectPtr, always)
 
-    static mySprite wrap(typ.ObjectPtr h)
+    static mySprite wrap(godot.types.ObjectPtr h)
     {
         mySprite s;
         s.handle = h;
@@ -40,7 +39,7 @@ pub struct mySprite
 // checks every signature against the trait exactly.
 mySprite::MySprite
 {
-    typ.ObjectPtr body() { return self.handle; }
+    godot.types.ObjectPtr body() { return self.handle; }
     f32 size() { return self._size(); }
 }
 

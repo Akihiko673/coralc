@@ -1,5 +1,5 @@
 @[[no_drop]]
-mod deque = import(lib, "std/collections/deque.crl");
+mod deque = import(lib, "std");
 
 pub struct queue<T>
 {

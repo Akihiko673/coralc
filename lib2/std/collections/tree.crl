@@ -1,16 +1,9 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct TreeNode<T>
 {
     T value;
-    vec.vec<TreeNode<T>*> children;
+    std.vec.vec<TreeNode<T>*> children;
 }
 
 pub struct tree<T>
@@ -38,7 +31,7 @@ pub struct tree<T>
         for (u64 i = 0; i < node->children.count(); i++)
             self._disposeNode(node->children.at(i));
         node->children.dispose();
-        mman.dealloc<TreeNode<T>>(node);
+        std.mman.dealloc<TreeNode<T>>(node);
     }
 
     bool isEmpty() { return self.root == null; }
@@ -46,18 +39,18 @@ pub struct tree<T>
     TreeNode<T>* setRoot(T val)
     {
         if (self.root != null) self._disposeNode(self.root);
-        self.root = mman.alloc<TreeNode<T>>(1);
+        self.root = std.mman.alloc<TreeNode<T>>(1);
         self.root->value = val;
-        self.root->children = vec.vec<TreeNode<T>*>::new();
+        self.root->children = std.vec.vec<TreeNode<T>*>::new();
         return self.root;
     }
 
     TreeNode<T>* addChild(TreeNode<T>* parent, T val)
     {
         if (parent == null) return null;
-        TreeNode<T>* child = mman.alloc<TreeNode<T>>(1);
+        TreeNode<T>* child = std.mman.alloc<TreeNode<T>>(1);
         child->value = val;
-        child->children = vec.vec<TreeNode<T>*>::new();
+        child->children = std.vec.vec<TreeNode<T>*>::new();
         parent->children.push(child);
         return child;
     }
@@ -132,14 +125,14 @@ pub struct tree<T>
             self._count(node->children.at(i), n);
     }
 
-    vec.vec<T> toVec()
+    std.vec.vec<T> toVec()
     {
-        vec.vec<T> v = vec.vec<T>::new();
+        std.vec.vec<T> v = std.vec.vec<T>::new();
         if (self.root != null) self._toVec(self.root, &v);
         return v;
     }
 
-    void _toVec(TreeNode<T>* node, vec.vec<T>* v)
+    void _toVec(TreeNode<T>* node, std.vec.vec<T>* v)
     {
         v->push(node->value);
         for (u64 i = 0; i < node->children.count(); i++)

@@ -1,1 +1,0 @@
-mod libc = import("std/platform/libc.crl");@[[no_drop]]

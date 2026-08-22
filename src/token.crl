@@ -151,7 +151,7 @@ pub str.strView KW_TERMS[] = {
 
 // Operators and punctuation, longest first so scanPunct matches greedily.
 // No legacy @[...] / @name attributes here: attributes are [[...]] for
-// declarations and @[[...]] / @[...] / @name at file level, all represented
+// declarations and @[[...]] /
 // as separate tokens.
 pub str.strView OP_TERMS[] = {
     "<<=", ">>=", "...",

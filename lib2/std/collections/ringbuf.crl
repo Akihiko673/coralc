@@ -1,9 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 pub struct ringbuf<T>
 {
@@ -16,7 +11,7 @@ pub struct ringbuf<T>
     static ringbuf<T> new(u64 capacity)
     {
         ringbuf<T> r;
-        r.data = mman.alloc<T>(capacity);
+        r.data = std.mman.alloc<T>(capacity);
         r.cap = capacity;
         r.head = 0;
         r.tail = 0;
@@ -26,7 +21,7 @@ pub struct ringbuf<T>
 
     void dispose()
     {
-        if (self.data != null) { mman.dealloc<T>(self.data); self.data = null; }
+        if (self.data != null) { std.mman.dealloc<T>(self.data); self.data = null; }
         self.cap = 0;
     }
 

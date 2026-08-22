@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 pub struct ListNode<T>
 {
@@ -34,7 +28,7 @@ pub struct linkedlist<T>
         while (cur != null)
         {
             ListNode<T>* next = cur->next;
-            mman.dealloc<ListNode<T>>(cur);
+            std.mman.dealloc<ListNode<T>>(cur);
             cur = next;
         }
         self.head = null;
@@ -47,7 +41,7 @@ pub struct linkedlist<T>
 
     void pushFront(T val)
     {
-        ListNode<T>* node = mman.alloc<ListNode<T>>(1);
+        ListNode<T>* node = std.mman.alloc<ListNode<T>>(1);
         node->value = val;
         node->prev = null;
         node->next = self.head;
@@ -59,7 +53,7 @@ pub struct linkedlist<T>
 
     void pushBack(T val)
     {
-        ListNode<T>* node = mman.alloc<ListNode<T>>(1);
+        ListNode<T>* node = std.mman.alloc<ListNode<T>>(1);
         node->value = val;
         node->next = null;
         node->prev = self.tail;
@@ -77,7 +71,7 @@ pub struct linkedlist<T>
         self.head = node->next;
         if (self.head != null) self.head->prev = null;
         else self.tail = null;
-        mman.dealloc<ListNode<T>>(node);
+        std.mman.dealloc<ListNode<T>>(node);
         self.len--;
         return val;
     }
@@ -90,7 +84,7 @@ pub struct linkedlist<T>
         self.tail = node->prev;
         if (self.tail != null) self.tail->next = null;
         else self.head = null;
-        mman.dealloc<ListNode<T>>(node);
+        std.mman.dealloc<ListNode<T>>(node);
         self.len--;
         return val;
     }
@@ -110,7 +104,7 @@ pub struct linkedlist<T>
     void insertAfter(ListNode<T>* node, T val)
     {
         if (node == null) { self.pushFront(val); return; }
-        ListNode<T>* newNode = mman.alloc<ListNode<T>>(1);
+        ListNode<T>* newNode = std.mman.alloc<ListNode<T>>(1);
         newNode->value = val;
         newNode->prev = node;
         newNode->next = node->next;
@@ -127,7 +121,7 @@ pub struct linkedlist<T>
         else self.head = node->next;
         if (node->next != null) node->next->prev = node->prev;
         else self.tail = node->prev;
-        mman.dealloc<ListNode<T>>(node);
+        std.mman.dealloc<ListNode<T>>(node);
         self.len--;
     }
 

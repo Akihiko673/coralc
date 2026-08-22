@@ -1,7 +1,0 @@
-mod libc = import("std/platform/libc.crl");
-@[[no_drop]]
-
-i32 test()
-{
-    return libc.putchar(65);
-}

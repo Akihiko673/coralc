@@ -1,0 +1,17 @@
+; WallVM IR
+func @print -> void {
+  block %entry:
+    %3 = alloca ptr
+    %5 = store void [%4(val), %3]
+    %7 = load ptr [%3]
+    %8 = call void [0, %7]
+    %9 = ret void
+}
+func @main -> i64 {
+  block %entry:
+    %12 = alloca ptr
+    %13 = store void [0, %12]
+    %14 = load ptr [%12]
+    %15 = call void [%1(print), %14]
+    %17 = ret i64 [0]
+}

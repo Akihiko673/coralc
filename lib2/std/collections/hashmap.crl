@@ -1,12 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
-mod option = import(lib, "std/data/option.crl");
-mod vec = import(lib, "std/collections/vec.crl");
+mod std = import(lib, "std");
 
 pub struct HashMapEntry<K, V>
 {
@@ -26,8 +18,8 @@ pub struct hashmap<K, V>
     static hashmap<K, V> new(u64(K) hf, bool(K, K) ef)
     {
         hashmap<K, V> m;
-        m.entries = mman.alloc<HashMapEntry<K, V>>(16);
-        mman.zero<HashMapEntry<K, V>>(m.entries, 16);
+        m.entries = std.mman.alloc<HashMapEntry<K, V>>(16);
+        std.mman.zero<HashMapEntry<K, V>>(m.entries, 16);
         m.cap = 16;
         m.len = 0;
         m.hashFn = hf;
@@ -39,7 +31,7 @@ pub struct hashmap<K, V>
     {
         if (self.entries != null)
         {
-            mman.dealloc<HashMapEntry<K, V>>(self.entries);
+            std.mman.dealloc<HashMapEntry<K, V>>(self.entries);
             self.entries = null;
         }
         self.cap = 0;
@@ -56,8 +48,8 @@ pub struct hashmap<K, V>
         if (self.len * 2 >= self.cap)
         {
             u64 newCap = self.cap * 2;
-            HashMapEntry<K, V>* newEntries = mman.alloc<HashMapEntry<K, V>>(newCap);
-            mman.zero<HashMapEntry<K, V>>(newEntries, newCap);
+            HashMapEntry<K, V>* newEntries = std.mman.alloc<HashMapEntry<K, V>>(newCap);
+            std.mman.zero<HashMapEntry<K, V>>(newEntries, newCap);
             for (u64 i = 0; i < self.cap; i++)
             {
                 if (self.entries[i].occupied)
@@ -67,7 +59,7 @@ pub struct hashmap<K, V>
                     newEntries[h] = self.entries[i];
                 }
             }
-            mman.dealloc<HashMapEntry<K, V>>(self.entries);
+            std.mman.dealloc<HashMapEntry<K, V>>(self.entries);
             self.entries = newEntries;
             self.cap = newCap;
         }

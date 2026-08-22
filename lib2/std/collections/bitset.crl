@@ -1,10 +1,4 @@
-@[[no_warn_unsafe]]
-@[[no_drop]]
-@[[forced_pointer]]
-@[[forced_unsafe_cast]]
-@[[forced_null_deref]]
-
-mod mman = import(lib, "std/memory/mman.crl");
+mod std = import(lib, "std");
 
 pub struct bitset
 {
@@ -17,14 +11,14 @@ pub struct bitset
         bitset b;
         b.numWords = (numBits + 63) / 64;
         b.numBits = numBits;
-        b.words = mman.alloc<u64>(b.numWords);
+        b.words = std.mman.alloc<u64>(b.numWords);
         for (u64 i = 0; i < b.numWords; i++) b.words[i] = 0;
         return b;
     }
 
     void dispose()
     {
-        if (self.words != null) { mman.dealloc<u64>(self.words);
+        if (self.words != null) { std.mman.dealloc<u64>(self.words);
             self.words = null; }
         self.numBits = 0;
         self.numWords = 0;

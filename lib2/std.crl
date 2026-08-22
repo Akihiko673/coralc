@@ -1,13 +1,109 @@
 // Package root for `mod std = import(lib, "std")`.
 // Re-exports every submodule file under std/ (recursively).
 
+
+// collections
+pub mod arr = import(lib, "std/collections/arr.crl");
+pub mod bitset = import(lib, "std/collections/bitset.crl");
+pub mod cache = import(lib, "std/collections/cache.crl");
+pub mod deque = import(lib, "std/collections/deque.crl");
+pub mod hashmap = import(lib, "std/collections/hashmap.crl");
+pub mod iter = import(lib, "std/collections/iter.crl");
+pub mod linkedlist = import(lib, "std/collections/linkedlist.crl");
+pub mod map = import(lib, "std/collections/map.crl");
+pub mod priorityqueue = import(lib, "std/collections/priorityqueue.crl");
+pub mod queue = import(lib, "std/collections/queue.crl");
+pub mod ringbuf = import(lib, "std/collections/ringbuf.crl");
+pub mod set = import(lib, "std/collections/set.crl");
+pub mod sort = import(lib, "std/collections/sort.crl");
+pub mod tree = import(lib, "std/collections/tree.crl");
+pub mod trie = import(lib, "std/collections/trie.crl");
+pub mod unordered_map = import(lib, "std/collections/unordered_map.crl");
+pub mod vec = import(lib, "std/collections/vec.crl");
+
+// concurent
+pub mod mutex = import(lib, "std/concurrent/mutex.crl");
+pub mod rwlock = import(lib, "std/concurrent/rwlock.crl");
+pub mod semaphore = import(lib, "std/concurrent/semaphore.crl");
+pub mod signal = import(lib, "std/concurrent/signal.crl");
+pub mod thread = import(lib, "std/concurrent/thread.crl");
+pub mod threadpool = import(lib, "std/concurrent/threadpool.crl");
+
+// crypto
+pub mod aes = import(lib, "std/crypto/aes.crl");
+pub mod base64 = import(lib, "std/crypto/base64.crl");
+pub mod bloom = import(lib, "std/crypto/bloom.crl");
+pub mod crc = import(lib, "std/crypto/crc.crl");
+pub mod hex = import(lib, "std/crypto/hex.crl");
+pub mod hmac = import(lib, "std/crypto/hmac.crl");
+pub mod sha256 = import(lib, "std/crypto/sha256.crl");
+
+// data
+pub mod option = import(lib, "std/data/option.crl");
+pub mod result = import(lib, "std/data/result.crl");
+
+// io
+pub mod bio = import(lib, "std/io/bio.crl");
+pub mod cmd = import(lib, "std/io/cmd.crl");
+pub mod env = import(lib, "std/io/env.crl");
+pub mod fios = import(lib, "std/io/fios.crl");
+pub mod fs = import(lib, "std/io/fs.crl");
+pub mod ios = import(lib, "std/io/ios.crl");
+pub mod log = import(lib, "std/io/log.crl");
+pub mod net = import(lib, "std/io/net.crl");
+pub mod path = import(lib, "std/io/path.crl");
+pub mod process = import(lib, "std/io/process.crl");
+pub mod temp = import(lib, "std/io/temp.crl");
+pub mod term = import(lib, "std/io/term.crl");
+
+// maths
+pub mod complex = import(lib, "std/math/complex.crl");
+pub mod math = import(lib, "std/math/math.crl");
+pub mod matrix = import(lib, "std/math/matrix.crl");
+pub mod random = import(lib, "std/math/random.crl");
+pub mod vector = import(lib, "std/math/vector.crl");
+
+// memory
+pub mod mman = import(lib, "std/memory/mman.crl");
+pub mod pool = import(lib, "std/memory/pool.crl");
+pub mod shared_ptr = import(lib, "std/memory/shared_ptr.crl");
+pub mod smart_ptr = import(lib, "std/memory/smart_ptr.crl");
+pub mod tlsf = import(lib, "std/memory/tlsf.crl");
+
+// misc
+pub mod any = import(lib, "std/misc/any.crl");
+pub mod cast = import(lib, "std/misc/cast.crl");
+
+// platform
+pub mod arch = import(lib, "std/platform/arch.crl");
+pub mod endian = import(lib, "std/platform/endian.crl");
+pub mod libc = import(lib, "std/platform/libc.crl");
+pub mod os = import(lib, "std/platform/os.crl");
+
+// text
+pub mod csv = import(lib, "std/text/csv.crl");
+pub mod fmt = import(lib, "std/text/fmt.crl");
+pub mod ini = import(lib, "std/text/ini.crl");
+pub mod json = import(lib, "std/text/json.crl");
+pub mod regex = import(lib, "std/text/regex.crl");
+pub mod string = import(lib, "std/text/string.crl");
+pub mod strutil = import(lib, "std/text/strutil.crl");
+pub mod toml = import(lib, "std/text/toml.crl");
+pub mod uri = import(lib, "std/text/uri.crl");
+pub mod utf8 = import(lib, "std/text/utf8.crl");
+pub mod uuid = import(lib, "std/text/uuid.crl");
+pub mod xml = import(lib, "std/text/xml.crl");
+
+
+
+// std.section.file
 pub mod collections = import(lib, "std/collections/.collections.crl");
 pub mod concurrent = import(lib, "std/concurrent/.concurrent.crl");
 pub mod crypto = import(lib, "std/crypto/.crypto.crl");
 pub mod data = import(lib, "std/data/.data.crl");
 pub mod io = import(lib, "std/io/.io.crl");
-pub mod math = import(lib, "std/math/.math.crl");
-pub mod memory = import(lib, "std/memory/.memory.crl");
+pub mod maths = import(lib, "std/math/.math.crl");
+pub mod mem = import(lib, "std/memory/.memory.crl");
 pub mod misc = import(lib, "std/misc/.misc.crl");
 pub mod platform = import(lib, "std/platform/.platform.crl");
 pub mod text = import(lib, "std/text/.text.crl");
